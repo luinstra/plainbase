@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.Role
+import com.plainbase.frameworks.config.AuthMode
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -137,7 +138,7 @@ class AdminTokenRoutesTest : FunSpec({
     }
 
     test("the token surface is reachable under a PROXY harness too (mode-independent)") {
-        authRouteTest(enforced = true, builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = "s", extract = admin) { harness ->
+        authRouteTest(enforced = true, authMode = AuthMode.PROXY, proxySecret = "s", extract = admin) { harness ->
             harness.grantRole("builtin", "admin-id", Role.ADMIN)
             client.get("/api/v1/admin/tokens").status shouldBe HttpStatusCode.OK
         }

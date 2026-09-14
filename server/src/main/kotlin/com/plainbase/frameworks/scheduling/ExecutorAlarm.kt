@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.scheduling
 
 import com.plainbase.domain.service.RebuildScheduler
+import com.plainbase.frameworks.lifecycle.CompletionWait
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -22,34 +23,39 @@ internal class ExecutorAlarm(private val threadName: String = "plainbase-rebuild
     }
 
     override fun close() {
-        // G3/R4: cancel AND (boundedly) JOIN the running task. shutdownNow() INTERRUPTS an in-flight task;
-        // awaiting its termination guarantees the interrupted action has returned before close() does. INSPECT
-        // the awaitTermination result (never return as if drained on a bare false): on a timeout, shutdownNow()
-        // again (re-interrupt in case the first was swallowed) and warn LOUD rather than silently leave a task
-        // running past shutdown. Both waits stay bounded/short so a RebuildScheduler close can never hang.
-        executor.shutdownNow()
-        if (awaitTerminated()) return
-        executor.shutdownNow()
-        if (!awaitTerminated()) {
-            logger.warn { "$threadName did not terminate within ${2 * SHUTDOWN_GRACE_SECONDS}s of shutdown; a task may still be running" }
+        CompletionWait.run {
+            executor.shutdownNow()
+            if (awaitTerminated(SHUTDOWN_GRACE_SECONDS)) return@run
+            executor.shutdownNow()
+            if (awaitTerminated(SHUTDOWN_GRACE_SECONDS)) return@run
+            logger.warn {
+                "$threadName did not terminate within ${2 * SHUTDOWN_GRACE_SECONDS}s of shutdown; " +
+                    "waiting for the scheduled action to finish"
+            }
+            awaitForever(
+                await = { executor.awaitTermination(it, TimeUnit.MILLISECONDS) },
+                completed = executor::isTerminated,
+            )
         }
     }
 
-    /** Bounded await; RESTORES the interrupt (never swallows it) so a shutting-down caller still observes it. */
-    private fun awaitTerminated(): Boolean =
-        try {
-            executor.awaitTermination(SHUTDOWN_GRACE_SECONDS, TimeUnit.SECONDS)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            false
-        }
+    internal fun isTerminatedForTest(): Boolean = executor.isTerminated
+
+    /** Retains each real 30-second threshold, then waits for actual executor termination. */
+    private fun CompletionWait.awaitTerminated(graceSeconds: Long): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(graceSeconds)
+        return awaitUntil(
+            deadlineNanos = deadline,
+            await = { nanos -> executor.awaitTermination(nanos, TimeUnit.NANOSECONDS) },
+            completed = executor::isTerminated,
+        )
+    }
 
     companion object {
         private val logger = KotlinLogging.logger {}
         private const val SHUTDOWN_GRACE_SECONDS = 30L
 
-        /** What [close] can honestly take: the grace await, then the post-interrupt one - the bound the
-         *  graceful-shutdown budget counts for the step that closes a scheduler (see `serve()`). */
+        /** Forecast emitted after the two real grace waits; close still waits for actual termination. */
         const val CLOSE_BOUND_MILLIS: Long = 2 * SHUTDOWN_GRACE_SECONDS * 1_000
     }
 }

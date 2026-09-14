@@ -29,8 +29,9 @@ import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
-import com.plainbase.frameworks.koin.HistoryProviders
-import com.plainbase.frameworks.koin.RootStores
+import com.plainbase.frameworks.runtime.HistoryProviders
+import com.plainbase.frameworks.runtime.RootBootProbe
+import com.plainbase.frameworks.runtime.RootStores
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
@@ -42,17 +43,15 @@ import java.nio.file.Path
 import kotlin.time.Clock
 
 /**
- * The N-root, possibly-degraded route fixture — a SERVE-SHAPED harness, which is the thing the existing ones
- * cannot be.
+ * The N-root, possibly-degraded route fixture for route tests that need retained per-root state.
  *
- * [RestHarness] builds exactly ONE store over a directory that is always there and rebuilds in its init; bending
- * that into an N-root, maybe-missing-path, availability-seeded fixture would complicate the harness every existing
- * REST test uses in order to serve a handful of new ones. So this is its own class, sharing `testRouteContext`.
+ * The shared ranked gate evaluates every root; this test-owned adapter supplies the probes. It keeps these tests
+ * independent from the process-level serve harness while preserving the production gate semantics.
  *
  * What it can express that nothing else can:
- *  - a root whose PATH IS MISSING (construction is inert by design — the store's init only normalizes paths), so a
+ *  - a root whose PATH IS MISSING, so a
  *    boot-degraded server is reproducible without a process-level serve harness;
- *  - [seedBootAvailability], which mirrors `serve()`'s gate loop EXACTLY (probe each extra; mark MISSING_AT_BOOT),
+ *  - [seedBootAvailability], which uses the shared ranked gate to mark MISSING_AT_BOOT,
  *    so the boot-arm rows exercise production's own seeding semantics rather than a hand-set flag;
  *  - [detachedRoot], which persists rows under a root name the registry does NOT know — the state a restart after
  *    an edited `roots {}` leaves behind, and which no existing harness can produce (they all derive their rows from
@@ -185,17 +184,10 @@ class MultiRootRestHarness(
         return this
     }
 
-    /**
-     * serve()'s gate loop — literally, now: [rootGateVerdicts] IS the loop `serve()` walks, so this harness cannot
-     * drift from it. (It used to say "serve()'s gate loop, exactly" and then re-implement the probe half. A test-only
-     * copy cannot brick production, but it can make a multi-root REST test pass while `serve` diverges.)
-     *
-     * Seeding only: the gate DECIDES, the caller ACTS. `markUnavailable` mutates a runtime singleton, which is why it
-     * lives out here and not inside the gate — `plainbase root` calls the same gate and must not mutate anything.
-     */
+    /** Seeds availability from the shared ranked gate while keeping test-only probe construction local. */
     fun seedBootAvailability() {
         val providers = HistoryProviders(roots.associate { it.name to (histories?.invoke(it.name) ?: NoOpHistoryProvider) })
-        rootGateVerdicts(registry, RootStores(storesByRoot), providers)
+        rootGateVerdicts(registry, rootBootProbesForTest(registry, RootStores(storesByRoot), providers))
             .filterIsInstance<RootGateVerdict.Unavailable>()
             .forEach { availability.markUnavailable(it.root, UnavailableCause.MISSING_AT_BOOT) }
     }
@@ -273,6 +265,20 @@ class MultiRootRestHarness(
         index.close()
         searchDb.close()
         searchDir.toFile().deleteRecursively()
+    }
+}
+
+private fun rootBootProbesForTest(
+    registry: RootRegistry,
+    stores: RootStores,
+    histories: HistoryProviders,
+): Map<RootName, RootBootProbe> = registry.roots.associate { root ->
+    root.name to object : RootBootProbe {
+        override fun available(): Boolean = stores[root.name].available()
+
+        override fun gateCheck() {
+            histories[root.name].gateCheck()
+        }
     }
 }
 

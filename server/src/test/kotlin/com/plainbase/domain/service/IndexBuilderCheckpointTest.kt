@@ -2,20 +2,36 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.NoRetirements
+import com.plainbase.domain.repository.NoTopology
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.BindingLatch
+import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootConvergence
+import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
-import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.frameworks.config.AuthConfig
+import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
-import com.plainbase.frameworks.ktor.buildRouteContext
+import com.plainbase.frameworks.ktor.AuthServices
+import com.plainbase.frameworks.ktor.TransportSettings
+import com.plainbase.frameworks.ktor.buildGuardedApplication
 import com.plainbase.frameworks.ktor.plainbaseModule
+import com.plainbase.frameworks.ktor.securityAssembly
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
+import com.plainbase.frameworks.runtime.HistoryProviders
+import com.plainbase.frameworks.runtime.ObservedIndexRuntime
+import com.plainbase.frameworks.runtime.RootStores
+import com.plainbase.frameworks.runtime.ServingRuntime
 import com.plainbase.frameworks.security.ApiTokenMinter
+import com.plainbase.frameworks.security.ProxyCsrf
 import com.plainbase.frameworks.security.TokenHasher
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightApiTokenRepository
@@ -180,13 +196,19 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
         val store = LocalContentStore(root)
         val registry = UrlAliasRegistry(aliases)
         val availability = RootAvailability(kotlin.time.Clock.System)
+        val limbo = RootLimbo()
+        val convergence = RootConvergence()
+        val epochs = ObservationEpoch(NoRetirements, convergence)
+        val bindings = BindingLatch(NoTopology)
+        val identityProvider = UuidV7IdProvider()
+        val identity = PageIdentityService(identityProvider)
         val idMap = SqlDelightIdMapRepository(database)
         val builder = IndexBuilder(
             sources = listOf(IndexBuilder.Source(rootRegistry.primary, store, NoOpHistoryProvider)),
             availability = availability,
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
-            identity = PageIdentityService(UuidV7IdProvider()),
+            identity = identity,
             patcher = FrontmatterPatcher(),
             idMap = idMap,
             aliasRegistry = registry,
@@ -195,8 +217,11 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             rootRank = rootRegistry::rank,
             registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
             listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)),
+            limbo = limbo,
+            epochs = epochs,
+            bindings = bindings,
         )
-        return Process(store, registry, builder, availability, idMap)
+        return Process(store, registry, builder, availability, idMap, limbo, convergence, epochs, bindings, identity, identityProvider)
     }
 
     fun seedGarbageCheckpointRow() {
@@ -211,44 +236,80 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
         val builder: IndexBuilder,
         private val availability: RootAvailability,
         private val idMap: SqlDelightIdMapRepository,
+        private val limbo: RootLimbo,
+        private val convergence: RootConvergence,
+        private val epochs: ObservationEpoch,
+        private val bindings: BindingLatch,
+        private val identity: PageIdentityService,
+        private val identityProvider: IdProvider,
     ) {
         /** The A3 route graph (RouteContext) over this process's services (the 301 alias-redirect assertion). */
-        fun services() = buildRouteContext(
-            // Loopback-dev (OFF) open mode: the 301 path is read-gated, so a real (open) read gate must pass.
-            policy = PolicyService(
+        fun services() = run {
+            val policy = PolicyService(
                 roles = SqlDelightRoleRepository(database),
                 apiTokens = SqlDelightApiTokenRepository(database),
                 audit = SqlDelightAuditRepository(database),
                 idProvider = UuidV7IdProvider(),
                 clock = kotlin.time.Clock.System,
                 enforced = false,
-            ),
-            indexBuilder = builder,
-            pageService = PageService(builder, registry, CitationFactory()),
-            searchService = SearchService(mockk(relaxed = true), builder, availability), // 301s never touch search
-            aliasRegistry = registry,
-            writePipeline = mockk(relaxed = true), // 301s never touch the write pipeline
-            registry = rootRegistry,
-            availability = availability,
-            resolver = PageRootResolver(idMap, rootRegistry),
-            absence = AbsenceClassifier(idMap),
-            stores = { store },
-            histories = { NoOpHistoryProvider },
-            idProvider = UuidV7IdProvider(),
-            // 301 alias-redirects never touch the proposal surface; relaxed mocks satisfy the wiring.
-            proposalService = mockk(relaxed = true),
-            proposalLabeler = mockk(relaxed = true),
-            tokens = ApiTokenService(
+            )
+            val tokens = ApiTokenService(
                 minter = ApiTokenMinter(),
                 hasher = TokenHasher(),
                 tokens = SqlDelightApiTokenRepository(database),
                 clock = kotlin.time.Clock.System,
-            ),
-            // 301 alias-redirects never touch the auth services; a relaxed mock satisfies the wiring.
-            auth = mockk(relaxed = true),
-            trustedProxyCidrs = emptyList(),
-            maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
-            maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
-        )
+            )
+            val relaxedAuth = mockk<AuthServices>(relaxed = true)
+            val resolver = PageRootResolver(idMap, rootRegistry)
+            val absence = AbsenceClassifier(idMap)
+            buildGuardedApplication(
+                serving = ServingRuntime(
+                    index = ObservedIndexRuntime(
+                        builder = builder,
+                        registry = rootRegistry,
+                        stores = RootStores(mapOf(rootRegistry.primary.name to store)),
+                        histories = HistoryProviders(mapOf(rootRegistry.primary.name to NoOpHistoryProvider)),
+                        availability = availability,
+                        convergence = convergence,
+                        limbo = limbo,
+                        epochs = epochs,
+                        bindings = bindings,
+                        identity = identity,
+                        idProvider = identityProvider,
+                        aliasRegistry = registry,
+                    ),
+                    pageService = PageService(builder, registry, CitationFactory()),
+                    searchService = SearchService(mockk(relaxed = true), builder, availability),
+                    writePipeline = mockk(relaxed = true),
+                    resolver = resolver,
+                    absence = absence,
+                    proposalService = mockk(relaxed = true),
+                    proposalLabeler = mockk(relaxed = true),
+                    agentDirectCommitGlobs = emptyList(),
+                ),
+                security = securityAssembly(
+                    config = PlainbaseConfig(
+                        contentDir = root,
+                        dataDir = root.resolve("checkpoint-fixture-data"),
+                        host = "127.0.0.1",
+                        port = 8080,
+                        auth = AuthConfig(mode = AuthMode.BUILTIN),
+                    ),
+                    policy = policy,
+                    tokens = tokens,
+                    auth = relaxedAuth,
+                    proxyCsrf = ProxyCsrf(ByteArray(TEST_PROXY_CSRF_KEY_BYTES) { 7 }),
+                ),
+                transport = TransportSettings(
+                    maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+                    maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+                    mcpAllowedHosts = listOf("127.0.0.1", "localhost"),
+                    mcpAllowedOrigins = listOf("http://127.0.0.1", "http://localhost"),
+                    secureCookie = false,
+                ),
+            )
+        }
     }
 }
+
+private const val TEST_PROXY_CSRF_KEY_BYTES = 32

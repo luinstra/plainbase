@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.repository.Role
+import com.plainbase.frameworks.config.AuthMode
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -82,6 +83,14 @@ class LoginFlowTest : FunSpec({
             response.status shouldBe HttpStatusCode.BadRequest
             Json.parseToJsonElement(response.bodyAsText()).jsonObject["error"]!!.jsonObject["code"]!!.jsonPrimitive.content shouldBe
                 "invalid_auth_request"
+        }
+    }
+
+    test("AuthMode.OFF defaults the real auth harness to an open policy") {
+        authRouteTest(authMode = AuthMode.OFF) { harness ->
+            val pageId = harness.seedPage("doc.md", "# open")
+                .first
+            client.get("/api/v1/pages/$pageId").status shouldBe HttpStatusCode.OK
         }
     }
 })

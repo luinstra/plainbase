@@ -75,12 +75,24 @@ class DataDirLock private constructor(
          * commands. The retry policy lives in the CALLER, never here - `serve`'s "held means someone else owns
          * this DATA_DIR, refuse now" semantics must stay exactly as they are.
          */
-        fun tryAcquire(dataDir: Path, fileName: String = LOCK_FILE_NAME): DataDirLock? {
+        fun tryAcquire(dataDir: Path, fileName: String = LOCK_FILE_NAME): DataDirLock? = tryAcquireWith(
+            dataDir = dataDir,
+            fileName = fileName,
+            tryLock = { channel -> channel.tryLock() },
+        )
+
+        /** Typed seam for proving cleanup when the real channel acquisition fails with an [Error]. */
+        internal fun tryAcquireWith(
+            dataDir: Path,
+            fileName: String = LOCK_FILE_NAME,
+            tryLock: (FileChannel) -> FileLock?,
+            closeFailedChannel: (FileChannel) -> Unit = { it.close() },
+        ): DataDirLock? {
             dataDir.createDirectories()
             val path = dataDir.resolve(fileName)
             val channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
             val lock = runCatching {
-                channel.tryLock()
+                tryLock(channel)
             }.getOrElse { failure ->
                 when (failure) {
                     is OverlappingFileLockException -> {
@@ -90,9 +102,12 @@ class DataDirLock private constructor(
                         logger.debug { "DATA_DIR lock $path is already held in this JVM" }
                         return null
                     }
-                    is Error -> throw failure
+                    is Error -> {
+                        closeChannelAfterFailure(channel, failure, closeFailedChannel)
+                        throw failure
+                    }
                     else -> {
-                        channel.close()
+                        closeChannelAfterFailure(channel, failure, closeFailedChannel)
                         throw failure
                     }
                 }
@@ -103,6 +118,16 @@ class DataDirLock private constructor(
                 return null
             }
             return DataDirLock(channel, lock)
+        }
+
+        private fun closeChannelAfterFailure(
+            channel: FileChannel,
+            failure: Throwable,
+            closeChannel: (FileChannel) -> Unit,
+        ) {
+            runCatching { closeChannel(channel) }.onFailure { cleanup ->
+                if (cleanup !== failure) failure.addSuppressed(cleanup)
+            }
         }
     }
 }

@@ -19,8 +19,8 @@ import kotlin.test.fail
  *     this binary does not understand. The forward-only refusal is the WRITABLE path's alone (proof 1).
  *
  * The `migrateOrClose` close-EXACTLY-once lifecycle proof (a delegating close-recording driver) lives in the JVM
- * `SchemaDowngradeGuardTest`: `migrateOrClose` is `internal`, so it is visible from the friend-pathed `test` source set
- * but NOT from `nativeTest` - and that proof drives an IN-MEMORY delegate, so it needs no JDBC/JNI seam anyway.
+ * `SchemaDowngradeGuardTest`; this native twin keeps the real file-backed JDBC/JNI behavior. The native source set is
+ * associated with main for runtime-seam tests.
  *
  * @Tag("native") + kotlin.test only.
  */

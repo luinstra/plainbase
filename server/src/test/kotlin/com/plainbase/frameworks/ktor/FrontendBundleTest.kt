@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.root.ReservedSegments
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.ServerTopLevel
+import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.ktor.routes.FrontendBundle
 import com.plainbase.frameworks.ktor.routes.SpaTopLevel
@@ -99,14 +100,11 @@ class FrontendBundleTest : FunSpec({
                 SpaTopLevel.segments
             ).toSet()
         listOf(
-            "builtin" to (true to false),
-            "proxy" to (false to true),
-            "off" to (false to false),
-        ).forEach { (mode, auth) ->
-            val segments = mountedTopLevelSegmentsForAuthMode(
-                builtinAuthEnabled = auth.first,
-                proxyAuthEnabled = auth.second,
-            )
+            "builtin" to AuthMode.BUILTIN,
+            "proxy" to AuthMode.PROXY,
+            "off" to AuthMode.OFF,
+        ).forEach { (mode, authMode) ->
+            val segments = mountedTopLevelSegmentsForAuthMode(authMode)
             val rootNames = segments.mapNotNull(RootName::of)
             val unreserved = rootNames.filterNot(ReservedSegments::isReserved).map { it.value }
             withClue(
@@ -266,15 +264,13 @@ private fun mountedTopLevelSegments(root: RoutingNode): Set<String> {
 private const val CONTENT_TYPE_SELECTOR_CLASS = "io.ktor.server.routing.ContentTypeHeaderRouteSelector"
 
 private fun mountedTopLevelSegmentsForAuthMode(
-    builtinAuthEnabled: Boolean,
-    proxyAuthEnabled: Boolean,
+    authMode: AuthMode,
 ): Set<String> {
     var segments = emptySet<String>()
     RestHarness(
         Fixtures.demoDocs,
-        builtinAuthEnabled = builtinAuthEnabled,
-        proxyAuthEnabled = proxyAuthEnabled,
-        proxySecret = if (proxyAuthEnabled) "test-secret" else null,
+        authMode = authMode,
+        proxySecret = if (authMode == AuthMode.PROXY) "test-secret" else null,
     ).use { harness ->
         testApplication {
             application { plainbaseModule(harness.services) }

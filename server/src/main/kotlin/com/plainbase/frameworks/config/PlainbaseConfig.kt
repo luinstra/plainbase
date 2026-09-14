@@ -1559,7 +1559,7 @@ data class RootsConfig private constructor(
 /**
  * Git-history config (ADR-0006). [enabled] is a tri-state: `null` auto-detects a repo in main's
  * content root ([PlainbaseConfig.mainContentRoot] - contentDir for every legacy config; the
- * detection lives in `historyModule`, not here); `true`/`false` override either direction.
+ * detection lives in prepared history selection, not here); `true`/`false` override either direction.
  * [authorName]/[authorEmail] are the commit identity (Phase 3 default `Plainbase <plainbase@localhost>`;
  * the author/committer split is plumbed for Phase 4). There is no amend/squash knob - one commit per save, always (fix D).
  */

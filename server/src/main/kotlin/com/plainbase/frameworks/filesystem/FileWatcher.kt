@@ -6,6 +6,7 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.root.BreakCause
+import com.plainbase.frameworks.lifecycle.CompletionWait
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.file.ClosedWatchServiceException
@@ -18,6 +19,7 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardWatchEventKinds
 import java.nio.file.WatchEvent
 import java.nio.file.WatchKey
+import java.nio.file.WatchService
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -74,6 +76,7 @@ import kotlin.time.Duration.Companion.seconds
  * Platform note (§B1): Linux is inotify (milliseconds); macOS is the JDK's polling implementation
  * (multi-second) — the 5 s latency criterion binds Linux, the deployment platform.
  */
+@Suppress("TooGenericExceptionCaught")
 class FileWatcher(
     root: Path,
     private val ignoreRules: IgnoreRules,
@@ -131,6 +134,19 @@ class FileWatcher(
     private val livenessInterval: Duration = LIVENESS_INTERVAL,
     /** How often a PARTIALLY-covered tree retries its registration and drives a converging pass ([retryCoverage]). */
     private val coverageRetryInterval: Duration = COVERAGE_RETRY_INTERVAL,
+    /** Typed construction seam; the production default is the real filesystem WatchService. */
+    private val watchServiceFactory: () -> WatchService = { root.fileSystem.newWatchService() },
+    /** The real registration operation by default; tests may fault one actual directory registration. */
+    private val registerDirectory: (Path, WatchService) -> WatchKey = { directory, service ->
+        directory.register(
+            service,
+            StandardWatchEventKinds.ENTRY_CREATE,
+            StandardWatchEventKinds.ENTRY_DELETE,
+            StandardWatchEventKinds.ENTRY_MODIFY,
+        )
+    },
+    /** Keeps failed-construction cleanup tied to the raw service returned by [watchServiceFactory]. */
+    private val closeWatchService: (WatchService) -> Unit = { it.close() },
 ) : AutoCloseable {
 
     private val root: Path = root.toAbsolutePath().normalize()
@@ -140,7 +156,7 @@ class FileWatcher(
         .map { it.toAbsolutePath().normalize() }
         .filter { it != this.root && it.startsWith(this.root) }
 
-    private val watchService = this.root.fileSystem.newWatchService()
+    private val watchService = watchServiceFactory()
     private val keys = ConcurrentHashMap<WatchKey, Path>()
 
     /** [onFailure]'s at-most-once contract, over its ONE detector: a worker that died. */
@@ -148,32 +164,65 @@ class FileWatcher(
 
     /** The coverage this watcher last REPORTED - so only TRANSITIONS are published (see [reportCoverage]). */
     private val partial = AtomicBoolean(false)
-    private val worker: Thread
+    private val closeRequested = AtomicBoolean(false)
+    private val worker: Thread = startWorker()
 
-    init {
-        excludedDirs.forEach { dir ->
-            logger.warn {
-                "$dir is nested inside the content root ${this.root}: excluded from the watch — " +
-                    "changes under it never trigger rebuilds (DATA_DIR-in-CONTENT_DIR policy, §B1)"
+    private fun startWorker(): Thread {
+        try {
+            excludedDirs.forEach { dir ->
+                logger.warn {
+                    "$dir is nested inside the content root ${this.root}: excluded from the watch — " +
+                        "changes under it never trigger rebuilds (DATA_DIR-in-CONTENT_DIR policy, §B1)"
+                }
             }
+            // Reported BEFORE the worker starts, and the order is a CORRECTNESS constraint, not a preference (C2/B1).
+            // The worker can re-register and re-report from its very first tick (an overflow, a retry), so a report
+            // issued after it starts is racing one issued by it - and the CONSTRUCTING thread's `uncovered` is the
+            // STALER of the two. A stale WHOLE landing on top of a fresh PARTIAL used to cost a slow rebuild; now it
+            // poisons the OBSERVATION EPOCH, which would take delete authority over a tree it is not fully watching.
+            // (The old order existed so a consumer never learned "partial" from a watcher not yet driving the
+            // recovery pass. That is a latency argument against a correctness one, and it loses: the worker starts on
+            // the very next line, and a PARTIAL that arrives a microsecond early costs nothing.)
+            reportCoverage(registerTree(this.root))
+            val startedWorker = thread(name = "plainbase-file-watcher", isDaemon = true) { processEvents() }
+            logger.info { "watching ${this.root} (${keys.size} directories)" }
+            return startedWorker
+        } catch (failure: Throwable) {
+            runCatching { closeWatchService(watchService) }.onFailure { cleanup ->
+                if (cleanup !== failure) failure.addSuppressed(cleanup)
+                logger.warn(cleanup) { "closing a partially constructed file watcher failed" }
+            }
+            throw failure
         }
-        // Reported BEFORE the worker starts, and the order is a CORRECTNESS constraint, not a preference (C2/B1).
-        // The worker can re-register and re-report from its very first tick (an overflow, a retry), so a report
-        // issued after it starts is racing one issued by it - and the CONSTRUCTING thread's `uncovered` is the
-        // STALER of the two. A stale WHOLE landing on top of a fresh PARTIAL used to cost a slow rebuild; now it
-        // poisons the OBSERVATION EPOCH, which would take delete authority over a tree it is not fully watching.
-        // (The old order existed so a consumer never learned "partial" from a watcher not yet driving the recovery
-        // pass. That is a latency argument against a correctness one, and it loses: the worker starts on the very
-        // next line, and a PARTIAL that arrives a microsecond early costs nothing.)
-        reportCoverage(registerTree(this.root))
-        worker = thread(name = "plainbase-file-watcher", isDaemon = true) { processEvents() }
-        logger.info { "watching ${this.root} (${keys.size} directories)" }
     }
 
     override fun close() {
-        watchService.close() // wakes the worker's take() with ClosedWatchServiceException
-        worker.join(ContentStore.WATCH_CLOSE_BOUND_MILLIS) // the port's close bound, which the shutdown budget counts
+        CompletionWait.run {
+            val firstClose = closeRequested.compareAndSet(expectedValue = false, newValue = true)
+            var primary: Throwable? = null
+            if (firstClose) {
+                try {
+                    closeWatchService(watchService) // wakes the worker's timed poll with ClosedWatchServiceException
+                } catch (failure: Throwable) {
+                    primary = failure
+                }
+            }
+            try {
+                awaitForever(
+                    await = { millis -> worker.join(millis) },
+                    completed = { !worker.isAlive },
+                )
+            } catch (failure: Throwable) {
+                if (primary == null) primary = failure else primary.addSuppressed(failure)
+            }
+            captureCurrentInterrupt()
+            primary?.let { throw it }
+        }
     }
+
+    internal fun isClosedForTest(): Boolean = closeRequested.load() && !worker.isAlive
+
+    internal fun workerForTest(): Thread = worker
 
     /**
      * Registers a NEW subtree (a directory created on sight). It can only ever LOSE coverage, never restore it:
@@ -207,14 +256,7 @@ class FileWatcher(
                         if (isExcluded(dir)) return FileVisitResult.SKIP_SUBTREE
                         if (dir != root && isIgnoredDir(dir)) return FileVisitResult.SKIP_SUBTREE
                         try {
-                            keys[
-                                dir.register(
-                                    watchService,
-                                    StandardWatchEventKinds.ENTRY_CREATE,
-                                    StandardWatchEventKinds.ENTRY_DELETE,
-                                    StandardWatchEventKinds.ENTRY_MODIFY,
-                                ),
-                            ] = dir
+                            keys[registerDirectory(dir, watchService)] = dir
                         } catch (e: IOException) {
                             if (logRegistrationFailure(dir, e)) uncovered.add(dir)
                         }
@@ -315,10 +357,9 @@ class FileWatcher(
         // The retry deadline is the WORKER's own, a plain local: nothing else reads it, and hanging the cadence on
         // a shared field would be a race to invent for no reason.
         var nextRetry = System.nanoTime() + coverageRetryInterval.inWholeNanoseconds
-        while (true) {
+        while (!closeRequested.load()) {
             val key = runCatching {
-                // NOT take(): a poll TIMEOUT is the root's heartbeat (see the class doc), and it is also what
-                // keeps a watcher whose last key died from blocking forever with nothing left to wake it.
+                // A timed poll is the root heartbeat and bounds idle liveness checks.
                 watchService.poll(livenessInterval.inWholeMilliseconds, TimeUnit.MILLISECONDS)
             }.getOrElse { failure ->
                 when (failure) {
@@ -326,6 +367,7 @@ class FileWatcher(
                     else -> throw failure
                 }
             }
+            if (closeRequested.load()) return
             // Coverage runs on its OWN, COARSE cadence - deliberately NOT hung on the liveness tick, which fires
             // every few seconds: the scheduler would coalesce the passes, but each pass it does run is O(corpus),
             // and a big corpus would rebuild itself into the ground for as long as one subtree stays unwatched.

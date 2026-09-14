@@ -1,5 +1,10 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.repository.NoRetirements
+import com.plainbase.domain.root.BindingLatch
+import com.plainbase.domain.root.ObservationEpoch
+import com.plainbase.domain.root.RootConvergence
+import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CitationFactory
@@ -18,11 +23,17 @@ import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.domain.service.localRoot
+import com.plainbase.frameworks.config.AuthConfig
+import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
+import com.plainbase.frameworks.runtime.HistoryProviders
+import com.plainbase.frameworks.runtime.ObservedIndexRuntime
+import com.plainbase.frameworks.runtime.RootStores
+import com.plainbase.frameworks.runtime.ServingRuntime
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.security.ApiTokenMinter
@@ -60,14 +71,14 @@ import kotlin.time.Clock
 fun withRestServices(
     pages: Map<String, String> = emptyMap(),
     seedAdmin: Pair<String, String>? = null, // (username, password) — seeds a builtin ADMIN before the block runs
-    proxyMode: Boolean = false, // A4b: PROXY auth (builtin off, a test secret, a loopback-trusted transport)
+    authMode: AuthMode = AuthMode.BUILTIN,
     seedProxyAdmin: String? = null, // A4b: grant ADMIN to a proxy/<subject> identity (the grant-role first-admin seam)
     agentDirectCommitGlobs: List<com.plainbase.domain.service.CommitGlob> = emptyList(), // P5: the direct-commit globs
     block: (RouteContext) -> Unit,
 ) {
     // A4b: in proxy mode the loopback test client (127.0.0.1) counts as loopback-secure, so a request can present the
-    // identity header + secret and authenticate. builtinAuthEnabled goes off; the proxy secret/header are fixed.
-    val proxySecret = if (proxyMode) "native-proxy-secret" else null
+    // identity header + secret and authenticate.
+    val proxySecret = if (authMode == AuthMode.PROXY) "native-proxy-secret" else null
     val content = Files.createTempDirectory("pb-native-rest")
     val data = Files.createTempDirectory("pb-native-rest-data")
     try {
@@ -93,11 +104,17 @@ fun withRestServices(
                 )
                 val rootRegistry = RootRegistry.of(listOf(localRoot("docs", content)))
                 val availability = com.plainbase.domain.root.RootAvailability(Clock.System)
+                val limbo = RootLimbo()
+                val convergence = RootConvergence()
+                val epochs = ObservationEpoch(NoRetirements, convergence)
+                val bindings = BindingLatch(com.plainbase.domain.repository.NoTopology)
+                val identityProvider = UuidV7IdProvider()
+                val identity = PageIdentityService(identityProvider)
                 val builder = IndexBuilder(
                     sources = listOf(IndexBuilder.Source(rootRegistry.primary, store, NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
-                    identity = PageIdentityService(UuidV7IdProvider()),
+                    identity = identity,
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = registry,
@@ -111,12 +128,16 @@ fun withRestServices(
                         },
                     ),
                     searchIndexer = searchIndexer,
+                    availability = availability,
+                    limbo = limbo,
+                    epochs = epochs,
+                    bindings = bindings,
                 )
                 builder.rebuild()
                 val writeCitations = CitationFactory()
-                // A3 auth substrate over the SAME in-memory DB (the schema includes subject_role/audit_log). Auth
-                // ON, loopback-dev (OFF) open mode — the native REST/write/asset/search smokes run byte-identically
-                // to pre-auth. The grant constructors stay reachable via the public src/main grantForTests* path.
+                // A3 auth substrate over the SAME in-memory DB (the schema includes subject_role/audit_log). BUILTIN,
+                // loopback-dev open policy — the native REST/write/asset/search smokes run byte-identically to pre-auth.
+                // The grant constructors stay reachable via the public src/main grantForTests* path.
                 val apiTokens = ApiTokenService(
                     minter = ApiTokenMinter(),
                     hasher = TokenHasher(),
@@ -129,9 +150,9 @@ fun withRestServices(
                     audit = SqlDelightAuditRepository(database),
                     idProvider = UuidV7IdProvider(),
                     clock = Clock.System,
-                    // Proxy mode enforces the matrix (so a no-role proxy human is denied); the OFF native smokes keep
-                    // the open dev behavior.
-                    enforced = proxyMode,
+                    // Proxy mode enforces the matrix (so a no-role proxy human is denied); default BUILTIN native
+                    // smokes keep the open dev behavior.
+                    enforced = authMode == AuthMode.PROXY,
                 )
                 // A4a auth substrate over the SAME in-memory DB (the v7 schema includes users/sessions/setup_tokens).
                 val passwordHasher = Argon2PasswordHasher()
@@ -211,47 +232,68 @@ fun withRestServices(
                     clock = Clock.System,
                     rootStatus = { root -> resolver.statusOf(root, availability.current()) },
                 )
-                val services = buildRouteContext(
-                    policy = policy,
-                    indexBuilder = builder,
-                    pageService = PageService(builder, registry, CitationFactory()),
-                    searchService = SearchService(provider = searchProvider, indexBuilder = builder, availability = availability),
-                    aliasRegistry = registry,
-                    writePipeline = WritePipeline(
-                        stores = stores,
-                        indexBuilder = builder,
-                        citations = writeCitations,
-                        frontmatterParser = FrontmatterReader(),
-                        dirtyPages = SqlDelightDirtyPageRepository(database),
-                        idMap = idMap,
-                        aliasRegistry = registry,
-                        availability = availability,
-                    ),
-                    registry = rootRegistry,
-                    availability = availability,
-                    resolver = resolver,
-                    absence = absence,
+                val pageService = PageService(builder, registry, CitationFactory())
+                val searchService = SearchService(provider = searchProvider, indexBuilder = builder, availability = availability)
+                val writePipeline = WritePipeline(
                     stores = stores,
-                    histories = { NoOpHistoryProvider },
-                    idProvider = UuidV7IdProvider(),
-                    proposalService = proposalService,
-                    proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(
-                        tokens = SqlDelightApiTokenRepository(database),
-                        users = SqlDelightUserRepository(database),
+                    indexBuilder = builder,
+                    citations = writeCitations,
+                    frontmatterParser = FrontmatterReader(),
+                    dirtyPages = SqlDelightDirtyPageRepository(database),
+                    idMap = idMap,
+                    aliasRegistry = registry,
+                    availability = availability,
+                )
+                val proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(
+                    tokens = SqlDelightApiTokenRepository(database),
+                    users = SqlDelightUserRepository(database),
+                )
+                val services = buildGuardedApplication(
+                    serving = ServingRuntime(
+                        index = ObservedIndexRuntime(
+                            builder = builder,
+                            registry = rootRegistry,
+                            stores = RootStores(rootRegistry.roots.associate { it.name to store }),
+                            histories = HistoryProviders(rootRegistry.roots.associate { it.name to NoOpHistoryProvider }),
+                            availability = availability,
+                            convergence = convergence,
+                            limbo = limbo,
+                            epochs = epochs,
+                            bindings = bindings,
+                            identity = identity,
+                            idProvider = identityProvider,
+                            aliasRegistry = registry,
+                        ),
+                        pageService = pageService,
+                        searchService = searchService,
+                        writePipeline = writePipeline,
+                        resolver = resolver,
+                        absence = absence,
+                        proposalService = proposalService,
+                        proposalLabeler = proposalLabeler,
+                        agentDirectCommitGlobs = agentDirectCommitGlobs,
                     ),
-                    tokens = apiTokens,
-                    auth = authServices,
-                    trustedProxyCidrs = emptyList(),
-                    maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
-                    maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
-                    builtinAuthEnabled = !proxyMode,
-                    proxyAuthEnabled = proxyMode,
-                    proxySecret = proxySecret,
-                    // Exercise the real app_meta key load + persistence path in the native image (the §0.12 proof
-                    // that SecureRandom + app_meta.upsert work closed-world).
-                    proxyCsrf = ProxyCsrf(loadOrCreateProxyCsrfKey(database)),
-                    // P5: the direct-commit globs (empty by default; the direct-commit smoke passes a non-empty list).
-                    agentDirectCommitGlobs = agentDirectCommitGlobs,
+                    security = securityAssembly(
+                        config = PlainbaseConfig(
+                            contentDir = content,
+                            dataDir = data,
+                            host = "127.0.0.1",
+                            port = 8080,
+                            auth = AuthConfig(mode = authMode, proxySecret = proxySecret),
+                        ),
+                        policy = policy,
+                        tokens = apiTokens,
+                        auth = authServices,
+                        // Exercise the real app_meta key load + persistence path in the native image.
+                        proxyCsrf = ProxyCsrf(loadOrCreateProxyCsrfKey(database)),
+                    ),
+                    transport = TransportSettings(
+                        maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+                        maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+                        mcpAllowedHosts = listOf("127.0.0.1", "localhost"),
+                        mcpAllowedOrigins = listOf("http://127.0.0.1", "http://localhost"),
+                        secureCookie = false,
+                    ),
                 )
                 block(services)
             }

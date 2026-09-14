@@ -52,9 +52,8 @@ class ObjectContentStoreConcurrencyTest : FunSpec({
     }
 
     test(
-        "poll-apply failure (seam g, JVM twin - pollOnce is internal, unreachable from the nativeTest source " +
-            "set that owns ObjectMirrorApplyFailureTest's other three sites): one key's mirror write throws, is " +
-            "skipped (entry absent), and the batch continues for the other key",
+        "poll-apply failure (JVM FileAtomics fault-injection twin): one key's mirror write throws, is skipped " +
+            "(entry absent), and the batch continues for the other key",
     ) {
         HybridFixture().use { hybrid ->
             val ok = TreePath.require("poll-ok.md")

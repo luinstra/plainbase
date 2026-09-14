@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.frameworks.config.AuthMode
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -63,7 +64,7 @@ class AuthDtoContentNegotiationNativeTest {
      */
     @Test
     fun `the A4b admin token + audit + role DTOs round-trip through RestJson natively`() {
-        withRestServices(proxyMode = true, seedProxyAdmin = "alice") { services ->
+        withRestServices(authMode = AuthMode.PROXY, seedProxyAdmin = "alice") { services ->
             testApplication {
                 application { plainbaseModule(services) }
                 val client = createClient { install(HttpCookies) }

@@ -10,6 +10,7 @@ import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.measureTime
@@ -37,6 +38,14 @@ class GitExecutorTest : FunSpec({
                 "write-tree",
             )
         }
+    }
+
+    test("operation diagnostics use only safe Git categories") {
+        gitOperationCategory(listOf("hash-object", "--stdin")) shouldBe "hash-object"
+        gitOperationCategory(listOf("-c", "core.useReplaceRefs=false", "rev-parse", "HEAD")) shouldBe "rev-parse"
+        gitOperationCategory(listOf("-c", "fetch.fsckObjects=true", "fetch", "origin")) shouldBe "fetch"
+        gitOperationCategory(listOf("hostile", "--message=secret payload")) shouldBe "run"
+        gitOperationCategory(listOf("-c", "hostile.config=secret", "gc", "--prune=now")) shouldBe "run"
     }
 
     test("the environment is hermetic: pinned HOME + nulled config + no-prompt (ambient HOME cannot leak)") {
@@ -191,9 +200,9 @@ class GitExecutorTest : FunSpec({
     }
 
     test("interrupting the caller kills the entire git process tree and restores its interrupt flag") {
-        withFakeGit(
+        withTrackedFakeGit(
             "#!/bin/sh\necho ${'$'}${'$'} > \"${'$'}HOME/parent.pid\"\nsleep 60 &\necho ${'$'}! > \"${'$'}HOME/child.pid\"\nwait\n",
-        ) { root, home, git ->
+        ) { root, home, git, recordPid, trackWorker ->
             val result = AtomicReference<GitResult?>()
             val failure = AtomicReference<Throwable?>()
             val interruptRestored = AtomicBoolean(false)
@@ -206,6 +215,7 @@ class GitExecutorTest : FunSpec({
                 }
             }
 
+            trackWorker(worker)
             worker.start()
             try {
                 val childPidFile = home.resolve("child.pid")
@@ -214,6 +224,8 @@ class GitExecutorTest : FunSpec({
                 Files.exists(childPidFile) shouldBe true
                 val parentPid = Files.readString(home.resolve("parent.pid")).trim().toLong()
                 val childPid = Files.readString(childPidFile).trim().toLong()
+                val parentHandle = recordPid(parentPid)
+                val childHandle = recordPid(childPid)
 
                 worker.interrupt()
                 worker.join(10_000)
@@ -223,10 +235,10 @@ class GitExecutorTest : FunSpec({
                 val interruptedResult = result.get()
                 interruptedResult shouldNotBe null
                 interruptedResult!!.exitCode shouldBe -1
-                interruptedResult.stderr shouldContain "interrupted and was force-killed"
+                interruptedResult.stderr shouldContain "interrupted while completing the invocation"
                 interruptRestored.get() shouldBe true
-                ProcessHandle.of(parentPid).map { it.isAlive }.orElse(false) shouldBe false
-                ProcessHandle.of(childPid).map { it.isAlive }.orElse(false) shouldBe false
+                parentHandle.isAlive shouldBe false
+                childHandle.isAlive shouldBe false
             } finally {
                 if (worker.isAlive) {
                     worker.interrupt()
@@ -251,4 +263,148 @@ private fun <T> withFakeGit(script: String, block: (root: Path, home: Path, gitB
         root.toFile().deleteRecursively()
         home.toFile().deleteRecursively()
     }
+}
+
+/** The PID fixture retains the exact handles observed while the fake git is running before cleanup. */
+@Suppress("CyclomaticComplexMethod")
+private fun <T> withTrackedFakeGit(
+    script: String,
+    block: (
+        root: Path,
+        home: Path,
+        gitBinary: String,
+        recordPid: (Long) -> ProcessHandle,
+        trackWorker: (Thread) -> Unit,
+    ) -> T,
+): T {
+    val root = Files.createTempDirectory("plainbase-git-tracked")
+    val home = Files.createTempDirectory("plainbase-git-tracked-home")
+    val bin = Files.createTempFile("tracked-fake-git", ".sh")
+    Files.writeString(bin, script)
+    Files.setPosixFilePermissions(bin, PosixFilePermissions.fromString("rwxr-xr-x"))
+    val handles = mutableListOf<ProcessHandle>()
+    val workers = mutableListOf<Thread>()
+    val workerFailures = mutableListOf<Throwable>()
+    var blockFailure: Throwable? = null
+    var outcome: Result<T>? = null
+    var cleanupFailure: Throwable? = null
+    var interrupted = Thread.interrupted()
+    fun recordCleanupFailure(failure: Throwable) {
+        if (failure is InterruptedException) {
+            interrupted = true
+            Thread.interrupted()
+        }
+        cleanupFailure = mergeTrackedFailure(cleanupFailure, failure)
+    }
+    fun attemptCleanup(action: () -> Unit) {
+        try {
+            action()
+        } catch (failure: Throwable) {
+            recordCleanupFailure(failure)
+        }
+    }
+    fun recordPid(pid: Long): ProcessHandle =
+        ProcessHandle.of(pid).orElseThrow { IllegalStateException("recorded PID $pid was unavailable") }
+            .also { handle -> synchronized(handles) { handles += handle } }
+    fun trackWorker(worker: Thread) {
+        worker.uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, failure ->
+            synchronized(workerFailures) { workerFailures += failure }
+        }
+        synchronized(workers) { workers += worker }
+    }
+    try {
+        outcome = Result.success(
+            block(root, home, bin.toString(), ::recordPid, ::trackWorker),
+        )
+    } catch (failure: Throwable) {
+        blockFailure = failure
+        if (failure is InterruptedException) {
+            interrupted = true
+            Thread.interrupted()
+        }
+        outcome = Result.failure(failure)
+    } finally {
+        try {
+            synchronized(handles) { handles.toList() }.forEach { handle ->
+                attemptCleanup {
+                    if (handle.isAlive && !handle.destroyForcibly() && handle.isAlive) {
+                        error("recorded fake-git PID ${handle.pid()} rejected termination")
+                    }
+                }
+            }
+            val processSnapshot = synchronized(handles) { handles.toList() }
+            val workerSnapshot = synchronized(workers) { workers.toList() }
+            workerSnapshot.forEach { worker -> attemptCleanup { if (worker.isAlive) worker.interrupt() } }
+
+            val processDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TRACKED_FIXTURE_CLEANUP_TIMEOUT_MILLIS)
+            processSnapshot.forEach { handle ->
+                attemptCleanup {
+                    while (handle.isAlive && System.nanoTime() < processDeadline) {
+                        try {
+                            Thread.sleep(TRACKED_FIXTURE_POLL_MILLIS)
+                        } catch (failure: InterruptedException) {
+                            recordCleanupFailure(failure)
+                        }
+                    }
+                }
+            }
+            val workerDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TRACKED_FIXTURE_CLEANUP_TIMEOUT_MILLIS)
+            workerSnapshot.forEach { worker ->
+                attemptCleanup {
+                    while (worker.isAlive && System.nanoTime() < workerDeadline) {
+                        try {
+                            val remaining = workerDeadline - System.nanoTime()
+                            worker.join(maxOf(1L, TimeUnit.NANOSECONDS.toMillis(remaining)))
+                        } catch (failure: InterruptedException) {
+                            recordCleanupFailure(failure)
+                        }
+                    }
+                }
+            }
+            synchronized(workerFailures) { workerFailures.toList() }.forEach(::recordCleanupFailure)
+
+            val liveProcesses = processSnapshot.filter { it.isAlive }
+            val liveWorkers = workerSnapshot.filter { it.isAlive }
+            if (liveProcesses.isNotEmpty() || liveWorkers.isNotEmpty()) {
+                recordCleanupFailure(
+                    IllegalStateException(
+                        "retaining fake-git fixture root=$root home=$home script=$bin; " +
+                            "surviving PIDs=${liveProcesses.joinToString(",") { it.pid().toString() }} " +
+                            "workers=${liveWorkers.joinToString(",") { it.name }}",
+                    ),
+                )
+            } else {
+                attemptCleanup { Files.deleteIfExists(bin) }
+                attemptCleanup {
+                    check(root.toFile().deleteRecursively() || Files.notExists(root)) {
+                        "could not delete fake-git root $root"
+                    }
+                }
+                attemptCleanup {
+                    check(home.toFile().deleteRecursively() || Files.notExists(home)) {
+                        "could not delete fake-git home $home"
+                    }
+                }
+            }
+        } catch (failure: Throwable) {
+            recordCleanupFailure(failure)
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+    if (blockFailure != null) {
+        cleanupFailure?.let(blockFailure::addSuppressed)
+        throw blockFailure
+    }
+    cleanupFailure?.let { throw it }
+    return requireNotNull(outcome).getOrThrow()
+}
+
+private const val TRACKED_FIXTURE_CLEANUP_TIMEOUT_MILLIS = 10_000L
+private const val TRACKED_FIXTURE_POLL_MILLIS = 10L
+
+private fun mergeTrackedFailure(existing: Throwable?, candidate: Throwable): Throwable {
+    if (existing == null) return candidate
+    if (existing !== candidate && existing.suppressed.none { it === candidate }) existing.addSuppressed(candidate)
+    return existing
 }

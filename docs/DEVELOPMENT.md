@@ -17,6 +17,27 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md).
 Requirements: JDK 21+ (the build auto-provisions the 21 toolchain for
 bytecode). Node is downloaded by the Gradle build - no local install needed.
 
+The Linux-only PID1 regression gates are separate from ordinary test discovery:
+
+```sh
+./gradlew :server:gitZombieJvmPid1       # Java 21 JVM launcher
+./gradlew :server:gitZombieNativePid1    # GraalVM nativeTestCompile executable
+./gradlew :server:gitZombieForcedTimeoutPid1
+```
+
+CI runs the JVM and native positive tasks; the forced-timeout task verifies watchdog escalation and cleanup for checkpoint acceptance.
+
+They require Linux permissions/capabilities to create the privileged PID, mount, and network namespaces used by
+the launcher. Separately, they require noninteractive `sudo -n` and trusted executable `sudo`; `unshare` and
+`setpriv` are from util-linux, while `timeout` and `id` are from coreutils, all in `/usr/bin` or `/bin`. No
+separate `kill` helper is a prerequisite. The fixtures also require executable `/bin/sh` and `sleep` with
+fractional-second support on `PATH`. The JVM gate uses Java 21; the native gate uses the
+pinned GraalVM toolchain below. CI gives its JVM and native PID1 steps a five-minute ceiling. Run reports and retained
+evidence are under `server/build/reports/g3z/jvm/<run-id>/`, `server/build/reports/g3z/native/<run-id>/`, or
+`server/build/reports/g3z/forced/<run-id>/`,
+with preparation/staging material under `server/build/g3z/`. On non-Linux hosts, ordinary test discovery may
+report a topology-required skip/abort, but that is distinct from the required one-body PID1 successes.
+
 For native builds, the repo pins GraalVM via [asdf](https://asdf-vm.com/) -
 `.tool-versions` selects `graalvm-community-25.0.2`, so inside the repo
 `java` and `native-image` resolve to the same GraalVM the CI native gate
@@ -30,16 +51,17 @@ asdf install        # one-time: installs the pinned GraalVM
 
 Five jobs gate `main` (`.github/workflows/ci.yml`):
 
-- **`build-test`** - the JVM universal-JAR floor: `./gradlew build` + the full-stack dependency
-  spike.
+- **`build-test`** - the JVM universal-JAR floor: `./gradlew build`, the positive `gitZombieJvmPid1`
+  control, and the full-stack dependency spike.
 - **`enforced-auth-smoke`** - the builtin auth/CSRF matrix on loopback (anon `401`, bootstrap, CSRF
   present/absent/cross-origin, a PB-WRITE-1 save, an agent-bearer read + REST revoke). Every other
   job here boots `auth.mode=off` by default, so this is the one job that actually exercises
   enforced-mode auth.
 - **`docker-image`** - the compose-tier image build plus a non-loopback proxy/transport smoke (a
   `421` transport refusal and the full proxy CSRF path - only reachable from outside loopback).
-- **`native-gate` (linux-x64)** - `nativeCompile` → `nativeTest` → the spike (9/9) → the
-  enforced-auth smoke again, against the native binary → the native-startup regression tripwire.
+- **`native-gate` (linux-x64)** - `nativeCompile` → `nativeTest` → the positive `gitZombieNativePid1`
+  control → the spike (9/9) → the enforced-auth smoke again, against the native binary → the native-startup
+  regression tripwire.
 - **`frontend-smoke`** - Playwright, booting both an auth-off and an enforced-builtin server;
   carries the CSP zero-violation gate (`csp.spec.ts`) and the enforced-builtin approval flow
   (`review.spec.ts`). Deliberately outside `./gradlew build` - a browser-download flake must never
@@ -88,8 +110,10 @@ gate a *release* that ships (or touches) the object-storage backend.
    [operating-plainbase.md](operating-plainbase.md#object-mode-dr-drills-operator-recipes)). Rehearse
    each for real and REFRESH its dated "Rehearsed for real" record in the ops doc (date, provider,
    what was observed) - the record reflects the most recent rehearsal, not a one-time checkbox.
-4. **Existing floors** (already CI-automated, listed for completeness): `./gradlew build`, the native
-   gate (`nativeCompile` -> `nativeTest` -> spike 9/9).
+4. **Existing floors** (already CI-automated, listed for completeness): `./gradlew build` and the native
+   artifact floor (`nativeCompile` -> `nativeTest` -> spike 9/9). CI additionally runs the two Linux-only
+   positive PID1 tasks, `gitZombieJvmPid1` and `gitZombieNativePid1`; `gitZombieForcedTimeoutPid1` remains
+   checkpoint-only.
 
 ## The native dependency spike
 

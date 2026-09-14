@@ -1,5 +1,10 @@
 package com.plainbase.frameworks.cli
 
+import app.cash.sqldelight.db.SqlDriver
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ThrowableProxy
+import ch.qos.logback.core.read.ListAppender
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.HistoryMode
@@ -14,18 +19,26 @@ import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
+import com.plainbase.frameworks.lifecycle.Stage0cParentDeadline
+import com.plainbase.frameworks.lifecycle.probeDataDirLock
+import com.plainbase.frameworks.runtime.OfflineStoreOperations
+import com.plainbase.frameworks.runtime.RootStoreFactory
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The `plainbase reindex` CLI contract (S8 Resolution 2 / criteria 6-8 JVM half + criterion 14).
@@ -117,17 +130,12 @@ class ReindexCommandTest : FunSpec({
             "actionably (exit 1) rather than silently reindexing an empty/stale mirror",
     ) {
         withReindexTree { config ->
-            val objectConfig = config.copy(
-                storage = StorageConfig(
-                    backend = StorageBackend.OBJECT,
-                    endpoint = "https://127.0.0.1:9", // loopback, nothing listening - fails fast, not a timeout
-                    bucket = "docs",
-                    accessKeyId = "k",
-                    secretAccessKey = "s",
-                ),
-            )
-            // The failure is logged via the facade (logger.error), not println - the exit code is the contract.
-            captureStderr { runReindex(emptyList(), objectConfig) shouldBe 1 }
+            withListRefusalEndpoint { endpoint, requests ->
+                val objectConfig = objectConfig(config, endpoint)
+                // The failure is logged via the facade (logger.error), not println - the exit code is the contract.
+                captureStderr { runReindex(emptyList(), objectConfig) shouldBe 1 }
+                (requests.get() > 0) shouldBe true
+            }
         }
     }
 
@@ -152,6 +160,451 @@ class ReindexCommandTest : FunSpec({
                 provider.indexedState().size shouldBe 3
                 provider.search(SearchQuery(text = "capacitor", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
                 provider.search(SearchQuery(text = "onboarding", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
+            }
+        }
+    }
+
+    test("LOCAL reindex keeps the declared root order and excludes DATA_DIR nested in an extra") {
+        withTwoRootTree { config, handbook ->
+            val nestedData = Files.createDirectories(handbook.resolve("plainbase-data"))
+            Files.writeString(nestedData.resolve("secret.md"), "---\ntitle: Hidden\n---\nnot corpus\n")
+            val nestedConfig = config.copy(dataDir = nestedData)
+
+            val out = captureStdout { runReindex(emptyList(), nestedConfig) shouldBe 0 }
+
+            out.lineSequence().toList() shouldContain
+                "reindex: rebuilt the search index for 3 page(s) across 2 roots: docs (2), handbook (1)"
+            SearchDb(nestedConfig.searchDatabasePath).use { db ->
+                val provider = Fts5SearchProvider(db)
+                provider.indexedState().size shouldBe 3
+                provider.search(SearchQuery(text = "not corpus", limit = 20, offset = 0)).total shouldBe 0L
+            }
+        }
+    }
+
+    test("LOCAL reindex constructs primary first while indexing the declared root order") {
+        withTwoRootTree { config, handbook ->
+            val nestedData = Files.createDirectories(handbook.resolve("plainbase-data"))
+            Files.writeString(nestedData.resolve("secret.md"), "---\ntitle: Hidden\n---\nnot corpus\n")
+            val reordered = config.copy(
+                dataDir = nestedData,
+                roots = RootsConfig.of(
+                    listOf(config.roots.list[1], config.roots.list[0]),
+                    origin = RootsOrigin.EXPLICIT,
+                ),
+            )
+            val localOpens = mutableListOf<RootName>()
+            val decorated = mutableListOf<RootName>()
+            val fixture = OfflineStoreFixture()
+            val tracked = fixture.operations()
+            val operations = OfflineStoreOperations(
+                openDriver = tracked.openDriver,
+                openReadOnlyDriver = tracked.openReadOnlyDriver,
+                openSearch = tracked.openSearch,
+                openLocal = { inputs ->
+                    localOpens += inputs.rootName
+                    tracked.openLocal(inputs)
+                },
+                openObject = { _, _, _, _, _ -> error("OBJECT must not open in LOCAL mode") },
+                hydrateObject = tracked.hydrateObject,
+                closeObject = tracked.closeObject,
+            )
+            fixture.use {
+                val out = captureStdout {
+                    ReindexCommand.run(
+                        emptyList(),
+                        reordered,
+                        { name, store ->
+                            decorated += name
+                            object : ContentStore by store {}
+                        },
+                        CommandOutputCapture.current,
+                        operations,
+                    ) shouldBe 0
+                }
+
+                localOpens shouldBe listOf(RootName.PRIMARY, HANDBOOK)
+                decorated shouldBe listOf(RootName.PRIMARY, HANDBOOK)
+                out.lineSequence().toList() shouldContain
+                    "reindex: rebuilt the search index for 3 page(s) across 2 roots: handbook (1), docs (2)"
+                SearchDb(reordered.searchDatabasePath).use { db ->
+                    Fts5SearchProvider(db).search(SearchQuery(text = "not corpus", limit = 20, offset = 0)).total shouldBe 0L
+                }
+            }
+        }
+    }
+
+    test("OBJECT reindex uses the default high-level store, ignores CONTENT_DIR, and closes the raw store") {
+        withReindexTree { config ->
+            withEmptyListEndpoint { endpoint ->
+                val fixture = OfflineStoreFixture()
+                val localOpens = mutableListOf<RootName>()
+                val objectOpens = AtomicInteger()
+                var closeCount = 0
+                val base = fixture.productionOperations(
+                    openLocal = { inputs ->
+                        localOpens += inputs.rootName
+                        RootStoreFactory.local(inputs)
+                    },
+                    closeObject = { store ->
+                        closeCount++
+                        store.close()
+                    },
+                )
+                val operations = OfflineStoreOperations(
+                    openDriver = base.openDriver,
+                    openReadOnlyDriver = base.openReadOnlyDriver,
+                    openSearch = base.openSearch,
+                    openLocal = base.openLocal,
+                    openObject = { objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
+                        objectOpens.incrementAndGet()
+                        base.openObject(objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart)
+                    },
+                    hydrateObject = base.hydrateObject,
+                    closeObject = base.closeObject,
+                )
+                val objectConfig = objectConfig(config, endpoint).copy(contentDir = config.dataDir.resolve("ignored-content"))
+                fixture.use {
+                    val out = captureStdout {
+                        ReindexCommand.run(
+                            emptyList(),
+                            objectConfig,
+                            { _, store -> store },
+                            CommandOutputCapture.current,
+                            operations,
+                        ) shouldBe 0
+                    }
+
+                    out.lineSequence().toList() shouldContain
+                        "reindex: rebuilt the search index for 0 page(s) under ${objectConfig.dataDir.resolve("mirror")}"
+                    objectOpens.get() shouldBe 1
+                    localOpens shouldBe emptyList()
+                    fixture.stores.single().isClosedForTest() shouldBe true
+                    fixture.stores.single().transportIdleForTest() shouldBe true
+                    closeCount shouldBe 1
+                    fixture.connections.isNotEmpty() shouldBe true
+                    fixture.connections.all { it.isClosed } shouldBe true
+                    fixture.drivers.single().closeCount shouldBe 1
+                }
+                closeCount shouldBe 1
+                fixture.drivers.single().closeCount shouldBe 1
+            }
+        }
+    }
+
+    test("reindex closes a raw object store when primary decoration fails") {
+        withReindexTree { config ->
+            withEmptyListEndpoint { endpoint ->
+                val objectConfig = objectConfig(config, endpoint)
+                val decorationFailure = AssertionError("decoration failed")
+                val closeFailure = IllegalStateException("raw close failed")
+                val parent = Stage0cParentDeadline(30_000)
+                val fixture = OfflineStoreFixture()
+                val clientLocks = mutableListOf<String>()
+                val driverLocks = mutableListOf<String>()
+                val searchLocks = mutableListOf<String>()
+                fixture.onClientClose = { clientLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                fixture.onDriverClose = { driverLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                fixture.onConnectionClose = { searchLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                val operations = fixture.operations(
+                    closeObject = { store ->
+                        store.close()
+                        throw closeFailure
+                    },
+                )
+                fixture.use {
+                    val actual = shouldThrow<AssertionError> {
+                        ReindexCommand.run(
+                            emptyList(),
+                            objectConfig,
+                            { _, _ -> throw decorationFailure },
+                            CommandOutputCapture.current,
+                            operations,
+                        )
+                    }
+
+                    actual shouldBeSameInstanceAs decorationFailure
+                    actual.suppressed.single() shouldBeSameInstanceAs closeFailure
+                    fixture.clients.single().closeCount shouldBe 1
+                    fixture.clients.single().transportActive shouldBe false
+                    fixture.connections.isNotEmpty() shouldBe true
+                    fixture.connections.all { it.isClosed } shouldBe true
+                    fixture.connections.all { it.closeCount == 1 } shouldBe true
+                    fixture.drivers.single().closeCount shouldBe 1
+                    clientLocks shouldBe listOf("HELD")
+                    driverLocks shouldBe listOf("HELD")
+                    searchLocks shouldBe List(fixture.connections.size) { "HELD" }
+                    probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
+                }
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
+                fixture.connections.all { it.closeCount == 1 } shouldBe true
+            }
+        }
+    }
+
+    test("reindex closes a partially assembled object store before returning the construction failure") {
+        withReindexTree { config ->
+            val fixture = OfflineStoreFixture()
+            val partialFailure = IllegalStateException("store assembly failed")
+            val parent = Stage0cParentDeadline(30_000)
+            val clientLocks = mutableListOf<String>()
+            val driverLocks = mutableListOf<String>()
+            val searchLocks = mutableListOf<String>()
+            fixture.onClientClose = { clientLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+            fixture.onDriverClose = { driverLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+            fixture.onConnectionClose = { searchLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+            val logger = LoggerFactory.getLogger(ReindexCommand::class.java) as Logger
+            val appender = ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>().apply { start() }
+            logger.addAppender(appender)
+            fixture.use {
+                try {
+                    captureStderr {
+                        ReindexCommand.run(
+                            emptyList(),
+                            objectConfig(config, "http://127.0.0.1:1"),
+                            { _, store -> store },
+                            CommandOutputCapture.current,
+                            fixture.operations(
+                                openObject = { objectConfigArg, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
+                                    fixture.openObjectThenFail(
+                                        objectConfigArg,
+                                        ignoreRules,
+                                        dirtyPaths,
+                                        isDirty,
+                                        rowsAtStart,
+                                        partialFailure,
+                                    )
+                                },
+                            ),
+                        ) shouldBe 1
+                    }
+
+                    val event = appender.list.first { it.formattedMessage == "reindex failed" }
+                    (event.throwableProxy as? ThrowableProxy)?.throwable shouldBeSameInstanceAs partialFailure
+                    fixture.clients.single().closeCount shouldBe 1
+                    fixture.clients.single().transportActive shouldBe false
+                    fixture.connections.isNotEmpty() shouldBe true
+                    fixture.connections.all { it.isClosed } shouldBe true
+                    fixture.drivers.single().closeCount shouldBe 1
+                    clientLocks shouldBe listOf("HELD")
+                    driverLocks shouldBe listOf("HELD")
+                    searchLocks shouldBe List(fixture.connections.size) { "HELD" }
+                    probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
+                } finally {
+                    logger.detachAppender(appender)
+                }
+            }
+            fixture.clients.single().closeCount shouldBe 1
+            fixture.clients.single().transportActive shouldBe false
+            fixture.drivers.single().closeCount shouldBe 1
+        }
+    }
+
+    test("reindex closes a raw store behind a non-closeable decorated view before its success result") {
+        withReindexTree { config ->
+            withEmptyListEndpoint { endpoint ->
+                val fixture = OfflineStoreFixture()
+                fixture.use {
+                    val out = captureStdout {
+                        ReindexCommand.run(
+                            emptyList(),
+                            objectConfig(config, endpoint),
+                            { _, store -> object : ContentStore by store {} },
+                            CommandOutputCapture.current,
+                            fixture.operations(),
+                        ) shouldBe 0
+                    }
+
+                    out shouldContain "reindex: rebuilt the search index for 0 page(s)"
+                    fixture.clients.single().closeCount shouldBe 1
+                    fixture.clients.single().transportActive shouldBe false
+                    fixture.connections.isNotEmpty() shouldBe true
+                    fixture.connections.all { it.isClosed } shouldBe true
+                    fixture.drivers.single().closeCount shouldBe 1
+                }
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
+            }
+        }
+    }
+
+    test("reindex retains the DATA_DIR lock through raw object, search, and driver close") {
+        withReindexTree { config ->
+            withEmptyListEndpoint { endpoint ->
+                val parent = Stage0cParentDeadline(30_000)
+                val fixture = OfflineStoreFixture()
+                val base = fixture.operations()
+                val events = mutableListOf<String>()
+                val lockStates = linkedMapOf<String, String>()
+                var observedSearchClose = false
+                fixture.onConnectionClose = {
+                    if (!observedSearchClose) {
+                        observedSearchClose = true
+                        events += "search-close"
+                        lockStates["search"] = probeDataDirLock(config.dataDir, parent, fixture = null)
+                    }
+                }
+                val operations = OfflineStoreOperations(
+                    openDriver = { path ->
+                        val driver = base.openDriver(path)
+                        object : SqlDriver by driver {
+                            override fun close() {
+                                events += "driver-close"
+                                fixture.observe {
+                                    lockStates["driver"] = probeDataDirLock(config.dataDir, parent, fixture = null)
+                                }
+                                driver.close()
+                            }
+                        }
+                    },
+                    openReadOnlyDriver = base.openReadOnlyDriver,
+                    openSearch = base.openSearch,
+                    openLocal = base.openLocal,
+                    openObject = base.openObject,
+                    hydrateObject = base.hydrateObject,
+                    closeObject = { store ->
+                        events += "object-close"
+                        fixture.observe {
+                            lockStates["object"] = probeDataDirLock(config.dataDir, parent, fixture = null)
+                        }
+                        store.close()
+                    },
+                )
+                fixture.use {
+                    captureStdout {
+                        ReindexCommand.run(
+                            emptyList(),
+                            objectConfig(config, endpoint),
+                            { _, store -> store },
+                            CommandOutputCapture.current,
+                            operations,
+                        ) shouldBe 0
+                    }
+
+                    lockStates shouldBe linkedMapOf("object" to "HELD", "search" to "HELD", "driver" to "HELD")
+                    events shouldBe listOf("object-close", "search-close", "driver-close")
+                    probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
+                    fixture.connections.isNotEmpty() shouldBe true
+                    fixture.connections.all { it.isClosed } shouldBe true
+                    fixture.drivers.single().closeCount shouldBe 1
+                }
+                fixture.drivers.single().closeCount shouldBe 1
+            }
+        }
+    }
+
+    test("fixture records an observer failure after closing every retained JDBC delegate") {
+        val data = Files.createTempDirectory("pb-fixture-observer-data")
+        withRetainedDirectories(data) {
+            val fixture = OfflineStoreFixture()
+            val observerFailure = IllegalStateException("lock observation failed")
+            val bodyFailure = AssertionError("body failed")
+            fixture.onConnectionClose = { throw observerFailure }
+
+            val actual = shouldThrow<AssertionError> {
+                fixture.use {
+                    fixture.operations().openSearch(data.resolve("search.db")).close()
+                    throw bodyFailure
+                }
+            }
+
+            actual shouldBeSameInstanceAs bodyFailure
+            actual.suppressed.single() shouldBeSameInstanceAs observerFailure
+            fixture.connections.isNotEmpty() shouldBe true
+            fixture.connections.all { it.isClosed } shouldBe true
+            fixture.connections.all { it.closeCount == 1 } shouldBe true
+        }
+    }
+
+    test("reindex closes the raw object store when the LIST endpoint refuses hydration") {
+        withReindexTree { config ->
+            withListRefusalEndpoint { endpoint, requests ->
+                val objectConfig = objectConfig(config, endpoint)
+                val fixture = OfflineStoreFixture()
+                val logger = LoggerFactory.getLogger(ReindexCommand::class.java) as Logger
+                val appender = ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>().apply { start() }
+                logger.addAppender(appender)
+                fixture.use {
+                    try {
+                        ReindexCommand.run(
+                            emptyList(),
+                            objectConfig,
+                            { _, store -> store },
+                            CommandOutputCapture.current,
+                            fixture.operations(),
+                        ) shouldBe 1
+                        appender.list.any { it.formattedMessage == "reindex failed" } shouldBe true
+                        (requests.get() > 0) shouldBe true
+                        fixture.clients.single().closeCount shouldBe 1
+                        fixture.clients.single().transportActive shouldBe false
+                        fixture.connections.isNotEmpty() shouldBe true
+                        fixture.connections.all { it.isClosed } shouldBe true
+                        fixture.drivers.single().closeCount shouldBe 1
+                    } finally {
+                        logger.detachAppender(appender)
+                    }
+                }
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
+            }
+        }
+    }
+
+    test("a raw object close failure returns status 1 and logs the same throwable") {
+        withReindexTree { config ->
+            withEmptyListEndpoint { endpoint ->
+                val objectConfig = objectConfig(config, endpoint)
+                val closeFailure = RuntimeException("raw close failed")
+                val fixture = OfflineStoreFixture()
+                val parent = Stage0cParentDeadline(30_000)
+                val clientLocks = mutableListOf<String>()
+                val driverLocks = mutableListOf<String>()
+                val searchLocks = mutableListOf<String>()
+                fixture.onClientClose = { clientLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                fixture.onDriverClose = { driverLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                fixture.onConnectionClose = { searchLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                val logger = LoggerFactory.getLogger(ReindexCommand::class.java) as Logger
+                val appender = ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>().apply { start() }
+                logger.addAppender(appender)
+                fixture.use {
+                    try {
+                        val out = captureStdout {
+                            ReindexCommand.run(
+                                emptyList(),
+                                objectConfig,
+                                { _, store -> store },
+                                CommandOutputCapture.current,
+                                fixture.operations(closeObject = { store ->
+                                    store.close()
+                                    throw closeFailure
+                                }),
+                            ) shouldBe 1
+                        }
+
+                        val event = appender.list.first { it.formattedMessage == "reindex failed" }
+                        event.level shouldBe Level.ERROR
+                        (event.throwableProxy as? ThrowableProxy)?.throwable shouldBeSameInstanceAs closeFailure
+                        out shouldNotContain "reindex: rebuilt the search index"
+                        fixture.clients.single().closeCount shouldBe 1
+                        fixture.clients.single().transportActive shouldBe false
+                        fixture.connections.isNotEmpty() shouldBe true
+                        fixture.connections.all { it.isClosed } shouldBe true
+                        fixture.drivers.single().closeCount shouldBe 1
+                        clientLocks shouldBe listOf("HELD")
+                        driverLocks shouldBe listOf("HELD")
+                        searchLocks shouldBe List(fixture.connections.size) { "HELD" }
+                        probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
+                    } finally {
+                        logger.detachAppender(appender)
+                    }
+                }
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
             }
         }
     }
@@ -265,15 +718,13 @@ private fun vanishAfterFirstProbe(root: RootName): StoreDecorator = { name, stor
 private fun withReindexTree(block: (PlainbaseConfig) -> Unit) {
     val content = Files.createTempDirectory("pb-reindex-content")
     val data = Files.createTempDirectory("pb-reindex-data")
-    try {
+    withRetainedDirectories(content, data) {
         Files.writeString(
             content.resolve("alpha.md"),
             "---\nid: ${ALPHA_ID.value}\ntitle: Alpha\n---\n\n# Alpha\n\nfind the flux capacitor here.\n",
         )
         Files.writeString(content.resolve("beta.md"), "---\nid: ${BETA_ID.value}\ntitle: Beta\n---\n\n# Beta\n\nplain filler text.\n")
         block(PlainbaseConfig(contentDir = content, dataDir = data, host = "127.0.0.1", port = 0))
-    } finally {
-        listOf(content, data).forEach(::deleteTree)
     }
 }
 
@@ -283,7 +734,7 @@ private fun withReindexTree(block: (PlainbaseConfig) -> Unit) {
  */
 private fun withTwoRootTree(block: (PlainbaseConfig, Path) -> Unit) {
     val handbook = Files.createTempDirectory("pb-reindex-handbook")
-    try {
+    withRetainedDirectories(handbook) {
         withReindexTree { config ->
             Files.writeString(
                 handbook.resolve("onboarding.md"),
@@ -302,15 +753,7 @@ private fun withTwoRootTree(block: (PlainbaseConfig, Path) -> Unit) {
                 handbook,
             )
         }
-    } finally {
-        deleteTree(handbook)
     }
-}
-
-/** Tolerates an already-deleted tree: the unmount test removes the extra root itself. */
-private fun deleteTree(dir: Path) {
-    if (!Files.exists(dir)) return
-    Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
 }
 
 private fun runReindex(args: List<String>, config: PlainbaseConfig): Int =
@@ -322,3 +765,13 @@ private fun runReindex(args: List<String>, config: PlainbaseConfig, decorate: St
 private fun captureStdout(block: () -> Unit): String = CommandOutputCapture.captureStdout(block)
 
 private fun captureStderr(block: () -> Unit): String = CommandOutputCapture.captureStderr(block)
+
+private fun objectConfig(base: PlainbaseConfig, endpoint: String): PlainbaseConfig = base.copy(
+    storage = StorageConfig(
+        backend = StorageBackend.OBJECT,
+        endpoint = endpoint,
+        bucket = "docs",
+        accessKeyId = "k",
+        secretAccessKey = "s",
+    ),
+)

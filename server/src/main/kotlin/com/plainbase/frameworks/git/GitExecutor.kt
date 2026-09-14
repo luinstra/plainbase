@@ -1,77 +1,330 @@
 package com.plainbase.frameworks.git
 
+import com.plainbase.frameworks.lifecycle.CompletionWait
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.atomics.AtomicBoolean
-import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.concurrent.thread
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+
+/** The bounded fields used by Linux's `/proc/<pid>/stat` completion observation. */
+internal data class LinuxProcessStat(
+    val pid: Long,
+    val state: Char,
+    val numThreads: Long,
+    val startTicks: Long,
+)
+
+internal enum class GitHandleLiveness {
+    LIVE,
+    DEAD,
+    UNKNOWN,
+}
+
+internal data class LinuxProcessObservationDecision(
+    val complete: Boolean,
+    val firstStartTicks: Long?,
+)
+
+private const val MAX_PROC_STAT_BYTES = 4096
+private const val STAT_NUM_THREADS_INDEX = 17
+private const val STAT_START_TICKS_INDEX = 19
 
 /**
- * The single hermetic `git` chokepoint (ADR-0006): EVERY git invocation funnels through
- * [run]. The process is pinned reproducible and isolated — pinned `-c` config on every call, a cleared
- * + nulled environment, hooks disabled, args always a `List<String>` (no shell), a bounded wait, and
- * SEPARATE concurrent stdout/stderr drains so a stderr warning can NEVER corrupt a parsed SHA.
- *
- * No reflection, no `@Volatile`, kotlin stdlib only — native-image safe. The provider above this never
- * touches `ProcessBuilder`; this never knows the commit recipe.
+ * Parses a Linux stat record without splitting the command name. The command's final `)` is the delimiter because
+ * Linux permits spaces and `)` in that field. Fields after it are one-based stat fields 3 onward.
  */
-@OptIn(ExperimentalAtomicApi::class)
+internal fun parseLinuxProcessStat(raw: String): LinuxProcessStat? {
+    val open = raw.indexOf('(')
+    val close = raw.lastIndexOf(')')
+    if (open <= 0 || close <= open) return null
+    val pidText = raw.substring(0, open).trim()
+    if (pidText.isEmpty() || pidText.any { !it.isDigit() }) return null
+    val pid = pidText.toLongOrNull() ?: return null
+    if (pid <= 0L) return null
+
+    val fields = raw.substring(close + 1).trim().split(Regex("\\s+"))
+    if (fields.size < STAT_START_TICKS_INDEX + 1) return null
+    val stateField = fields[0]
+    if (stateField.length != 1) return null
+    val numThreads = fields[STAT_NUM_THREADS_INDEX].toLongOrNull() ?: return null
+    val startTicks = fields[STAT_START_TICKS_INDEX].toLongOrNull() ?: return null
+    if (numThreads < 1L || startTicks < 0L) return null
+    return LinuxProcessStat(pid, stateField[0], numThreads, startTicks)
+}
+
+/** Conservative decision used by the real observer and its synthetic pure decision cases. */
+internal fun linuxStatProvesOriginalSingleThreadZombie(
+    stat: LinuxProcessStat,
+    expectedPid: Long,
+    expectedStartTicks: Long,
+): Boolean =
+    stat.pid == expectedPid &&
+        stat.startTicks == expectedStartTicks &&
+        stat.state == 'Z' &&
+        stat.numThreads == 1L
+
+/** Modeled identity decision: an unavailable liveness observation never advances raw identity. */
+internal fun decideLinuxProcessObservation(
+    before: GitHandleLiveness,
+    stat: LinuxProcessStat?,
+    after: GitHandleLiveness,
+    expectedPid: Long,
+    firstStartTicks: Long?,
+): LinuxProcessObservationDecision {
+    if (before == GitHandleLiveness.DEAD || after == GitHandleLiveness.DEAD) {
+        return LinuxProcessObservationDecision(complete = true, firstStartTicks = firstStartTicks)
+    }
+    if (before != GitHandleLiveness.LIVE || after != GitHandleLiveness.LIVE) {
+        return LinuxProcessObservationDecision(complete = false, firstStartTicks = firstStartTicks)
+    }
+    if (stat == null || stat.pid != expectedPid) {
+        return LinuxProcessObservationDecision(complete = false, firstStartTicks = firstStartTicks)
+    }
+    if (firstStartTicks != null && firstStartTicks != stat.startTicks) {
+        return LinuxProcessObservationDecision(complete = false, firstStartTicks = firstStartTicks)
+    }
+    val observedStartTicks = firstStartTicks ?: stat.startTicks
+    return LinuxProcessObservationDecision(
+        complete = linuxStatProvesOriginalSingleThreadZombie(stat, expectedPid, observedStartTicks),
+        firstStartTicks = observedStartTicks,
+    )
+}
+
+/** A retained original handle plus its first valid Linux identity observation. */
+internal class GitProcessObservation(
+    val handle: ProcessHandle,
+    val role: String,
+) {
+    var firstStartTicks: Long? = null
+}
+
+/**
+ * Retains original handles by the runtime's process identity, not by numeric PID. No Linux stat read is needed to
+ * retain an observed handle; supplementary identity evidence remains conservative in the completion observer.
+ */
+internal class GitProcessRetention {
+    private val observations = linkedMapOf<ProcessHandle, GitProcessObservation>()
+
+    fun retain(handle: ProcessHandle, role: String): GitProcessObservation? {
+        val observation = GitProcessObservation(handle, role)
+        return if (observations.putIfAbsent(handle, observation) == null) observation else null
+    }
+
+    fun snapshot(): List<GitProcessObservation> = observations.values.toList()
+
+    fun allComplete(isComplete: (GitProcessObservation) -> Boolean): Boolean = snapshot().all(isComplete)
+}
+
+internal enum class GitAbnormalCause {
+    TIMEOUT,
+    INTERRUPTION,
+    OUTPUT_OVERFLOW,
+    HELPER_FAILURE,
+}
+
+private val SAFE_GIT_OPERATION_CATEGORIES = setOf(
+    "bundle",
+    "commit-tree",
+    "diff",
+    "fetch",
+    "gc",
+    "hash-object",
+    "init",
+    "log",
+    "ls-tree",
+    "maintenance",
+    "merge-base",
+    "read-tree",
+    "reset",
+    "rev-parse",
+    "status",
+    "symbolic-ref",
+    "update-index",
+    "update-ref",
+    "write-tree",
+)
+
+private val KNOWN_LEADING_GIT_CONFIGS = setOf(
+    listOf("-c", "core.useReplaceRefs=false"),
+    listOf("-c", "fetch.fsckObjects=true"),
+)
+
+/** Returns a fixed diagnostic category without echoing untrusted Git arguments. */
+internal fun gitOperationCategory(args: List<String>): String {
+    val commandIndex =
+        if (
+            KNOWN_LEADING_GIT_CONFIGS.any { prefix ->
+                args.size >= prefix.size && args.subList(0, prefix.size) == prefix
+            }
+        ) {
+            2
+        } else {
+            0
+        }
+    return args.getOrNull(commandIndex)?.takeIf { it in SAFE_GIT_OPERATION_CATEGORIES } ?: "run"
+}
+
+/** Atomically preserves the first abnormal invocation cause; later cleanup fallout is secondary. */
+internal class GitAbnormalCauseLatch {
+    private data class FirstCause(val cause: GitAbnormalCause, val failure: Throwable?)
+
+    private val first = AtomicReference<FirstCause?>(null)
+
+    fun latch(cause: GitAbnormalCause, failure: Throwable? = null): Boolean =
+        first.compareAndSet(null, FirstCause(cause, failure))
+
+    fun cause(): GitAbnormalCause? = first.get()?.cause
+
+    fun failure(): Throwable? = first.get()?.failure
+}
+
+/**
+ * Narrow test seam for confirmation only. The production observer is always [RealGitInvocationCompletionObserver]; a
+ * test may hold a modeled process/helper pending without replacing ProcessBuilder, kill, or the real Git path.
+ */
+internal interface GitInvocationCompletionObserver {
+    fun processComplete(observation: GitProcessObservation): Boolean
+
+    fun helperComplete(helper: Thread): Boolean
+}
+
+/** Internal observation tap for tests; it reports the real owner and completion decisions without replacing them. */
+internal interface GitInvocationObservationListener {
+    fun processRetained(observation: GitProcessObservation)
+
+    fun processCompletionObserved(observation: GitProcessObservation, complete: Boolean)
+
+    fun helperCompletionObserved(helper: Thread, complete: Boolean)
+}
+
+private object RealGitInvocationCompletionObserver : GitInvocationCompletionObserver {
+    override fun processComplete(observation: GitProcessObservation): Boolean {
+        val handle = observation.handle
+        val before = handleLiveness(handle)
+        if (before == GitHandleLiveness.DEAD) return true
+        if (before != GitHandleLiveness.LIVE || System.getProperty("os.name") != "Linux") return false
+        val expectedPid = runCatching { handle.pid() }.getOrNull() ?: return false
+        val stat = readLinuxProcessStat(expectedPid)
+        val decision = decideLinuxProcessObservation(
+            before = before,
+            stat = stat,
+            after = handleLiveness(handle),
+            expectedPid = expectedPid,
+            firstStartTicks = observation.firstStartTicks,
+        )
+        if (observation.firstStartTicks == null) observation.firstStartTicks = decision.firstStartTicks
+        return decision.complete
+    }
+
+    override fun helperComplete(helper: Thread): Boolean = !helper.isAlive
+}
+
+private fun handleLiveness(handle: ProcessHandle): GitHandleLiveness =
+    runCatching { if (handle.isAlive) GitHandleLiveness.LIVE else GitHandleLiveness.DEAD }
+        .getOrDefault(GitHandleLiveness.UNKNOWN)
+
+private fun readLinuxProcessStat(pid: Long): LinuxProcessStat? {
+    if (pid <= 0L || System.getProperty("os.name") != "Linux") return null
+    return runCatching {
+        val path = Path.of("/proc", pid.toString(), "stat")
+        Files.newInputStream(path).use { input ->
+            val bytes = ByteArray(MAX_PROC_STAT_BYTES)
+            var total = 0
+            var eof = false
+            while (total < bytes.size && !eof) {
+                val count = input.read(bytes, total, bytes.size - total)
+                when {
+                    count < 0 -> eof = true
+                    count > 0 -> total += count
+                }
+            }
+            if (total == bytes.size && input.read() >= 0) return@use null
+            val decoder = Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+            parseLinuxProcessStat(decoder.decode(ByteBuffer.wrap(bytes, 0, total)).toString())
+        }
+    }.getOrNull()
+}
+
+/**
+ * The single hermetic `git` chokepoint (ADR-0006): EVERY git invocation funnels through [run]. The process is pinned
+ * reproducible and isolated — pinned `-c` config on every call, a cleared + nulled environment, hooks disabled, args
+ * always a `List<String>` (no shell), one original deadline, and separate concurrent stdout/stderr drains.
+ *
+ * A successful start creates one invocation-local owner. It retains the direct process, every descendant observed while
+ * its ancestry is available, and every helper, and it does not release the caller until all retained work is complete.
+ * An unobserved descendant retaining a pipe may keep a helper pending until the external supervisor terminates the process tree.
+ * The original monotonic deadline bounds normal completion; timeout, interruption, overflow, or helper failure enters
+ * required termination/confirmation and joins, which may outlive that command budget while the obligation is retained.
+ */
 class GitExecutor(
     private val workTree: Path,
     private val home: Path,
-    // Bounded wait — never an unbounded waitFor() under the write-pipeline writer monitor. Injectable so a
-    // timeout test can prove the force-kill path without a 30s wall-clock cost; production uses the default.
     private val timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS,
-    // The git executable — "git" (resolved on PATH) in production. Injectable so the hardening tests can
-    // point at a fake `git` script that shapes stdout/stderr deterministically (the stderr proof, the
-    // flood/timeout proofs). ProcessBuilder resolves a bare name via the JVM's PATH, not the child env.
     private val gitBinary: String = "git",
-    // Byte ceilings on what a single git invocation may emit. The timeout bounds TIME, not BYTES — but
-    // the history reads return attacker/size-controlled output (`/history` full `git log`, `/diff` full diff, the
-    // startup `lastCommits` walk), so a repo with huge messages / very deep history / a huge diff could
-    // emit enough WITHIN the timeout to exhaust JVM/native-image memory. On exceed the process is
-    // force-killed and the call comes back a failure GitResult (NOT a throw — the provider's fail-loud
-    // path turns it into a GitCommandException, preserving the "executor never throws, write-pipeline monitor
-    // always releases" contract). The defaults are generous so a normal/large-but-sane repo never trips them;
-    // injectable so a test can drive the path cheaply.
     private val maxStdoutBytes: Long = DEFAULT_MAX_STDOUT_BYTES,
     private val maxStderrBytes: Long = DEFAULT_MAX_STDERR_BYTES,
 ) {
+    private var completionObserver: GitInvocationCompletionObserver = RealGitInvocationCompletionObserver
 
-    /**
-     * Runs `git [args]` in [workTree] with the pinned config + isolated env (caller [env] overlaid last;
-     * [stdin] written-then-closed when present). Never throws on a non-zero exit or a missing binary — a
-     * failed `start()` ([IOException]) and a timeout both come back as a [GitResult] failure so the
-     * write-pipeline monitor is always released and dirty-page recovery stays intact.
-     *
-     * stdout and stderr are drained on separate threads and kept DISTINCT in the result: stdout is parsed
-     * as data (SHAs, trees), stderr is diagnostic only.
-     */
+    /** Narrow modeled-completion constructor; production callers use the public constructor above. */
+    internal constructor(
+        workTree: Path,
+        home: Path,
+        timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS,
+        gitBinary: String = "git",
+        maxStdoutBytes: Long = DEFAULT_MAX_STDOUT_BYTES,
+        maxStderrBytes: Long = DEFAULT_MAX_STDERR_BYTES,
+        completionObserver: GitInvocationCompletionObserver = RealGitInvocationCompletionObserver,
+        helperFactory: (String, () -> Unit) -> Thread = { name, block ->
+            Thread(block, name).apply { isDaemon = true }
+        },
+        observationListener: GitInvocationObservationListener? = null,
+    ) : this(workTree, home, timeoutSeconds, gitBinary, maxStdoutBytes, maxStderrBytes) {
+        this.completionObserver = completionObserver
+        this.helperFactory = helperFactory
+        this.observationListener = observationListener
+    }
+
+    private var helperFactory: (String, () -> Unit) -> Thread = { name, block ->
+        Thread(block, name).apply { isDaemon = true }
+    }
+    private var observationListener: GitInvocationObservationListener? = null
+
+    /** Runs `git [args]` with pinned config, isolated env, separate bounded output, and the invocation owner. */
     fun run(
         args: List<String>,
         env: Map<String, String> = emptyMap(),
         stdin: ByteArray? = null,
-        // G1: per-call timeout override for the SIZE-DEPENDENT DR bundle ops (`bundle create --all`, the restore
-        // `fetch`) - a full-history bundle can transfer fine under the 10-min HTTP bound yet exceed the default
-        // ~30s git timeout. `null` keeps the default; every hot-path call stays bounded at the default.
         timeoutSecondsOverride: Long? = null,
     ): GitResult =
-        runInternal(args, env, stdin, includeWorkTree = true, timeoutSeconds = timeoutSecondsOverride ?: this.timeoutSeconds)
+        runInternal(
+            args,
+            env,
+            stdin,
+            includeWorkTree = true,
+            timeoutSeconds = timeoutSecondsOverride ?: this.timeoutSeconds,
+            operation = gitOperationCategory(args),
+        )
 
-    /**
-     * Cluster-1 fix (C5): probes `git --version` WITHOUT the `-C <workTree>` prefix every other call
-     * carries. `--version` reads no repository, so dropping `-C` is a no-op for local mode (whose
-     * work tree already exists by the time this runs) - but it is load-bearing for the object-mode
-     * pre-lock gate: `gateCheck()` runs at `Application.kt`'s `serve()` BEFORE the lock and before
-     * hydrate's mkdir, so a missing `DATA_DIR/mirror` would otherwise make every call (including this
-     * probe) fail with git's `cannot change to '<dir>'` and misreport the binary itself as missing.
-     */
+    /** Probes `git --version` without `-C`; it uses the same invocation owner as [run]. */
     fun versionProbe(): GitResult =
-        runInternal(listOf("--version"), emptyMap(), null, includeWorkTree = false, timeoutSeconds = this.timeoutSeconds)
+        runInternal(
+            listOf("--version"),
+            emptyMap(),
+            null,
+            includeWorkTree = false,
+            timeoutSeconds = this.timeoutSeconds,
+            operation = "versionProbe",
+        )
 
     private fun runInternal(
         args: List<String>,
@@ -79,6 +332,7 @@ class GitExecutor(
         stdin: ByteArray?,
         includeWorkTree: Boolean,
         timeoutSeconds: Long,
+        operation: String,
     ): GitResult {
         val command = buildList {
             add(gitBinary)
@@ -99,254 +353,396 @@ class GitExecutor(
             put("GIT_TERMINAL_PROMPT", "0")
             put("GIT_ASKPASS", "true")
             put("GIT_OPTIONAL_LOCKS", "0")
-            // Every read path arg after `--` (log/diff/lastCommits) is a PATHSPEC, not a literal filename:
-            // a page named `foo[1].md` would be read as a glob/magic pathspec and match OTHER pages (wrong
-            // commits/diff) or none (dropped citation) — `--` separates options from paths, it does NOT force
-            // literal. One env var here makes ALL pathspecs literal. Harmless to the commit recipe, whose only
-            // path arg (`update-index --cacheinfo`) is already a literal pathname, not a pathspec.
             put("GIT_LITERAL_PATHSPECS", "1")
             putAll(env)
         }
 
         val process = try {
             builder.start()
-        } catch (e: IOException) {
-            logger.warn(e) { "git ${args.firstOrNull()} could not be started (is git installed?)" }
-            return GitResult(exitCode = -1, stdout = ByteArray(0), stderr = e.message ?: "git could not be started")
+        } catch (failure: IOException) {
+            logger.warn(failure) { "git $operation could not be started (is git installed?)" }
+            return GitResult(exitCode = -1, stdout = ByteArray(0), stderr = failure.message ?: "git could not be started")
+        }
+        val startedAtNanos = System.nanoTime()
+        val deadlineNanos = saturatingAdd(startedAtNanos, TimeUnit.SECONDS.toNanos(timeoutSeconds.coerceAtLeast(0L)))
+        val causes = GitAbnormalCauseLatch()
+        return CompletionWait.run(
+            onInterrupt = { causes.latch(GitAbnormalCause.INTERRUPTION) },
+        ) {
+            InvocationOwner(process, startedAtNanos, deadlineNanos, operation, causes).run(this, stdin)
+        }
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private inner class InvocationOwner(
+        private val process: Process,
+        private val startedAtNanos: Long,
+        private val deadlineNanos: Long,
+        private val operation: String,
+        private val causes: GitAbnormalCauseLatch,
+    ) {
+        private val observations = GitProcessRetention()
+        private val helpers = mutableListOf<Thread>()
+        private val parentReaped = AtomicBoolean(false)
+        private val pendingLogged = AtomicBoolean(false)
+        private val stdoutBuffer = ByteArrayOutputStream()
+        private val stderrBuffer = ByteArrayOutputStream()
+
+        init {
+            retainProcess(process.toHandle(), "parent")
         }
 
-        // Drain stdout AND stderr on dedicated threads — both at once — so the streams stay distinct (F1,
-        // never a redirectErrorStream merge that pollutes a parsed SHA) AND neither pipe can deadlock when
-        // git floods them (P1-1). Draining stdout off the calling thread is ALSO what lets the bounded
-        // waitFor below enforce the timeout even when a hung git never closes its stdout (the force-kill path
-        // — a calling-thread readBytes() would otherwise block past the timeout).
-        // The drain/writer threads are DAEMON (P2-1): if git spawned a child that inherited a pipe, a stuck
-        // drain must never block JVM shutdown. The normal (process-exited) path still joins them promptly.
-        // True once either drain saw its stream exceed its cap and force-killed the process. Set on a drain
-        // thread, read on the calling thread AFTER its join() (which establishes the happens-before).
-        val overflowed = AtomicBoolean(false)
-        val stdoutBuffer = ByteArrayOutputStream()
-        val stdoutDrain = thread(name = "git-stdout-drain", isDaemon = true) {
-            drainCapped(process.inputStream, stdoutBuffer, maxStdoutBytes, process, overflowed)
-        }
-        val stderrBuffer = ByteArrayOutputStream()
-        val stderrDrain = thread(name = "git-stderr-drain", isDaemon = true) {
-            drainCapped(process.errorStream, stderrBuffer, maxStderrBytes, process, overflowed)
-        }
+        fun run(wait: CompletionWait, stdin: ByteArray?): GitResult {
+            try {
+                startHelpers(stdin)
+            } catch (failure: Throwable) {
+                helperFailed(failure)
+            }
 
-        // Write stdin on its OWN thread too: a calling-thread write of a >pipe-buffer payload (~64 KiB)
-        // to a hung git that never reads it would block BEFORE waitFor even starts, holding the write-pipeline monitor
-        // forever. Off-thread, the bounded waitFor below still fires; the force-kill then breaks the pipe and
-        // the write fails with a swallowed broken-pipe IOException. No stdin → close the stream as before.
-        val stdinWriter: Thread? = if (stdin != null) {
-            thread(name = "git-stdin-writer", isDaemon = true) {
-                try {
-                    process.outputStream.use { it.write(stdin) }
-                } catch (e: IOException) {
-                    logger.debug(e) { "git ${args.firstOrNull()} stdin write ended early (process exited/was killed)" }
+            wait.captureCurrentInterrupt()
+            observeAndTerminateIfNeeded()
+            if (causes.cause() == null) {
+                val completedWithinDeadline = runCatching { awaitUntilDeadline(wait) }
+                    .onFailure(::helperFailed)
+                    .getOrDefault(false)
+                if (!completedWithinDeadline && causes.cause() == null) {
+                    abnormal(GitAbnormalCause.TIMEOUT)
                 }
             }
-        } else {
-            process.outputStream.close()
-            null
+
+            finishAbnormalWork(wait)
+            wait.captureCurrentInterrupt()
+            return result()
         }
 
-        val finished = try {
-            process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-        } catch (e: InterruptedException) {
-            // G3: the calling thread was interrupted (e.g. the ship executor's shutdownNow() at close()). waitFor
-            // aborts WITHOUT killing the child, so a `git bundle create` would keep running and could later
-            // corrupt the shared bundle path another ship reads. Force-kill the whole tree AND CONFIRM it has
-            // actually exited (R3) before returning - a caller that releases `locks.ship` next must not race a
-            // killed-but-not-yet-dead child still writing the shared bundle path. Restore the interrupt AFTER the
-            // (interrupt-clearing) confirm wait so the caller's own shutdown still sees it, and fail loud.
-            forceKillAndConfirmExit(process, args.firstOrNull())
-            stdinWriter?.join(TIMEOUT_DRAIN_GRACE_MILLIS)
-            stdoutDrain.join(TIMEOUT_DRAIN_GRACE_MILLIS)
-            stderrDrain.join(TIMEOUT_DRAIN_GRACE_MILLIS)
-            Thread.currentThread().interrupt()
-            logger.warn { "git ${args.firstOrNull()} interrupted; the child process was force-killed" }
-            return GitResult(
-                exitCode = -1,
-                stdout = stdoutBuffer.toByteArray(),
-                stderr = "git ${args.firstOrNull()} interrupted and was force-killed",
-            )
+        private fun finishAbnormalWork(wait: CompletionWait) {
+            wait.captureCurrentInterrupt()
+            if (causes.cause() == null) return
+            observeAndTerminateIfNeeded()
+            awaitAfterEscalation(wait)
         }
-        if (!finished) {
-            // Kill DESCENDANTS too: destroyForcibly() kills only the direct process, so a grandchild
-            // that inherited stdout/stderr would keep the pipes open and block the drains. Then CONFIRM the
-            // tree has actually exited (R3): destroyForcibly only DELIVERS SIGKILL - it returns before the OS
-            // reaps - so a caller releasing `locks.ship` next must not race a killed-but-not-yet-dead
-            // `git bundle create` still writing the shared bundle path.
-            forceKillAndConfirmExit(process, args.firstOrNull())
-            // BOUNDED joins: even if a stuck child still holds a pipe, the calling thread (the write-pipeline writer) is
-            // guaranteed to return within timeoutSeconds + grace — never the unbounded join that would defeat the bounded wait.
-            stdinWriter?.join(TIMEOUT_DRAIN_GRACE_MILLIS)
-            stdoutDrain.join(TIMEOUT_DRAIN_GRACE_MILLIS)
-            stderrDrain.join(TIMEOUT_DRAIN_GRACE_MILLIS)
-            logger.error { "git ${args.firstOrNull()} exceeded ${timeoutSeconds}s and was force-killed" }
-            return GitResult(
-                exitCode = -1,
-                stdout = stdoutBuffer.toByteArray(),
-                stderr = "git timed out after ${timeoutSeconds}s and was force-killed",
-            )
-        }
-        // Normal path: the process exited (or a drain force-killed it on overflow), so its pipes are at EOF —
-        // these joins return immediately AND publish the overflow flag the drain set before exiting.
-        stdinWriter?.join()
-        stdoutDrain.join()
-        stderrDrain.join()
-        return when {
-            overflowed.load() -> {
-                // A drain hit its byte ceiling and force-killed git. Fail loud (NOT silently truncate): the
-                // provider's fail-loud path turns this non-zero result into a GitCommandException — `/history`
-                // and `/diff` surface a 500, the startup `lastCommits` aborts serve, never an OOM. The actionable
-                // text names the cap so an operator knows the repo's history/diff is too large for an in-memory read.
-                logger.error { "git ${args.firstOrNull()} output exceeded the in-memory read cap and was force-killed" }
-                GitResult(
-                    exitCode = -1,
-                    stdout = stdoutBuffer.toByteArray(),
-                    stderr = "git ${args.firstOrNull()} output exceeded the in-memory read cap " +
-                        "(${maxStdoutBytes / (1024 * 1024)} MiB stdout / ${maxStderrBytes / (1024 * 1024)} MiB stderr) and was " +
-                        "force-killed — repo history/diff too large for an in-memory read",
-                )
-            }
 
-            else ->
-                GitResult(
-                    exitCode = process.exitValue(),
-                    stdout = stdoutBuffer.toByteArray(),
-                    stderr = stderrBuffer.toString(Charsets.UTF_8),
-                )
-        }
-    }
-
-    /**
-     * Force-kills [process] and its descendant tree, then BLOCKS (bounded by [KILL_CONFIRM_GRACE_MILLIS])
-     * until every one has ACTUALLY exited. `destroyForcibly()` only delivers SIGKILL and returns before the
-     * OS reaps the process (R3), so on the interrupt/timeout kill paths a caller that proceeds to release a
-     * shared lock (`GitRepoLocks.ship`) could otherwise let a killed-but-not-yet-dead `git bundle create`
-     * keep writing the shared bundle path a subsequent ship reads (a signing/DR TOCTOU). Snapshots the
-     * descendant handles BEFORE the kill (a reaped parent's `descendants()` would come back empty) and, if
-     * anything refuses to die within the grace, fails LOUD rather than pretend the tree is gone.
-     */
-    private fun forceKillAndConfirmExit(process: Process, arg: String?) {
-        val tree = buildList {
-            add(process.toHandle())
-            addAll(runCatching { process.descendants().toList() }.getOrDefault(emptyList()))
-        }
-        tree.forEach { runCatching { it.destroyForcibly() } }
-        val stillAlive = awaitTreeExit(tree, KILL_CONFIRM_GRACE_MILLIS)
-        if (stillAlive.isNotEmpty()) {
-            logger.error {
-                "git ${arg ?: "?"} force-kill could not confirm exit of ${stillAlive.size} process(es) within " +
-                    "${KILL_CONFIRM_GRACE_MILLIS}ms; a lingering child may still be writing shared paths"
+        private fun startHelpers(stdin: ByteArray?) {
+            startHelper("git-stdout-drain") { drainCapped({ process.inputStream }, stdoutBuffer, maxStdoutBytes) }
+            startHelper("git-stderr-drain") { drainCapped({ process.errorStream }, stderrBuffer, maxStderrBytes) }
+            if (stdin == null) {
+                try {
+                    process.outputStream.close()
+                } catch (failure: Throwable) {
+                    helperFailed(failure)
+                }
+            } else {
+                startHelper("git-stdin-writer") {
+                    try {
+                        process.outputStream.use { it.write(stdin) }
+                    } catch (failure: Throwable) {
+                        if (isExpectedCleanupIo(failure)) {
+                            logger.debug(failure) { "git $operation stdin helper ended during expected cleanup" }
+                        } else {
+                            helperFailed(failure)
+                        }
+                    }
+                }
             }
         }
-    }
 
-    /** Polls [handles] for liveness up to [graceMillis], returning those still alive when the grace runs out. */
-    private fun awaitTreeExit(handles: List<ProcessHandle>, graceMillis: Long): List<ProcessHandle> {
-        val deadline = System.nanoTime() + graceMillis * 1_000_000L
-        while (System.nanoTime() < deadline) {
-            if (handles.none { it.isAlive }) return emptyList()
+        private fun startHelper(name: String, block: () -> Unit) {
+            val helper = try {
+                helperFactory(name) {
+                    try {
+                        block()
+                    } catch (failure: Throwable) {
+                        reportHelperFailure(failure)
+                    }
+                }
+            } catch (failure: Throwable) {
+                helperFailed(failure)
+                return
+            }
+            helpers += helper
             try {
-                Thread.sleep(KILL_POLL_MILLIS)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                break
+                helper.start()
+            } catch (failure: Throwable) {
+                helperFailed(failure)
             }
         }
-        return handles.filter { it.isAlive }
-    }
 
-    /**
-     * Drains [stream] into [buffer] up to [cap] bytes; on the first read that would exceed [cap] it
-     * force-kills [process] (and descendants) and flags [overflowed], stopping the drain. The kill makes
-     * [run]'s bounded `waitFor` observe a finished process promptly; the calling thread then sees the flag
-     * after joining this thread. A flood on EITHER stream trips it — both share one flag. Bounded grace
-     * stays the timeout's job; this caps BYTES.
-     */
-    private fun drainCapped(stream: InputStream, buffer: ByteArrayOutputStream, cap: Long, process: Process, overflowed: AtomicBoolean) {
-        val chunk = ByteArray(DRAIN_CHUNK_BYTES)
-        var total = 0L
-        stream.use {
-            var draining = true
-            while (draining) {
-                val n = it.read(chunk)
-                when {
-                    n < 0 -> draining = false
-                    total + n > cap -> {
-                        overflowed.store(true)
-                        runCatching {
-                            process.descendants().forEach { descendant ->
-                                runCatching { descendant.destroyForcibly() }
+        private fun drainCapped(stream: () -> InputStream, buffer: ByteArrayOutputStream, cap: Long) {
+            try {
+                stream().use { input ->
+                    val chunk = ByteArray(DRAIN_CHUNK_BYTES)
+                    var total = 0L
+                    var draining = true
+                    while (draining) {
+                        val count = input.read(chunk)
+                        when {
+                            count < 0 -> draining = false
+                            total + count > cap -> {
+                                abnormal(GitAbnormalCause.OUTPUT_OVERFLOW)
+                                draining = false
+                            }
+
+                            count > 0 -> {
+                                total += count
+                                buffer.write(chunk, 0, count)
                             }
                         }
-                        process.destroyForcibly()
-                        draining = false
                     }
+                }
+            } catch (failure: Throwable) {
+                if (isExpectedCleanupIo(failure)) {
+                    logger.debug(failure) { "git $operation output helper ended during expected cleanup" }
+                } else {
+                    helperFailed(failure)
+                }
+            }
+        }
 
-                    else -> {
-                        total += n
-                        buffer.write(chunk, 0, n)
+        private fun awaitUntilDeadline(wait: CompletionWait): Boolean =
+            wait.awaitUntil(
+                deadlineNanos = deadlineNanos,
+                await = ::awaitOneNanosecondSlice,
+                completed = {
+                    wait.captureCurrentInterrupt()
+                    if (causes.cause() != null) {
+                        true
+                    } else if (deadlineExpired()) {
+                        false
+                    } else {
+                        val complete = invocationComplete()
+                        wait.captureCurrentInterrupt()
+                        causes.cause() != null || (!deadlineExpired() && complete)
+                    }
+                },
+                onTick = {
+                    wait.captureCurrentInterrupt()
+                    if (causes.cause() == null && deadlineExpired()) abnormal(GitAbnormalCause.TIMEOUT)
+                    observeAndTerminateIfNeeded()
+                },
+                waitSliceMillis = PROCESS_OBSERVATION_CADENCE_MILLIS,
+            )
+
+        private fun awaitAfterEscalation(wait: CompletionWait) {
+            wait.awaitForever(
+                await = ::awaitOneMillisecondSlice,
+                completed = ::invocationComplete,
+                onTick = {
+                    wait.captureCurrentInterrupt()
+                    observeAndTerminateIfNeeded()
+                },
+            )
+        }
+
+        private fun awaitOneNanosecondSlice(remainingNanos: Long) {
+            val slice = minOf(remainingNanos, TimeUnit.MILLISECONDS.toNanos(PROCESS_OBSERVATION_CADENCE_MILLIS))
+            if (!parentReaped.get()) {
+                if (process.waitFor(slice, TimeUnit.NANOSECONDS)) {
+                    parentReaped.set(true)
+                }
+                return
+            }
+            val helper = pendingHelper()
+            if (helper != null) {
+                joinNanos(helper, slice)
+            } else {
+                sleepNanos(slice)
+            }
+        }
+
+        private fun awaitOneMillisecondSlice(millis: Long) {
+            if (!parentReaped.get()) {
+                if (process.waitFor(millis, TimeUnit.MILLISECONDS)) parentReaped.set(true)
+                return
+            }
+            val helper = pendingHelper()
+            if (helper != null) {
+                runCatching { helper.join(millis) }
+                    .onFailure { failure ->
+                        if (failure is InterruptedException) throw failure
+                        helperFailed(failure)
+                    }
+            } else {
+                Thread.sleep(millis)
+            }
+        }
+
+        private fun pendingHelper(): Thread? =
+            helperSnapshot().firstOrNull { helper ->
+                !helperComplete(helper)
+            }
+
+        private fun helperComplete(helper: Thread): Boolean {
+            val complete = runCatching { completionObserver.helperComplete(helper) }
+                .getOrElse { failure ->
+                    helperFailed(failure)
+                    false
+                }
+            observationListener?.helperCompletionObserved(helper, complete)
+            return complete
+        }
+
+        private fun joinNanos(helper: Thread, nanos: Long) {
+            val millis = TimeUnit.NANOSECONDS.toMillis(nanos)
+            val nanosRemainder = (nanos - TimeUnit.MILLISECONDS.toNanos(millis)).toInt()
+            runCatching { helper.join(millis, nanosRemainder) }
+                .onFailure { failure ->
+                    if (failure is InterruptedException) throw failure
+                    helperFailed(failure)
+                }
+        }
+
+        private fun sleepNanos(nanos: Long) {
+            val millis = TimeUnit.NANOSECONDS.toMillis(nanos)
+            val nanosRemainder = (nanos - TimeUnit.MILLISECONDS.toNanos(millis)).toInt()
+            Thread.sleep(millis, nanosRemainder)
+        }
+
+        private fun invocationComplete(): Boolean {
+            if (!parentReaped.get()) return false
+            val processesComplete = observations.allComplete { observation ->
+                if (observation.role == "parent") true else processComplete(observation)
+            }
+            return processesComplete && helperSnapshot().all(::helperComplete)
+        }
+
+        private fun observeAndTerminateIfNeeded() {
+            observeDescendants()
+            if (causes.cause() != null) {
+                terminateKnownProcesses()
+                if (pendingLogged.compareAndSet(false, true)) logPendingWork()
+            }
+        }
+
+        private fun observeDescendants() {
+            val current = observationSnapshot()
+            for (observation in current) {
+                if (observation.role != "parent" || !parentReaped.get()) {
+                    if (!processComplete(observation)) {
+                        val descendants = runCatching { observation.handle.descendants().toList() }
+                            .onFailure { failure -> logger.debug(failure) { "git $operation descendant observation was unavailable" } }
+                            .getOrDefault(emptyList())
+                        descendants.forEach { descendant -> retainProcess(descendant, "descendant") }
                     }
                 }
             }
+        }
+
+        private fun processComplete(observation: GitProcessObservation): Boolean {
+            val complete = runCatching { completionObserver.processComplete(observation) }
+                .getOrElse { failure ->
+                    helperFailed(failure)
+                    false
+                }
+            observationListener?.processCompletionObserved(observation, complete)
+            return complete
+        }
+
+        private fun retainProcess(handle: ProcessHandle, role: String) {
+            observations.retain(handle, role)?.let { observation ->
+                observationListener?.processRetained(observation)
+            }
+        }
+
+        // Termination deliberately uses each retained original handle; no PID-only replacement can acquire authority.
+        private fun terminateKnownProcesses() {
+            val candidates = observations.snapshot().filter { observation ->
+                observation.role != "parent" || !parentReaped.get()
+            }.toList()
+            for (observation in candidates) {
+                val alive = runCatching { observation.handle.isAlive }.getOrDefault(false)
+                if (!alive) continue
+                runCatching { observation.handle.destroyForcibly() }
+                    .onFailure { failure -> logger.warn(failure) { "git $operation process termination was unavailable" } }
+            }
+        }
+
+        private fun abnormal(cause: GitAbnormalCause, failure: Throwable? = null) {
+            causes.latch(cause, failure)
+        }
+
+        private fun helperFailed(failure: Throwable) {
+            abnormal(GitAbnormalCause.HELPER_FAILURE, failure)
+        }
+
+        private fun reportHelperFailure(failure: Throwable) {
+            if (isExpectedCleanupIo(failure)) {
+                logger.debug(failure) { "git $operation helper ended during expected cleanup" }
+            } else {
+                helperFailed(failure)
+            }
+        }
+
+        private fun isExpectedCleanupIo(failure: Throwable): Boolean =
+            causes.cause() != null && failure is IOException
+
+        private fun logPendingWork() {
+            val pendingProcesses = observationSnapshot()
+                .filter { observation -> observation.role != "parent" || !parentReaped.get() }
+                .filterNot(::processComplete)
+                .joinToString(",") { observation -> "${observation.role}#${observation.handle.pid()}" }
+                .ifEmpty { "none" }
+            val pendingHelpers = helperSnapshot()
+                .filterNot(::helperComplete)
+                .joinToString(",") { helper -> helper.name }
+                .ifEmpty { "none" }
+            logger.warn {
+                "git $operation completion pending after ${elapsedMillis()}ms; " +
+                    "processes=$pendingProcesses helpers=$pendingHelpers cause=${causes.cause()}"
+            }
+        }
+
+        private fun observationSnapshot(): List<GitProcessObservation> = observations.snapshot()
+
+        private fun helperSnapshot(): List<Thread> = helpers.toList()
+
+        private fun elapsedMillis(): Long =
+            TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - startedAtNanos).coerceAtLeast(0L))
+
+        private fun deadlineExpired(): Boolean = System.nanoTime() >= deadlineNanos
+
+        private fun result(): GitResult {
+            val stdout = stdoutBuffer.toByteArray()
+            val cause = causes.cause()
+            if (cause != null) {
+                val diagnostic = when (cause) {
+                    GitAbnormalCause.TIMEOUT -> "git $operation timed out while completing the invocation"
+                    GitAbnormalCause.INTERRUPTION -> "git $operation interrupted while completing the invocation"
+                    GitAbnormalCause.OUTPUT_OVERFLOW ->
+                        "git $operation output exceeded the in-memory read cap " +
+                            "(${maxStdoutBytes / (1024 * 1024)} MiB stdout / ${maxStderrBytes / (1024 * 1024)} MiB stderr) " +
+                            "and was force-killed — repo history/diff too large for an in-memory read"
+                    GitAbnormalCause.HELPER_FAILURE -> "git $operation helper failed while completing the invocation"
+                }
+                val stderr = if (cause == GitAbnormalCause.HELPER_FAILURE) {
+                    val captured = stderrBuffer.toString(Charsets.UTF_8)
+                    if (captured.isEmpty()) diagnostic else "$diagnostic\n$captured"
+                } else {
+                    diagnostic
+                }
+                causes.failure()?.let { failure -> logger.error(failure) { stderr } } ?: logger.error { stderr }
+                return GitResult(exitCode = -1, stdout = stdout, stderr = stderr)
+            }
+            return GitResult(
+                exitCode = process.exitValue(),
+                stdout = stdout,
+                stderr = stderrBuffer.toString(Charsets.UTF_8),
+            )
         }
     }
 
     companion object {
         private val logger = KotlinLogging.logger {}
 
-        /** Default bounded wait — never an unbounded `waitFor()` under the write-pipeline writer monitor. */
         const val DEFAULT_TIMEOUT_SECONDS = 30L
-
-        /** Bounded grace for the post-force-kill drain joins — caps the call at timeout + this. */
-        private const val TIMEOUT_DRAIN_GRACE_MILLIS = 2000L
-
-        /** R3: bounded grace to CONFIRM a force-killed process tree has actually exited before returning. */
-        private const val KILL_CONFIRM_GRACE_MILLIS = 2000L
-
-        /** R3: liveness poll interval while confirming a force-killed tree's exit. */
-        private const val KILL_POLL_MILLIS = 10L
-
-        /**
-         * Default stdout byte ceiling per git invocation: 64 MiB. GENEROUS by design — a normal or
-         * even large-but-sane repo's `git log`/`diff` is far under this, so the cap is a safety floor that
-         * should never bind in practice, only stop a pathological repo (giant commit messages, a huge diff,
-         * extreme history depth) from OOM-ing the in-memory drain. Kept a documented constant rather than a
-         * per-deploy `git.maxReadBytes` knob: a knob adds config surface (env parse + Koin wiring +
-         * allowlist doc) disproportionate to a ceiling that exists only to convert an OOM into a clean
-         * fail-loud error; injectable via the ctor for the cheap force-kill test.
-         */
         const val DEFAULT_MAX_STDOUT_BYTES = 64L * 1024 * 1024
-
-        /** Default stderr byte ceiling: 1 MiB. stderr is diagnostic only — a flood there is still a DoS
-         *  vector, so it shares the stdout cap's force-kill path, just at a far smaller ceiling. */
         const val DEFAULT_MAX_STDERR_BYTES = 1L * 1024 * 1024
 
-        /** Drain read-chunk size — the granularity at which the byte cap is checked. */
+        /** Explicit retained-handle observation cadence; it is independent of CompletionWait's scheduler defaults. */
+        const val PROCESS_OBSERVATION_CADENCE_MILLIS = 25L
         private const val DRAIN_CHUNK_BYTES = 64 * 1024
 
-        /**
-         * Pinned on EVERY invocation: deterministic byte handling (`autocrlf`/`eol`), no gpg, no hooks
-         * (belt-and-suspenders over the plumbing recipe, which runs none anyway — B3), a default branch
-         * for `init`, and verbatim path bytes (`quotePath=false` + `precomposeUnicode=false`). The latter
-         * stops macOS git (default `true`) from NFC-folding our explicit raw path args before writing the
-         * index — without it `update-index --cacheinfo <NFD path>` would record the NFC form, defeating r6b.
-         *
-         * The last two are hostile-`.git/config` RCE seals (SG-1/SG-2), pinned the same belt-and-suspenders
-         * way as `core.hooksPath`:
-         *  - `log.showSignature=false` (SG-1): a repo config setting `log.showSignature=true` +
-         *    `gpg.program=<helper>` would otherwise make `git log`/`git show -s` shell out to the helper to
-         *    verify a signed commit — an RCE on `/history`/`show`/`lastCommits`. Pinning the trigger off is
-         *    sufficient; `gpg.program` is moot with no verify-commit/verify-tag path.
-         *  - `protocol.ext.allow=never` (SG-2): kills the `ext::`-transport RCE class reachable through
-         *    `runAutoMaintenance`'s `gc --auto`/`maintenance run --auto` (a hostile config pairing
-         *    `maintenance.prefetch` with an `ext::`/`insteadOf` remote). GC stays enabled — it's load-bearing
-         *    for the commit recipe — but it can no longer be steered into running an arbitrary command.
-         */
+        // Security pins disable repository-controlled hooks/config and keep every argv entry outside a shell.
+        // Foreground pins keep maintenance owned by this invocation; fsmonitor is disabled for complete observation.
         private val PINNED_CONFIG = listOf(
             "-c", "core.autocrlf=false",
             "-c", "core.eol=lf",
@@ -357,30 +753,24 @@ class GitExecutor(
             "-c", "core.precomposeUnicode=false",
             "-c", "log.showSignature=false",
             "-c", "protocol.ext.allow=never",
+            "-c", "maintenance.autoDetach=false",
+            "-c", "gc.autoDetach=false",
+            "-c", "core.fsmonitor=",
         )
 
-        // 40 hex (SHA-1) OR 64 hex (SHA-256, `git init --object-format=sha256`) — full-width object ids only.
         private val SHA_LINE = Regex("^[0-9a-f]{40}([0-9a-f]{24})?$")
 
-        /**
-         * The first stdout line that is a full object id (40-hex SHA-1 or 64-hex SHA-256), or null. Strict by
-         * design (F1): never a whole-buffer `trim()` — a stderr warning merged into the data could otherwise
-         * masquerade as a SHA.
-         */
         fun parseSha(stdout: ByteArray): String? =
             stdout.toString(Charsets.UTF_8).lineSequence().map { it.trim() }.firstOrNull { SHA_LINE.matches(it) }
+
+        private fun saturatingAdd(left: Long, right: Long): Long =
+            if (right > 0L && left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
     }
 }
 
-/**
- * One git invocation's outcome. [stdout] (parsed as data) and [stderr] (diagnostic) are kept DISTINCT —
- * never merged (F1). A non-zero [exitCode] is a normal outcome the caller inspects, never a thrown
- * exception; [ok] is the success predicate.
- */
-// Array field on a value carrier (never a map key) — no generated equals/hashCode (house style).
+/** One git invocation's outcome. stdout and stderr remain distinct; a non-zero exit is a normal result. */
 class GitResult(val exitCode: Int, val stdout: ByteArray, val stderr: String) {
     val ok: Boolean get() = exitCode == 0
 
-    /** stdout decoded as UTF-8 text (for non-SHA reads: `git show -s`, log, diff). */
     val stdoutText: String get() = stdout.toString(Charsets.UTF_8)
 }

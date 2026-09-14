@@ -554,7 +554,7 @@ class LocalContentStore(
      * paths are `/`-joined), never an OS-specific separator.
      *
      * Deliberately NOT on the [ContentStore] port: staging git paths over the served directory is a
-     * local-filesystem concern, so the history wiring (`historyModule`) binds to this concrete adapter.
+     * local-filesystem concern, so prepared history wiring binds to this concrete adapter.
      */
     fun resolveRepoRelativePath(path: TreePath): String {
         // The raw on-disk path relative to the content root, re-joined with '/' (git paths are '/'-joined,

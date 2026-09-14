@@ -11,9 +11,8 @@ import java.nio.file.StandardOpenOption
  * Injectable so [LocalContentStore]'s exotic-FS fallback branches are deterministically testable;
  * [Real] is the production default — plain delegation, no behavior. Adapter-scoped by convention
  * (framework layer), NOT a domain port: [LocalContentStore] is already the adapter, and this only
- * splits its own FS calls behind a seam. Public (not `internal`) only because [LocalContentStore]'s
- * public constructor takes it as a defaulted param, and the native-test source set — which is not
- * associated with `main` for internal visibility — constructs [LocalContentStore] directly.
+ * splits its own FS calls behind a seam. Public because [LocalContentStore]'s public constructor takes it as a
+ * defaulted parameter.
  */
 interface FileAtomics {
     fun createLink(link: Path, existing: Path)

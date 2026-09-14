@@ -5,6 +5,8 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
 import kotlin.io.path.extension
 import kotlin.io.path.isRegularFile
@@ -92,6 +94,77 @@ class RootWiringArchitectureTest : FunSpec({
         names.containsAll(
             setOf("HistoryModule.kt", "ContentModule.kt", "AdoptCommand.kt", "ReindexCommand.kt", "RootRegistry.kt"),
         ).shouldBeTrue()
+    }
+
+    test("the minimal LOCAL factory is present and is used at the preparation boundary") {
+        val runtime = mainRoot.resolve("frameworks/runtime")
+        runtime.resolve("RootStoreFactory.kt").readText() shouldContain "internal object RootStoreFactory"
+        runtime.resolve("RootStoreFactory.kt").readText() shouldContain "LocalContentStore("
+        runtime.resolve("ServerOpeners.kt").readText() shouldContain "RootStoreFactory.local(inputs)"
+        runtime.resolve("RootBootPreparation.kt").readText() shouldContain "openLocal("
+    }
+
+    test("every primary and roots consumer uses the shared operations exactly once") {
+        val calls = listOf(
+            "primary" to Regex("""RootStoreFactory\.primary\s*\("""),
+            "roots" to Regex("""RootStoreFactory\.roots\s*\("""),
+        )
+        val expectedFiles = setOf(
+            "frameworks/koin/ContentModule.kt",
+            "frameworks/cli/ReindexCommand.kt",
+            "frameworks/cli/AdoptCommand.kt",
+        )
+        calls.forEach { (operation, pattern) ->
+            val counts = files.associate { file ->
+                mainRoot.relativize(file).toString().replace('\\', '/') to
+                    pattern.findAll(stripComments(file.readText())).count()
+            }.filterValues { it > 0 }
+            counts shouldBe expectedFiles.associateWith { 1 }
+        }
+    }
+
+    test("the known LOCAL constructor ledger has only the shared and low-level owners") {
+        val constructor = Regex("""(?:\bLocalContentStore|[\w.]+\.LocalContentStore)\s*\(""")
+        val localPath = "frameworks/filesystem/LocalContentStore.kt"
+        val localDeclaration = Regex("""\bclass\s+LocalContentStore\s*\(""")
+        val counts = files.associate { file ->
+            val path = mainRoot.relativize(file).toString().replace('\\', '/')
+            val found = constructor.findAll(stripComments(file.readText())).count()
+            path to if (path == localPath) found - localDeclaration.findAll(stripComments(file.readText())).count() else found
+        }.filterValues { it > 0 }
+
+        val paths = files.map { mainRoot.relativize(it).toString().replace('\\', '/') }.toSet()
+        paths.contains(localPath).shouldBeTrue()
+        localDeclaration.findAll(stripComments(mainRoot.resolve(localPath).readText())).count() shouldBe 1
+        counts shouldBe mapOf(
+            "frameworks/runtime/RootStoreFactory.kt" to 1,
+            "frameworks/objectstore/ObjectContentStoreFactory.kt" to 1,
+        )
+    }
+
+    test("RootStores and HistoryProviders have one runtime declaration and none in Koin") {
+        val declarations = listOf("RootStores", "HistoryProviders").associateWith { name ->
+            val pattern = Regex("""\bclass\s+$name\b""")
+            files.mapNotNull { file ->
+                val count = pattern.findAll(stripComments(file.readText())).count()
+                if (count == 0) null else mainRoot.relativize(file).toString().replace('\\', '/') to count
+            }
+        }
+
+        declarations shouldBe mapOf(
+            "RootStores" to listOf("frameworks/runtime/RootStores.kt" to 1),
+            "HistoryProviders" to listOf("frameworks/runtime/HistoryProviders.kt" to 1),
+        )
+    }
+
+    test("the shared object factory owns the only high-level OBJECT construction call") {
+        val pattern = Regex("""ObjectContentStoreFactory\.build\s*\(""")
+        val counts = files.associate { file ->
+            mainRoot.relativize(file).toString().replace('\\', '/') to
+                pattern.findAll(stripComments(file.readText())).count()
+        }.filterValues { it > 0 }
+
+        counts shouldBe mapOf("frameworks/runtime/RootStoreFactory.kt" to 1)
     }
 
     test(

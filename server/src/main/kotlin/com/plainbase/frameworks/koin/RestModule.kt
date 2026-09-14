@@ -1,6 +1,6 @@
 package com.plainbase.frameworks.koin
 
-import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AdminFacade
@@ -22,7 +22,12 @@ import com.plainbase.frameworks.ktor.GuardedAdminFacade
 import com.plainbase.frameworks.ktor.IndexProposalBaseReader
 import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
-import com.plainbase.frameworks.ktor.buildRouteContext
+import com.plainbase.frameworks.ktor.buildGuardedApplication
+import com.plainbase.frameworks.ktor.securityAssembly
+import com.plainbase.frameworks.ktor.transportSettings
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.runtime.ObservedIndexRuntime
+import com.plainbase.frameworks.runtime.ServingRuntime
 import com.plainbase.frameworks.security.ProxyCsrf
 import com.plainbase.frameworks.security.dummyPasswordHash
 import com.plainbase.frameworks.security.loadOrCreateProxyCsrfKey
@@ -35,26 +40,39 @@ import kotlin.time.Clock
  * the [PolicyService] + the guarded facades + the [RouteContext] the routing layer receives. Constructor DSL
  * only — no reflection (native-image gate).
  */
-val restModule = module {
-    single { PageService(indexBuilder = get(), aliasRegistry = get(), citations = get()) }
-    single { SearchService(provider = get(), indexBuilder = get(), availability = get()) }
-    // The ONE owner of the id->root and root->status questions. EXACTLY two deps: both snapshots arrive as call
-    // PARAMETERS, which is what keeps it stateless and holder-free (and therefore safe to reach from the domain
-    // proposal service through a lambda).
-    single { PageRootResolver(get(), get()) }
+internal fun createRestModule(
+    resourceOwner: ServerResourceOwner,
+    afterRouteContextBuilt: (RouteContext) -> Unit = {},
+    routeContextBuilder: (() -> RouteContext) -> RouteContext = { build -> build() },
+    onServingRuntimeCollected: (ServingRuntime) -> Unit = {},
+) = module {
+    single {
+        val index = get<ObservedIndexRuntime>()
+        PageService(indexBuilder = index.builder, aliasRegistry = index.aliasRegistry, citations = get())
+    }
+    single {
+        val index = get<ObservedIndexRuntime>()
+        SearchService(provider = get(), indexBuilder = index.builder, availability = index.availability)
+    }
+    // Page-root resolver; root status is evaluated from request-time snapshots.
+    single {
+        val index = get<ObservedIndexRuntime>()
+        PageRootResolver(get<IdMapRepository>(), index.registry)
+    }
     // The ONE owner of 404-vs-503 for an absent page (C1). ONE dep - the durable index - because that is the ONLY
     // party to this question that knows anything: every filesystem probe it replaces was the wrong KIND of fact.
     single { AbsenceClassifier(get()) }
     single {
+        val index = get<ObservedIndexRuntime>()
         WritePipeline(
-            stores = get<RootStores>()::get,
-            indexBuilder = get(),
+            stores = index.stores::get,
+            indexBuilder = index.builder,
             citations = get(),
             frontmatterParser = get(),
             dirtyPages = get(),
             idMap = get(),
-            aliasRegistry = get(),
-            availability = get(),
+            aliasRegistry = index.aliasRegistry,
+            availability = index.availability,
             historyHook = get(),
         )
     }
@@ -115,9 +133,13 @@ val restModule = module {
     // PB-PROPOSE-1 (P1a): the proposal store seam + the guarded facade. The live read seam over the SAME
     // IndexBuilder + ContentStore the read facade uses; the C4 label resolver over the token/user repos. Clock is
     // inlined as Clock.System (no Clock single exists here, the ApiTokenService idiom).
-    single<ProposalBaseReader> { IndexProposalBaseReader(indexBuilder = get(), stores = get<RootStores>()::get, absence = get()) }
+    single<ProposalBaseReader> {
+        val index = get<ObservedIndexRuntime>()
+        IndexProposalBaseReader(indexBuilder = index.builder, stores = index.stores::get, absence = get())
+    }
     single { ProposalAuthorLabeler(tokens = get(), users = get()) }
     single {
+        val index = get<ObservedIndexRuntime>()
         ProposalService(
             repository = get(),
             citations = get(),
@@ -127,52 +149,52 @@ val restModule = module {
             // The D15 guard's narrow dependency. Evaluated PER CALL, so a watcher-failure flip landing DURING the
             // boot reconcile is seen - a pass-level snapshot would miss it and then rewrite a row for a root that
             // just went down. The resolver stays the ONE owner of `statusOf`: this is a call, not a second copy.
-            rootStatus = { root -> get<PageRootResolver>().statusOf(root, get<RootAvailability>().current()) },
+            rootStatus = { root -> get<PageRootResolver>().statusOf(root, index.availability.current()) },
         )
     }
-    // P1b: the GuardedProposalFacade is no longer a standalone single — it needs the guarded MutatingFacade (built
-    // inside buildRouteContext) for the apply-on-approve content write, so it is assembled there with `mutate` in
-    // scope (RouteContextFactory option (b)). RestModule passes the raw ProposalService + the labeler in.
+    // P1b: the GuardedProposalFacade is assembled with the guarded MutatingFacade at the application boundary.
     // The A4b proxy-CSRF server key is SecureRandom-generated + persisted in app_meta on first boot (so issued tokens
     // survive a restart). The single is resolved INSIDE the DataDirLock region (serve() touches it before starting
     // KtorServer), so two processes never race a double-generate. The key bytes never log.
-    single { ProxyCsrf(loadOrCreateProxyCsrfKey(get<PlainbaseDb>())) }
+    single {
+        val build = { ProxyCsrf(loadOrCreateProxyCsrfKey(get<PlainbaseDb>())) }
+        resourceOwner.construct("proxy CSRF key") { build() }
+    }
     single<RouteContext> {
-        val config = get<PlainbaseConfig>()
-        buildRouteContext(
-            policy = get(),
-            indexBuilder = get(),
-            pageService = get(),
-            searchService = get(),
-            aliasRegistry = get(),
-            writePipeline = get(),
-            registry = get(),
-            availability = get(),
-            convergence = get(),
-            limbo = get(),
-            resolver = get(),
-            absence = get(),
-            stores = get<RootStores>()::get,
-            histories = get<HistoryProviders>()::get,
-            idProvider = get(),
-            proposalService = get(),
-            proposalLabeler = get(),
-            tokens = get(),
-            auth = get(),
-            trustedProxyCidrs = config.auth.trustedProxyCidrs,
-            maxWriteBodyBytes = config.maxWriteBodyBytes,
-            maxAssetBytes = config.maxAssetBytes,
-            // P3: the fail-closed MCP DNS-rebinding allowlists (default = the configured bind host + loopback).
-            mcpAllowedHosts = config.mcpHostAllowlist(),
-            mcpAllowedOrigins = config.mcpOriginAllowlist(),
-            builtinAuthEnabled = config.auth.mode == AuthMode.BUILTIN,
-            proxyAuthEnabled = config.auth.mode == AuthMode.PROXY,
-            proxySecret = config.auth.proxySecret,
-            proxyIdentityHeader = config.auth.proxyIdentityHeader,
-            secureCookie = config.secureCookie(),
-            proxyCsrf = get(),
-            // P5: the validated agent direct-commit globs (empty ⇒ every agent write degrades to a proposal).
-            agentDirectCommitGlobs = config.agentDirectCommitGlobs(),
-        )
+        resourceOwner.construct("route context") {
+            val config = get<PlainbaseConfig>()
+            val context = routeContextBuilder {
+                val index = get<ObservedIndexRuntime>()
+                val serving = ServingRuntime(
+                    index = index,
+                    pageService = get(),
+                    searchService = get(),
+                    writePipeline = get(),
+                    resolver = get(),
+                    absence = get(),
+                    proposalService = get(),
+                    proposalLabeler = get(),
+                    agentDirectCommitGlobs = config.agentDirectCommitGlobs(),
+                )
+                onServingRuntimeCollected(serving)
+                val security = securityAssembly(
+                    config = config,
+                    policy = get(),
+                    tokens = get(),
+                    auth = get(),
+                    proxyCsrf = get(),
+                )
+                val transport = transportSettings(config)
+                buildGuardedApplication(
+                    serving = serving,
+                    security = security,
+                    transport = transport,
+                )
+            }
+            afterRouteContextBuilt(context)
+            context
+        }
     }
 }
+
+internal fun restModule(resourceOwner: ServerResourceOwner) = createRestModule(resourceOwner)

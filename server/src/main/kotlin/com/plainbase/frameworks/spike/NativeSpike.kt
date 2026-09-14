@@ -3,6 +3,7 @@ package com.plainbase.frameworks.spike
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.SearchQuery
@@ -13,18 +14,23 @@ import com.plainbase.frameworks.cli.CommandOutput
 import com.plainbase.frameworks.cli.systemCommandOutput
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.koin.checkpointModule
-import com.plainbase.frameworks.koin.contentModule
-import com.plainbase.frameworks.koin.historyModule
+import com.plainbase.frameworks.koin.createContentModule
+import com.plainbase.frameworks.koin.createHistoryModule
+import com.plainbase.frameworks.koin.createRepositoryModule
+import com.plainbase.frameworks.koin.createRestModule
+import com.plainbase.frameworks.koin.createSearchModule
 import com.plainbase.frameworks.koin.indexModule
-import com.plainbase.frameworks.koin.repositoryModule
-import com.plainbase.frameworks.koin.restModule
-import com.plainbase.frameworks.koin.searchModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.plainbaseModule
+import com.plainbase.frameworks.lifecycle.GitMaintenanceTasks
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.mcp.MCP_PATH
 import com.plainbase.frameworks.mcp.McpTools
 import com.plainbase.frameworks.objectstore.SigV4Signer
+import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.security.Argon2PasswordHasher
@@ -476,7 +482,7 @@ object NativeSpike {
     /**
      * The P3 native bet: the in-binary `plainbaseMcp` mount, served over a REAL CIO server under ENFORCED auth, driven
      * by a REAL SSE MCP client. Wires the production Koin graph (config pointed at a temp tree, auth.mode=builtin so
-     * `enforced=true`, git off) so the spike exercises the SAME `buildRouteContext`/`plainbaseMcp` the server uses;
+     * `enforced=true`, git off) so the spike exercises the SAME guarded application assembly/`plainbaseMcp` the server uses;
      * mints a PROPOSE (-> EDITOR) agent token, opens an authed SSE stream, and asserts initialize + listTools(== the
      * seven) + TWO callTool round-trips (list_changes + read_page) over ONE open stream — proving keep-alive / SSE
      * flush work in the native image, not just a single round-trip. The SSE/MCP-server reflection this reaches is what
@@ -495,14 +501,26 @@ object NativeSpike {
                 "PLAINBASE_GIT_ENABLED" to "false", // no git gate in the spike
             ),
         )
-        val app = koinApplication {
-            modules(
-                module { single { config } },
-                contentModule, repositoryModule, securityModule, indexModule, checkpointModule, searchModule, historyModule, restModule,
-            )
+        val openers = ServerOpeners()
+        val bootInputs = prepareRootBootInputs(config, openers.openLocal, GitMaintenanceTasks.inert())
+        val resources = ServerResourceOwner()
+        val app = resources.construct("Koin context") {
+            koinApplication().also { resources.own(ServerResourcePhase.KOIN_CONTEXT, it) { application -> application.close() } }
         }
-        val koin = app.koin
         try {
+            app.modules(
+                module { single { config } },
+                createContentModule(config, bootInputs, openers.openObject, { it.close() }, resources),
+                createRepositoryModule(openers.openDriver, { it.close() }, resources),
+                securityModule,
+                indexModule,
+                checkpointModule,
+                createSearchModule(openers.openSearch, { it.close() }, resources),
+                createHistoryModule(config, bootInputs.history, resources),
+                createRestModule(resources),
+            )
+            val koin = app.koin
+            bootInputs.signals.arm(koin.get<ObservationEpoch>()::broke)
             val builder = koin.get<IndexBuilder>()
             builder.rebuild()
             val seedPageId = builder.current.pages.first().id.value
@@ -547,7 +565,7 @@ object NativeSpike {
                 server.stop(gracePeriodMillis = 100, timeoutMillis = 1000)
             }
         } finally {
-            app.close()
+            resources.close()
             Files.walk(contentDir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
             Files.walk(dataDir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }

@@ -23,8 +23,7 @@ import io.ktor.server.application.ApplicationCall
  * [extract] is the per-route principal source: in production the real A1/A2
  * [extractPrincipal][com.plainbase.frameworks.ktor.extractPrincipal] over [tokens] + [trustedProxyCidrs]; tests
  * may supply a fixed-`Principal` source (a test-construction choice, NOT a production auth weakening — auth is
- * never turned off, the harness presents a real role-appropriate principal). The `RouteContext` builder defaults
- * [extract] to the real extraction.
+ * never turned off, the harness presents a real role-appropriate principal).
  */
 class RouteContext(
     val read: ReadFacade,
@@ -51,7 +50,7 @@ class RouteContext(
      * surface never asks here - it asks the `AbsenceClassifier`, which reads the durable binding directly rather than
      * a set derived once per pass, so a read cannot be answered off a snapshot older than the request.
      */
-    val limbo: RootLimbo = RootLimbo(),
+    val limbo: RootLimbo,
     val tokens: ApiTokenService,
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
     val auth: AuthServices,
@@ -92,22 +91,10 @@ class RouteContext(
      */
     val proxyCsrf: ProxyCsrf,
     /**
-     * The per-route principal source; defaults to the real A1/A2/A4a/A4b extraction over [tokens] + the `pb_session`
-     * cookie (gated by [builtinAuthEnabled]) + the proxy identity header (gated by [proxyAuthEnabled]) +
-     * [trustedProxyCidrs].
+     * The per-route principal source, derived from the normalized security assembly in production. Test-only
+     * reconstruction adapters may replace it with a fixed principal.
      */
-    val extract: ApplicationCall.() -> PrincipalExtraction =
-        {
-            extractPrincipal(
-                tokens,
-                trustedProxyCidrs,
-                auth.session,
-                builtinAuthEnabled,
-                proxyAuthEnabled = proxyAuthEnabled,
-                proxySecret = proxySecret,
-                proxyIdentityHeader = proxyIdentityHeader,
-            )
-        },
+    val extract: ApplicationCall.() -> PrincipalExtraction,
 ) {
 
     /**

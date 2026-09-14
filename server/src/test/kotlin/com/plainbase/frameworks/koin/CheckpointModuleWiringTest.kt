@@ -1,14 +1,17 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.repository.PageCheckpointRepository
+import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.maps.shouldContainExactly
-import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 
 /**
@@ -28,27 +31,32 @@ class CheckpointModuleWiringTest : FunSpec({
         }) { root ->
             withTempTree(seed = {}) { dataDir ->
                 val env = mapOf("CONTENT_DIR" to root.toString(), "DATA_DIR" to dataDir.toString())
-                val app = koinApplication {
-                    // serve's exact module set, with configModule's env pinned to the temp dirs.
-                    modules(
-                        module { single { PlainbaseConfig.fromEnv(env) } },
-                        contentModule,
-                        repositoryModule,
+                val config = PlainbaseConfig.fromEnv(env)
+                val openers = ServerOpeners()
+                val inputs = prepareRootBootInputs(config, openers.openLocal)
+                val owner = ServerResourceOwner()
+                val app = createOwnedTestKoinApplication(
+                    owner,
+                    listOf(
+                        module { single { config } },
+                        createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                        repositoryModule(owner),
                         securityModule,
-                        historyModule,
+                        createHistoryModule(config, inputs.history, owner),
                         indexModule,
                         checkpointModule,
-                        searchModule,
-                        restModule,
-                    )
-                }
+                        searchModule(owner),
+                        restModule(owner),
+                    ),
+                )
                 try {
+                    inputs.signals.arm(app.koin.get<ObservationEpoch>()::broke)
                     app.koin.getAll<IndexBuilder.PublicationListener>() shouldHaveSize 2
                     val snapshot = app.koin.get<IndexBuilder>().rebuild()
                     app.koin.get<PageCheckpointRepository>().load() shouldContainExactly
                         snapshot.pages.associate { it.rooted to it.urlPath }
                 } finally {
-                    app.close()
+                    owner.close()
                 }
             }
         }

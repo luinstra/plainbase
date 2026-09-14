@@ -30,6 +30,7 @@ class FakeObjectStore(
     private val gets = AtomicInteger()
     private val heads = AtomicInteger()
     private val lists = AtomicInteger()
+    private val closes = AtomicInteger()
 
     /** Total `put` calls issued (the create-family "no redundant PUT after heal" probe). */
     val putCount: Int get() = puts.get()
@@ -38,6 +39,7 @@ class FakeObjectStore(
     val getCount: Int get() = gets.get()
     val headCount: Int get() = heads.get()
     val listCount: Int get() = lists.get()
+    val closeCount: Int get() = closes.get()
 
     /** The number of live keys in the bucket (the NFC-collision "exactly one key" assertion). */
     fun keyCount(): Int = synchronized(lock) { objects.size }
@@ -200,7 +202,9 @@ class FakeObjectStore(
         return ListResponseParser.Listing(entries, truncated, if (truncated) (start + page.size).toString() else null)
     }
 
-    override fun close() = Unit
+    override fun close() {
+        closes.incrementAndGet()
+    }
 
     /** Test-only direct seed (bypasses [PutCondition]), returning the minted etag. */
     fun seed(key: String, bytes: ByteArray): String {

@@ -14,6 +14,10 @@ import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.runtime.HistoryProviders
+import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -21,7 +25,6 @@ import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.koin.core.Koin
-import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import java.nio.file.Files
 import java.nio.file.Path
@@ -120,22 +123,30 @@ private fun commitCount(content: Path, dataDir: Path): Int {
  * whole point being that the selection under test is the WIRING's, not a hand-built provider's.
  */
 private fun withKoin(content: Path, dataDir: Path, history: HistoryMode, block: (Koin) -> Unit) {
-    val config = module {
-        single {
-            PlainbaseConfig.fromEnv(emptyMap()).copy(
-                contentDir = content,
-                dataDir = dataDir,
-                roots = RootsConfig.of(
-                    list = listOf(Root(RootName.PRIMARY, RootBackend.Local(content), editable = true, history = history)),
-                    origin = RootsOrigin.EXPLICIT,
-                ),
-            )
-        }
-    }
-    val app = koinApplication { modules(config, contentModule, repositoryModule, securityModule, historyModule) }
+    val configValue = PlainbaseConfig.fromEnv(emptyMap()).copy(
+        contentDir = content,
+        dataDir = dataDir,
+        roots = RootsConfig.of(
+            list = listOf(Root(RootName.PRIMARY, RootBackend.Local(content), editable = true, history = history)),
+            origin = RootsOrigin.EXPLICIT,
+        ),
+    )
+    val openers = ServerOpeners()
+    val inputs = prepareRootBootInputs(configValue, openers.openLocal)
+    val owner = ServerResourceOwner()
+    val app = createOwnedTestKoinApplication(
+        owner,
+        listOf(
+            module { single { configValue } },
+            createContentModule(configValue, inputs, openers.openObject, { it.close() }, owner),
+            repositoryModule(owner),
+            securityModule,
+            createHistoryModule(configValue, inputs.history, owner),
+        ),
+    )
     try {
         block(app.koin)
     } finally {
-        app.close()
+        owner.close()
     }
 }

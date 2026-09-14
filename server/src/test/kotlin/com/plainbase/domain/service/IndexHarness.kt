@@ -5,7 +5,9 @@ import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
+import com.plainbase.domain.repository.NoTopology
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.BindingLatch
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.Root
@@ -15,7 +17,6 @@ import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
-import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
@@ -110,6 +111,9 @@ class IndexHarness(
     private val sourceList: List<IndexBuilder.Source> =
         sources ?: listOf(IndexBuilder.Source(rootRegistry.primary, contentStore, history))
 
+    /** The actual source subset the builder scans, in caller-preserved order. */
+    val actualSources: List<IndexBuilder.Source> get() = sourceList
+
     /** The per-root store lookup the C4 write path takes — over the SAME sources the builder scans. */
     val stores: (RootName) -> ContentStore = { name ->
         requireNotNull(sourceList.firstOrNull { it.root.name == name }?.store) { "no store for root '$name' in this harness" }
@@ -136,6 +140,10 @@ class IndexHarness(
      */
     val epochs = ObservationEpoch(retirements, convergence)
 
+    val identityProvider = UuidV7IdProvider()
+    val identity = PageIdentityService(identityProvider)
+    val bindings = BindingLatch(NoTopology)
+
     /** Declares [root] under continuous observation - what `serve()` does when it installs the root's watcher. */
     fun observe(root: String = "docs"): IndexHarness = apply { epochs.observing(RootName.require(root)) }
 
@@ -149,7 +157,7 @@ class IndexHarness(
         epochs = epochs,
         frontmatterParser = frontmatterParser,
         rendererFactory = rendererFactory,
-        identity = PageIdentityService(UuidV7IdProvider()),
+        identity = identity,
         patcher = patcher,
         idMap = idMap,
         aliasRegistry = registry,
@@ -161,6 +169,7 @@ class IndexHarness(
         // so the harness always registers it first — callers' listeners follow, as in `getAll()`.
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)) + listeners,
         searchIndexer = searchIndexer,
+        bindings = bindings,
     )
 
     /**

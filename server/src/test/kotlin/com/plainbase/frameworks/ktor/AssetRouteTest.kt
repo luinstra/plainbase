@@ -4,6 +4,7 @@ import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
+import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -154,7 +155,7 @@ class AssetRouteTest : FunSpec({
         // bundle names read straight from the embedded shell (the app isn't booted yet, so we can't resolve from a live
         // GET — the embedded resource is the same source of truth).
         val (jsRef, cssRef) = embeddedShellBundleRefs()
-        enforcedAnonApp(builtinAuthEnabled = true, proxyAuthEnabled = false, seed = { root ->
+        enforcedAnonApp(authMode = AuthMode.BUILTIN, seed = { root ->
             Files.writeString(root.resolve(jsRef.removePrefix("/assets/")), "SHADOW-JS")
             Files.writeString(root.resolve(cssRef.removePrefix("/assets/")), "SHADOW-CSS")
         }) { app ->
@@ -205,14 +206,14 @@ class AssetRouteTest : FunSpec({
     // PUBLIC so the app shell — including the login page — loads for an anonymous user. The gated content read
     // still 401s for an anonymous content asset (no existence leak: an absent non-bundle 401s identically).
     test("enforced builtin: anonymous GET /assets/<bundle.js> → 200 (the shell + login page load)") {
-        enforcedAnonApp(builtinAuthEnabled = true, proxyAuthEnabled = false) { app ->
+        enforcedAnonApp(authMode = AuthMode.BUILTIN) { app ->
             val bundle = app.resolveBundleRef()
             app.client.get(bundle).status shouldBe HttpStatusCode.OK
         }
     }
 
     test("enforced proxy: anonymous GET /assets/<bundle.js> → 200") {
-        enforcedAnonApp(builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = "s") { app ->
+        enforcedAnonApp(authMode = AuthMode.PROXY, proxySecret = "s") { app ->
             val bundle = app.resolveBundleRef()
             app.client.get(bundle).status shouldBe HttpStatusCode.OK
         }
@@ -222,7 +223,7 @@ class AssetRouteTest : FunSpec({
         // Seed a content asset whose name is NOT any bundle filename, so it cannot fall through to the public
         // bundle. An anonymous read must 401 (gate denies before membership), never 404 (which would leak that
         // the path is absent vs. present-but-unauthorized).
-        enforcedAnonApp(builtinAuthEnabled = true, proxyAuthEnabled = false, seed = { root ->
+        enforcedAnonApp(authMode = AuthMode.BUILTIN, seed = { root ->
             Files.writeString(root.resolve("orphan-asset.bin"), "secret content bytes")
         }) { app ->
             val bundle = app.resolveBundleRef()
@@ -232,7 +233,7 @@ class AssetRouteTest : FunSpec({
     }
 
     test("enforced: anonymous GET /assets/<absent non-bundle> → 401 (same as a content asset — the oracle is closed)") {
-        enforcedAnonApp(builtinAuthEnabled = true, proxyAuthEnabled = false) { app ->
+        enforcedAnonApp(authMode = AuthMode.BUILTIN) { app ->
             app.client.get("/assets/docs/no/such/file.png").status shouldBe HttpStatusCode.Unauthorized
         }
     }
@@ -266,8 +267,7 @@ private suspend fun ApplicationTestBuilder.resolveBundleRef(): String {
  * `AuthMatrixTest.withApp`). The default seed is a single `doc.md` so the shell renders; [seed] can add assets.
  */
 private fun enforcedAnonApp(
-    builtinAuthEnabled: Boolean,
-    proxyAuthEnabled: Boolean,
+    authMode: AuthMode,
     proxySecret: String? = null,
     seed: (Path) -> Unit = {},
     block: suspend (ApplicationTestBuilder) -> Unit,
@@ -282,8 +282,7 @@ private fun enforcedAnonApp(
             val ctx = harness.testRouteContext(
                 searchProvider = Fts5SearchProvider(searchDb),
                 enforced = true,
-                builtinAuthEnabled = builtinAuthEnabled,
-                proxyAuthEnabled = proxyAuthEnabled,
+                authMode = authMode,
                 proxySecret = proxySecret,
                 extract = fixedPrincipal(Principal.Anonymous),
             )

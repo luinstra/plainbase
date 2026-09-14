@@ -98,6 +98,8 @@ kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", versi
 # NativeImageJUnitLauncher entry point and the jupiter engine are present in the native test image.
 junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform" }
+# NativeImageJUnitLauncher uses this optional standard listener for genuine XML reporting.
+junit-platform-reporting = { module = "org.junit.platform:junit-platform-reporting", version.ref = "junit-platform" }
 # GraalVM's native JUnit Platform support (provides org.graalvm.junit.platform.NativeImageJUnitLauncher).
 graalvm-junit-platform-native = { module = "org.graalvm.buildtools:junit-platform-native", version.ref = "graalvm-buildtools" }
 

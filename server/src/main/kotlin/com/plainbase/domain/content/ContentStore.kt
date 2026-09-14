@@ -217,9 +217,8 @@ interface ContentStore {
         val OVERFLOW: TreePath = TreePath.require("(overflow)")
 
         /**
-         * The bound every [watch] handle's `close()` honors: both backends join a worker thread, and neither may
-         * wait longer than this for it. It is what the graceful-shutdown budget counts per watcher, so a backend
-         * that waited longer would be cut off mid-close.
+         * The watcher close forecast used for shutdown diagnostics. Implementations must still join their worker
+         * after this forecast if it has not terminated.
          */
         const val WATCH_CLOSE_BOUND_MILLIS: Long = 10_000
     }

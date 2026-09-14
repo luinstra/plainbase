@@ -2,9 +2,26 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.repository.UserRow
+import com.plainbase.domain.service.AbsenceClassifier
+import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexHarness
+import com.plainbase.domain.service.PageRootResolver
+import com.plainbase.domain.service.PageService
+import com.plainbase.domain.service.PolicyService
+import com.plainbase.domain.service.ProposalAuthorLabeler
+import com.plainbase.domain.service.ProposalService
+import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SessionService
+import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.frameworks.config.AuthConfig
+import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.runtime.HistoryProviders
+import com.plainbase.frameworks.runtime.ObservedIndexRuntime
+import com.plainbase.frameworks.runtime.RootStores
+import com.plainbase.frameworks.runtime.ServingRuntime
 import com.plainbase.frameworks.security.Argon2PasswordHasher
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.cookies.HttpCookies
@@ -20,9 +37,8 @@ import kotlin.time.Clock
  * runs enforced; login itself works in either mode).
  */
 class AuthRouteHarness(
-    private val enforced: Boolean = true,
-    builtinAuthEnabled: Boolean = true,
-    proxyAuthEnabled: Boolean = false,
+    authMode: AuthMode = AuthMode.BUILTIN,
+    private val enforced: Boolean = authMode != AuthMode.OFF,
     proxySecret: String? = null,
     trustedProxyCidrs: List<String> = emptyList(),
     val proxyCsrf: com.plainbase.frameworks.security.ProxyCsrf =
@@ -37,62 +53,89 @@ class AuthRouteHarness(
 
     val sessionService: SessionService get() = harness.sessionService
 
-    private val policy = com.plainbase.domain.service.PolicyService(
-        roles = harness.roleRepository,
-        apiTokens = harness.apiTokenRepository,
-        audit = harness.auditRepository,
-        idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
-        clock = Clock.System,
-        enforced = enforced,
-    )
-
-    private val auth = harness.authServices(policy)
-
-    private val resolver = com.plainbase.domain.service.PageRootResolver(harness.idMap, harness.rootRegistry)
-
-    val context: RouteContext = buildRouteContext(
-        policy = policy,
-        indexBuilder = harness.builder,
-        pageService = com.plainbase.domain.service.PageService(
-            harness.builder,
-            harness.registry,
-            com.plainbase.domain.service.CitationFactory(),
-        ),
-        searchService = com.plainbase.domain.service.SearchService(
+    val context: RouteContext = run {
+        val policy = PolicyService(
+            roles = harness.roleRepository,
+            apiTokens = harness.apiTokenRepository,
+            audit = harness.auditRepository,
+            idProvider = UuidV7IdProvider(),
+            clock = Clock.System,
+            enforced = enforced,
+        )
+        val auth = harness.authServices(policy)
+        val resolver = PageRootResolver(harness.idMap, harness.rootRegistry)
+        val absence = AbsenceClassifier(harness.idMap)
+        val stores = RootStores(
+            mapOf(harness.rootRegistry.primary.name to harness.stores(harness.rootRegistry.primary.name)),
+        )
+        val histories = HistoryProviders(mapOf(harness.rootRegistry.primary.name to NoOpHistoryProvider))
+        val pageService = PageService(harness.builder, harness.registry, CitationFactory())
+        val searchService = SearchService(
             provider = harness.fts(),
             indexBuilder = harness.builder,
             availability = harness.availability,
-        ),
-        aliasRegistry = harness.registry,
-        writePipeline = harness.writePipeline(),
-        registry = harness.rootRegistry,
-        availability = harness.availability,
-        limbo = harness.limbo,
-        resolver = resolver,
-        absence = harness.absence,
-        stores = harness.stores,
-        histories = { com.plainbase.frameworks.git.NoOpHistoryProvider },
-        idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
-        proposalService = com.plainbase.domain.service.ProposalService(
+        )
+        val proposalService = ProposalService(
             repository = harness.proposalRepository,
-            citations = com.plainbase.domain.service.CitationFactory(),
-            baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(harness.builder, harness.stores, harness.absence),
+            citations = CitationFactory(),
+            baseReader = IndexProposalBaseReader(harness.builder, harness.stores, absence),
             proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
             clock = Clock.System,
             rootStatus = { root -> resolver.statusOf(root, harness.availability.current()) },
-        ),
-        proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository),
-        tokens = harness.apiTokens,
-        auth = auth,
-        trustedProxyCidrs = trustedProxyCidrs,
-        maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
-        maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
-        builtinAuthEnabled = builtinAuthEnabled,
-        proxyAuthEnabled = proxyAuthEnabled,
-        proxySecret = proxySecret,
-        proxyCsrf = proxyCsrf,
-        extract = extract,
-    )
+        )
+        val proposalLabeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
+        val actual = buildGuardedApplication(
+            serving = ServingRuntime(
+                index = ObservedIndexRuntime(
+                    builder = harness.builder,
+                    registry = harness.rootRegistry,
+                    stores = stores,
+                    histories = histories,
+                    availability = harness.availability,
+                    convergence = harness.convergence,
+                    limbo = harness.limbo,
+                    epochs = harness.epochs,
+                    bindings = harness.bindings,
+                    identity = harness.identity,
+                    idProvider = harness.identityProvider,
+                    aliasRegistry = harness.registry,
+                ),
+                pageService = pageService,
+                searchService = searchService,
+                writePipeline = harness.writePipeline(),
+                resolver = resolver,
+                absence = absence,
+                proposalService = proposalService,
+                proposalLabeler = proposalLabeler,
+                agentDirectCommitGlobs = emptyList(),
+            ),
+            security = securityAssembly(
+                config = PlainbaseConfig(
+                    contentDir = root,
+                    dataDir = root.resolve("auth-fixture-data"),
+                    host = "127.0.0.1",
+                    port = 8080,
+                    auth = AuthConfig(
+                        mode = authMode,
+                        trustedProxyCidrs = trustedProxyCidrs,
+                        proxySecret = proxySecret,
+                    ),
+                ),
+                policy = policy,
+                tokens = harness.apiTokens,
+                auth = auth,
+                proxyCsrf = proxyCsrf,
+            ),
+            transport = TransportSettings(
+                maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+                maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+                mcpAllowedHosts = listOf("127.0.0.1", "localhost"),
+                mcpAllowedOrigins = listOf("http://127.0.0.1", "http://localhost"),
+                secureCookie = false,
+            ),
+        )
+        extract?.let(actual::withExtract) ?: actual
+    }
 
     init {
         harness.builder.rebuild()
@@ -131,7 +174,7 @@ class AuthRouteHarness(
     fun issueProxyCsrf(): String = proxyCsrf.issue()
 
     /** Mint a bootstrap setup token directly (for the setup-consume route tests). */
-    fun mintBootstrapToken(): String = auth.setup.mintBootstrapToken().plaintext
+    fun mintBootstrapToken(): String = context.auth.setup.mintBootstrapToken().plaintext
 
     /** Mint an agent bearer token with [mode]; returns the `pb_...` plaintext (for the bearer-exempt CSRF test). */
     fun mintAgentToken(mode: com.plainbase.domain.repository.AgentMode): String =
@@ -156,15 +199,20 @@ class AuthRouteHarness(
 
 /** Runs [block] inside a `testApplication` serving the auth surface over an [AuthRouteHarness]. */
 fun authRouteTest(
-    enforced: Boolean = true,
-    builtinAuthEnabled: Boolean = true,
-    proxyAuthEnabled: Boolean = false,
+    authMode: AuthMode = AuthMode.BUILTIN,
+    enforced: Boolean = authMode != AuthMode.OFF,
     proxySecret: String? = null,
     trustedProxyCidrs: List<String> = emptyList(),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
     block: suspend ApplicationTestBuilder.(AuthRouteHarness) -> Unit,
 ) {
-    AuthRouteHarness(enforced, builtinAuthEnabled, proxyAuthEnabled, proxySecret, trustedProxyCidrs, extract = extract).use { harness ->
+    AuthRouteHarness(
+        authMode = authMode,
+        enforced = enforced,
+        proxySecret = proxySecret,
+        trustedProxyCidrs = trustedProxyCidrs,
+        extract = extract,
+    ).use { harness ->
         testApplication {
             application { plainbaseModule(harness.context) }
             block(harness)

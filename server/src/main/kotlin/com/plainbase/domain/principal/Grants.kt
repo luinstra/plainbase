@@ -13,9 +13,8 @@ package com.plainbase.domain.principal
  *  - The constructors are `internal`, so NO module outside `:server` can construct a grant — the COMPILER is the
  *    proof against a future third-party-authored MCP module.
  *  - WITHIN `:server`, the only PRODUCTION mint site is [com.plainbase.domain.service.PolicyService]; the
- *    [grantForTests]/[createGrantForTests]/[manageGrantForTests] factories below are PUBLIC (so both `src/test`
- *    AND `src/nativeTest` can mint — `src/nativeTest` has no friend-path to `main`/`src/test`, so an `internal`
- *    test factory would be unreachable there and the native gate would not compile). A source-scan
+ *    [grantForTests]/[createGrantForTests]/[manageGrantForTests] factories below are PUBLIC test-only seams so
+ *    both JVM and native test source sets can mint without widening the grant constructors. A source-scan
  *    (`ChokePointArchitectureTest`/`GrantUnforgeabilityTest`) forbids any PRODUCTION reference to the
  *    constructors OR the `*ForTests` factories outside `PolicyService` — that scan IS the in-`:server` guarantee.
  */
@@ -29,8 +28,8 @@ class ManageGrant internal constructor()
 class ApproveGrant internal constructor()
 
 /**
- * TEST-ONLY grant mint, PUBLIC in `src/main` so `src/test` and `src/nativeTest` can both mint via `main`'s output
- * (the only seam `src/nativeTest` has). NEVER referenced from production — the source-scan tests enforce that.
+ * TEST-ONLY grant mint, PUBLIC in `src/main` so JVM and native test source sets can mint through one deliberate
+ * test seam. NEVER referenced from production — the source-scan tests enforce that.
  */
 fun grantForTests(): EditGrant = EditGrant()
 

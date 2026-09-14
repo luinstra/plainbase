@@ -3,6 +3,7 @@ package com.plainbase
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import kotlin.io.path.readText
 
@@ -43,17 +44,28 @@ class CliBootGateArchitectureTest : FunSpec({
         "versionProbe",
         "RootStores(",
         "HistoryProviders(",
+        "RootBootProbe",
+        "rootBootProbes(",
+        "prepareRootBootInputs(",
+        "RootStoreFactory",
         "koinApplication",
     )
+    val detector: (String) -> List<String> = { source -> banned.filter(source::contains) }
 
     test("RootCommand names no individual boot check and no boot wiring - it calls ONE function") {
-        val violations = banned.filter { code.contains(it) }.map {
+        val violations = detector(code).map {
             "RootCommand.kt names '$it'. It must not: that is a check (or the wiring a check needs) the CLI would " +
                 "then be keeping its own list of, and a list of somebody else's checks always drifts. Call " +
                 "bootGateFor and let the server's own gate produce the refusal."
         }
         withClue("the CLI validates the ARTIFACT through the server's own loader and the server's own gate") {
             violations.shouldBeEmpty()
+        }
+    }
+
+    test("the detector stays armed for the deferred probe and local factory wiring names") {
+        listOf("rootBootProbes(", "prepareRootBootInputs(", "RootStoreFactory").forEach { prohibited ->
+            detector("private val leaked = $prohibited").contains(prohibited) shouldBe true
         }
     }
 

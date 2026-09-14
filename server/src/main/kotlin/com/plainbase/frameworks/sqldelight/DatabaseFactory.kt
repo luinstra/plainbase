@@ -24,11 +24,16 @@ object DatabaseFactory {
     }
 
     /** Migrate [driver], closing the handle before rethrowing on ANY failure: a rejected boot must not leak the open connection. */
-    internal fun migrateOrClose(driver: SqlDriver): SqlDriver {
+    internal fun migrateOrClose(
+        driver: SqlDriver,
+        closeDriver: (SqlDriver) -> Unit = { it.close() },
+    ): SqlDriver {
         runCatching {
             migrate(driver)
         }.onFailure { failure ->
-            driver.close()
+            runCatching { closeDriver(driver) }.onFailure { cleanup ->
+                if (cleanup !== failure) failure.addSuppressed(cleanup)
+            }
             throw failure
         }
         return driver

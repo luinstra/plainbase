@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.frameworks.config.AuthMode
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
@@ -77,7 +78,7 @@ class PublicAllowlistLetsLoginThroughTest : FunSpec({
     // in proxy mode (the CSRF-bootstrap read, 200 for an anonymous proxy request), while login/setup/admin-users STAY
     // 404. The §A4 routing matrix's api-fallback answers an unknown /api path with a 404 envelope.
     test("under proxy mode: login/setup/admin-users STAY 404, but /session is PUBLIC (200, authenticated=false)") {
-        authRouteTest(enforced = true, builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = "s") {
+        authRouteTest(enforced = true, authMode = AuthMode.PROXY, proxySecret = "s") {
             val login = client.post("/api/v1/login") {
                 contentType(ContentType.Application.Json)
                 setBody("""{"username":"ghost","password":"pw"}""")

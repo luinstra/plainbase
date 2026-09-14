@@ -105,11 +105,12 @@ operation, or `CreatePageRequest.root` over REST. Omitting it is a 400 `invalid_
 permission to write into `docs`.
 
 A root can be unavailable or read-only, and a page id can be held by more than one root - the server tells you
-which with a code, not a guess. Four wire shapes to recognize:
+which with a code, not a guess. Five wire shapes to recognize:
 
 | code | status | what it means | what you must do |
 |---|---|---|---|
 | `root_unavailable` | **503** + `Retry-After: 300` | The root's disk is unmounted, missing at boot, or its watcher died. **The page is NOT gone.** Nothing was written. | **Keep your citations.** Retry after an operator restores the root and restarts the server - the `Retry-After` (seconds) is how long to wait before trying again. |
+| `server_shutting_down` | **503** | The server is draining and this request was rejected before business work began. | Keep your citations and retry once an available server returns. There is no `Retry-After` promise; an admitted write follows the shutdown drain instead. |
 | `root_not_editable` | **403** | The root is declared `editable = false`. Page writes are refused there in **every** auth mode - this is topology, not a permission you might be granted. | Do not retry. Do not propose a write into this root; read-only means read-only for every agent, always. |
 | `invalid_root` | **400** | The named root is not a legal slug, or names no root the server has configured. | Fix the name - check the `root` a `search`/`read_page` hit actually carries, or what `GET /healthz` lists. |
 | `ambiguous_page_id` | **409** | The page id you sent is held by more than one root and you named none, so the server will not pick one for you. | Retry naming `root`, choosing from the candidates the response lists. Each candidate carries the `url` to retry - the endpoint you just called with `root` added. On `propose_change` (`POST /api/v1/changes`) the pin is the request body's own `root` field instead, so those candidates carry no `url`. |

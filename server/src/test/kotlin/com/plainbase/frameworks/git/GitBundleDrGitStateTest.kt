@@ -53,7 +53,7 @@ class GitBundleDrGitStateTest : FunSpec({
     }
 
     test("classify: a timeout (exit -1, no definitive stderr signature) is UNREADABLE - fail closed") {
-        val result = failResult(-1, "git timed out after 30s and was force-killed")
+        val result = failResult(-1, "git timed out while completing the invocation")
         GitBundleDr.classify(result, gitDirExists = true) shouldBe GitBundleDr.GitState.UNREADABLE
     }
 

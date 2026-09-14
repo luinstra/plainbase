@@ -1,5 +1,7 @@
 package com.plainbase.frameworks.cli
 
+import app.cash.sqldelight.db.SqlDriver
+import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
@@ -11,15 +13,22 @@ import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
+import com.plainbase.frameworks.lifecycle.Stage0cParentDeadline
+import com.plainbase.frameworks.lifecycle.probeDataDirLock
+import com.plainbase.frameworks.runtime.OfflineStoreOperations
+import com.plainbase.frameworks.runtime.RootStoreFactory
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The `adopt` CLI contract over a tiny temp tree: flag surface (exact, usage-error otherwise),
@@ -151,39 +160,28 @@ class AdoptCommandTest : FunSpec({
     ) {
         withCliTree { config ->
             val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
-            val objectConfig = config.copy(
-                storage = StorageConfig(
-                    backend = StorageBackend.OBJECT,
-                    // A well-formed but unreachable endpoint (loopback, nothing listening on port 9 -
-                    // "Connection refused" comes back immediately, not a slow timeout): the FACTORY builds
-                    // cleanly, so the failure is hydrate()'s, exercised exactly like a real outage would be.
-                    endpoint = "https://127.0.0.1:9",
-                    bucket = "docs",
-                    accessKeyId = "k",
-                    secretAccessKey = "s",
-                ),
-            )
-            listOf(emptyList(), listOf("--write-ids")).forEach { args ->
-                val err = captureStderr { runAdopt(args, objectConfig) shouldBe 1 }
-                err shouldContain "adopt: "
-                err shouldNotContain "storage.backend=object is configured but the object backend is not available"
-            }
-            // C4 behavior change from the old outright refusal: the lock IS taken (and released) and the
-            // app db IS opened/migrated before the hydrate attempt fails - never touched under the OLD refusal.
-            Files.exists(objectConfig.appDatabasePath) shouldBe true
-            Files.readAllBytes(config.contentDir.resolve("plain.md")) shouldBe plainBefore
-            DataDirLock.tryAcquire(objectConfig.dataDir)!!.use { } // released after the failed attempt
+            withListRefusalEndpoint { endpoint, requests ->
+                val objectConfig = objectConfig(config, endpoint)
+                listOf(emptyList(), listOf("--write-ids")).forEach { args ->
+                    val err = captureStderr { runAdopt(args, objectConfig) shouldBe 1 }
+                    err shouldContain "adopt: "
+                    err shouldNotContain "storage.backend=object is configured but the object backend is not available"
+                }
+                (requests.get() > 0) shouldBe true
+                // Object mutation is under the lock and opens/migrates the app db before hydrate fails.
+                Files.exists(objectConfig.appDatabasePath) shouldBe true
+                Files.readAllBytes(config.contentDir.resolve("plain.md")) shouldBe plainBefore
+                DataDirLock.tryAcquire(objectConfig.dataDir)!!.use { }
 
-            // PREVIEW's contract (seam c, finding 4): zero writes, lock-free, no hydrate - it reads the
-            // (absent, never hydrated) mirror as an empty tree rather than refusing, and must NOT create
-            // DATA_DIR/mirror (a dry run touches no disk; the factory construction is non-mutating).
-            val mirrorDir = objectConfig.dataDir.resolve("mirror")
-            Files.deleteIfExists(mirrorDir) // in case a prior arm left an empty dir; assert PREVIEW re-creates none
-            val out = captureStdout {
-                runAdopt(listOf("--write-ids", "--dry-run"), objectConfig) shouldBe 0
+                // PREVIEW is read-only and lock-free: it does not hydrate or create the derived mirror.
+                val mirrorDir = objectConfig.dataDir.resolve("mirror")
+                Files.deleteIfExists(mirrorDir)
+                val out = captureStdout {
+                    runAdopt(listOf("--write-ids", "--dry-run"), objectConfig) shouldBe 0
+                }
+                out shouldContain "would materialize 0 page(s):"
+                Files.exists(mirrorDir) shouldBe false
             }
-            out shouldContain "would materialize 0 page(s):"
-            Files.exists(mirrorDir) shouldBe false // PREVIEW created no DATA_DIR/mirror
         }
     }
 
@@ -225,6 +223,465 @@ class AdoptCommandTest : FunSpec({
             out shouldContain "NFS/SMB"
             withClue("one write-mechanism caveat for the run, not one per root") {
                 out.split("NFS/SMB").size shouldBe 2
+            }
+        }
+    }
+
+    test("LOCAL adopt keeps the declared root order and excludes DATA_DIR nested in an extra") {
+        withTwoRootCliTree { config, handbook ->
+            val nestedData = Files.createDirectories(handbook.resolve("plainbase-data"))
+            Files.writeString(nestedData.resolve("secret.md"), "---\ntitle: Hidden\n---\nnot corpus\n")
+            val nestedConfig = config.copy(dataDir = nestedData)
+
+            val out = captureStdout { runAdopt(listOf("--write-ids"), nestedConfig) shouldBe 0 }
+
+            out shouldContain "adopt: root 'docs': 3 page(s)"
+            out shouldContain "adopt: root 'handbook': 1 page(s)"
+            String(Files.readAllBytes(nestedData.resolve("secret.md"))) shouldNotContain "id: "
+        }
+    }
+
+    test("LOCAL adopt constructs primary first while reporting the declared root order") {
+        withTwoRootCliTree { config, handbook ->
+            val nestedData = Files.createDirectories(handbook.resolve("plainbase-data"))
+            Files.writeString(nestedData.resolve("secret.md"), "---\ntitle: Hidden\n---\nnot corpus\n")
+            val reordered = config.copy(
+                dataDir = nestedData,
+                roots = RootsConfig.of(
+                    listOf(config.roots.list[1], config.roots.list[0]),
+                    origin = RootsOrigin.EXPLICIT,
+                ),
+            )
+            val localOpens = mutableListOf<RootName>()
+            val decorated = mutableListOf<RootName>()
+            val fixture = OfflineStoreFixture()
+            val tracked = fixture.operations()
+            val operations = OfflineStoreOperations(
+                openDriver = tracked.openDriver,
+                openReadOnlyDriver = tracked.openReadOnlyDriver,
+                openSearch = tracked.openSearch,
+                openLocal = { inputs ->
+                    localOpens += inputs.rootName
+                    tracked.openLocal(inputs)
+                },
+                openObject = { _, _, _, _, _ -> error("OBJECT must not open in LOCAL mode") },
+                hydrateObject = tracked.hydrateObject,
+                closeObject = tracked.closeObject,
+            )
+            fixture.use {
+                val out = captureStdout {
+                    AdoptCommand.run(
+                        listOf("--write-ids"),
+                        reordered,
+                        { name, store ->
+                            decorated += name
+                            object : ContentStore by store {}
+                        },
+                        CommandOutputCapture.current,
+                        operations,
+                    ) shouldBe 0
+                }
+
+                localOpens shouldBe listOf(RootName.PRIMARY, RootName.require("handbook"))
+                decorated shouldBe listOf(RootName.PRIMARY, RootName.require("handbook"))
+                (out.indexOf("adopt: root 'handbook'") >= 0) shouldBe true
+                (out.indexOf("adopt: root 'docs'") > out.indexOf("adopt: root 'handbook'")) shouldBe true
+                String(Files.readAllBytes(nestedData.resolve("secret.md"))) shouldNotContain "id: "
+            }
+        }
+    }
+
+    test("adopt closes a partially assembled object client for both mutating entry modes") {
+        withCliTree { config ->
+            val objectConfig = objectConfig(config, "http://127.0.0.1:1")
+            listOf(emptyList<String>(), listOf("--write-ids")).forEach { args ->
+                val fixture = OfflineStoreFixture()
+                val partialFailure = IllegalStateException("store assembly failed")
+                val parent = Stage0cParentDeadline(30_000)
+                val clientLocks = mutableListOf<String>()
+                val driverLocks = mutableListOf<String>()
+                fixture.onClientClose = { clientLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                fixture.onDriverClose = { driverLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                val operations = fixture.operations(
+                    openObject = { objectConfigArg, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
+                        fixture.openObjectThenFail(
+                            objectConfigArg,
+                            ignoreRules,
+                            dirtyPaths,
+                            isDirty,
+                            rowsAtStart,
+                            partialFailure,
+                        )
+                    },
+                )
+                fixture.use {
+                    val actual = shouldThrow<IllegalStateException> {
+                        AdoptCommand.run(
+                            args,
+                            objectConfig,
+                            { _, store -> store },
+                            CommandOutputCapture.current,
+                            operations,
+                        )
+                    }
+
+                    actual shouldBeSameInstanceAs partialFailure
+                    fixture.clients.single().closeCount shouldBe 1
+                    fixture.clients.single().transportActive shouldBe false
+                    fixture.drivers.single().closeCount shouldBe 1
+                    clientLocks shouldBe listOf("HELD")
+                    driverLocks shouldBe listOf("HELD")
+                    probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
+                }
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
+            }
+        }
+    }
+
+    test("adopt owns a raw object store behind a non-closeable decorated view") {
+        withCliTree { config ->
+            val fixture = OfflineStoreFixture()
+            val objectConfig = objectConfig(config, "http://127.0.0.1:1")
+            var hydrateCalls = 0
+            fixture.use {
+                val out = captureStdout {
+                    AdoptCommand.run(
+                        listOf("--write-ids", "--dry-run"),
+                        objectConfig,
+                        { _, store -> object : ContentStore by store {} },
+                        CommandOutputCapture.current,
+                        fixture.operations(hydrateObject = { hydrateCalls++ }),
+                    ) shouldBe 0
+                }
+
+                out shouldContain "would materialize 0 page(s)"
+                hydrateCalls shouldBe 0
+                fixture.readOnlyOpens shouldBe 1
+                fixture.writableOpens shouldBe 0
+                fixture.staticConnections.isNotEmpty() shouldBe true
+                fixture.staticConnections.all { it.isClosed } shouldBe true
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
+                Files.exists(objectConfig.appDatabasePath) shouldBe false
+                Files.exists(objectConfig.dataDir.resolve("mirror")) shouldBe false
+            }
+            fixture.clients.single().closeCount shouldBe 1
+            fixture.clients.single().transportActive shouldBe false
+            fixture.drivers.single().closeCount shouldBe 1
+        }
+    }
+
+    test("PREVIEW closes a partially assembled object client before returning the construction failure") {
+        withCliTree { config ->
+            val fixture = OfflineStoreFixture()
+            val objectConfig = objectConfig(config, "http://127.0.0.1:1")
+            val partialFailure = IllegalStateException("preview store assembly failed")
+            var hydrateCalls = 0
+            fixture.use {
+                val actual = shouldThrow<IllegalStateException> {
+                    AdoptCommand.run(
+                        listOf("--write-ids", "--dry-run"),
+                        objectConfig,
+                        { _, store -> store },
+                        CommandOutputCapture.current,
+                        fixture.operations(
+                            openObject = { objectConfigArg, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
+                                fixture.openObjectThenFail(
+                                    objectConfigArg,
+                                    ignoreRules,
+                                    dirtyPaths,
+                                    isDirty,
+                                    rowsAtStart,
+                                    partialFailure,
+                                )
+                            },
+                            hydrateObject = { hydrateCalls++ },
+                        ),
+                    )
+                }
+
+                actual shouldBeSameInstanceAs partialFailure
+                hydrateCalls shouldBe 0
+                fixture.readOnlyOpens shouldBe 1
+                fixture.writableOpens shouldBe 0
+                fixture.staticConnections.isNotEmpty() shouldBe true
+                fixture.staticConnections.all { it.isClosed } shouldBe true
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
+                Files.exists(objectConfig.appDatabasePath) shouldBe false
+                Files.exists(objectConfig.dataDir.resolve("mirror")) shouldBe false
+            }
+            fixture.clients.single().closeCount shouldBe 1
+            fixture.clients.single().transportActive shouldBe false
+            fixture.drivers.single().closeCount shouldBe 1
+        }
+    }
+
+    test("PREVIEW preserves a decorator Error and suppresses the ordinary raw close failure") {
+        withCliTree { config ->
+            val fixture = OfflineStoreFixture()
+            val objectConfig = objectConfig(config, "http://127.0.0.1:1")
+            val decorationFailure = AssertionError("preview decoration failed")
+            val closeFailure = IllegalStateException("preview raw close failed")
+            var hydrateCalls = 0
+            fixture.use {
+                val actual = shouldThrow<AssertionError> {
+                    AdoptCommand.run(
+                        listOf("--write-ids", "--dry-run"),
+                        objectConfig,
+                        { _, _ -> throw decorationFailure },
+                        CommandOutputCapture.current,
+                        fixture.operations(
+                            hydrateObject = { hydrateCalls++ },
+                            closeObject = { store ->
+                                store.close()
+                                throw closeFailure
+                            },
+                        ),
+                    )
+                }
+
+                actual shouldBeSameInstanceAs decorationFailure
+                actual.suppressed.single() shouldBeSameInstanceAs closeFailure
+                hydrateCalls shouldBe 0
+                fixture.readOnlyOpens shouldBe 1
+                fixture.writableOpens shouldBe 0
+                fixture.staticConnections.isNotEmpty() shouldBe true
+                fixture.staticConnections.all { it.isClosed } shouldBe true
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
+                Files.exists(objectConfig.appDatabasePath) shouldBe false
+                Files.exists(objectConfig.dataDir.resolve("mirror")) shouldBe false
+            }
+            fixture.clients.single().closeCount shouldBe 1
+            fixture.clients.single().transportActive shouldBe false
+            fixture.drivers.single().closeCount shouldBe 1
+        }
+    }
+
+    test("PREVIEW closes its static driver when raw object cleanup fails") {
+        withCliTree { config ->
+            val fixture = OfflineStoreFixture()
+            val objectConfig = objectConfig(config, "http://127.0.0.1:1")
+            val closeFailure = IllegalStateException("preview close failed")
+            fixture.use {
+                val actual = shouldThrow<IllegalStateException> {
+                    AdoptCommand.run(
+                        listOf("--write-ids", "--dry-run"),
+                        objectConfig,
+                        { _, store -> object : ContentStore by store {} },
+                        CommandOutputCapture.current,
+                        fixture.operations(
+                            closeObject = { store ->
+                                store.close()
+                                throw closeFailure
+                            },
+                        ),
+                    )
+                }
+
+                actual shouldBeSameInstanceAs closeFailure
+                fixture.staticConnections.isNotEmpty() shouldBe true
+                fixture.staticConnections.all { it.isClosed } shouldBe true
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
+            }
+            fixture.clients.single().closeCount shouldBe 1
+            fixture.clients.single().transportActive shouldBe false
+            fixture.drivers.single().closeCount shouldBe 1
+        }
+    }
+
+    test("OBJECT adopt uses the default high-level store, ignores CONTENT_DIR, and closes the raw store") {
+        withCliTree { config ->
+            withEmptyListEndpoint { endpoint ->
+                val fixture = OfflineStoreFixture()
+                val localOpens = mutableListOf<RootName>()
+                val objectOpens = AtomicInteger()
+                var closeCount = 0
+                val base = fixture.productionOperations(
+                    openLocal = { inputs ->
+                        localOpens += inputs.rootName
+                        RootStoreFactory.local(inputs)
+                    },
+                )
+                val operations = OfflineStoreOperations(
+                    openDriver = base.openDriver,
+                    openReadOnlyDriver = base.openReadOnlyDriver,
+                    openSearch = base.openSearch,
+                    openLocal = base.openLocal,
+                    openObject = { objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
+                        objectOpens.incrementAndGet()
+                        base.openObject(objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart)
+                    },
+                    hydrateObject = base.hydrateObject,
+                    closeObject = { store ->
+                        closeCount++
+                        base.closeObject(store)
+                    },
+                )
+                val objectConfig = objectConfig(config, endpoint).copy(contentDir = config.dataDir.resolve("ignored-content"))
+                fixture.use {
+                    val out = captureStdout {
+                        AdoptCommand.run(
+                            emptyList(),
+                            objectConfig,
+                            { _, store -> store },
+                            CommandOutputCapture.current,
+                            operations,
+                        ) shouldBe 0
+                    }
+
+                    out shouldContain "adopt: 0 page(s) under ${objectConfig.dataDir.resolve("mirror")}"
+                    objectOpens.get() shouldBe 1
+                    localOpens shouldBe emptyList()
+                    fixture.stores.single().isClosedForTest() shouldBe true
+                    fixture.stores.single().transportIdleForTest() shouldBe true
+                    closeCount shouldBe 1
+                    fixture.drivers.single().closeCount shouldBe 1
+                    Files.exists(objectConfig.appDatabasePath) shouldBe true
+                    Files.exists(objectConfig.dataDir.resolve("mirror")) shouldBe true
+                }
+                closeCount shouldBe 1
+                fixture.drivers.single().closeCount shouldBe 1
+            }
+        }
+    }
+
+    test("mutating adopt preserves a decorator Error and suppresses the ordinary raw close failure") {
+        withCliTree { config ->
+            withEmptyListEndpoint { endpoint ->
+                listOf(emptyList<String>(), listOf("--write-ids")).forEach { args ->
+                    val decorationFailure = AssertionError("decoration failed")
+                    val closeFailure = IllegalStateException("raw close failed")
+                    val parent = Stage0cParentDeadline(30_000)
+                    val fixture = OfflineStoreFixture()
+                    val clientLocks = mutableListOf<String>()
+                    val driverLocks = mutableListOf<String>()
+                    fixture.onClientClose = { clientLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                    fixture.onDriverClose = { driverLocks += probeDataDirLock(config.dataDir, parent, fixture = null) }
+                    fixture.use {
+                        val actual = shouldThrow<AssertionError> {
+                            AdoptCommand.run(
+                                args,
+                                objectConfig(config, endpoint),
+                                { _, _ -> throw decorationFailure },
+                                CommandOutputCapture.current,
+                                fixture.operations(closeObject = { store ->
+                                    store.close()
+                                    throw closeFailure
+                                }),
+                            )
+                        }
+
+                        actual shouldBeSameInstanceAs decorationFailure
+                        actual.suppressed.single() shouldBeSameInstanceAs closeFailure
+                        fixture.clients.single().closeCount shouldBe 1
+                        fixture.clients.single().transportActive shouldBe false
+                        fixture.drivers.single().closeCount shouldBe 1
+                        clientLocks shouldBe listOf("HELD")
+                        driverLocks shouldBe listOf("HELD")
+                        probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
+                    }
+                    fixture.clients.single().closeCount shouldBe 1
+                    fixture.clients.single().transportActive shouldBe false
+                    fixture.drivers.single().closeCount shouldBe 1
+                }
+            }
+        }
+    }
+
+    test("mutating adopt propagates a raw object close failure after driver cleanup and lock release") {
+        withCliTree { config ->
+            withEmptyListEndpoint { endpoint ->
+                val closeFailure = RuntimeException("raw close failed")
+                val parent = Stage0cParentDeadline(30_000)
+                val fixture = OfflineStoreFixture()
+                val base = fixture.operations()
+                val events = mutableListOf<String>()
+                val lockStates = linkedMapOf<String, String>()
+                val operations = OfflineStoreOperations(
+                    openDriver = { path ->
+                        val driver = base.openDriver(path)
+                        object : SqlDriver by driver {
+                            override fun close() {
+                                events += "driver-close"
+                                fixture.observe {
+                                    lockStates["driver"] = probeDataDirLock(config.dataDir, parent, fixture = null)
+                                }
+                                driver.close()
+                            }
+                        }
+                    },
+                    openReadOnlyDriver = base.openReadOnlyDriver,
+                    openSearch = base.openSearch,
+                    openLocal = base.openLocal,
+                    openObject = base.openObject,
+                    hydrateObject = base.hydrateObject,
+                    closeObject = { store ->
+                        events += "object-close"
+                        fixture.observe {
+                            lockStates["object"] = probeDataDirLock(config.dataDir, parent, fixture = null)
+                        }
+                        store.close()
+                        throw closeFailure
+                    },
+                )
+                fixture.use {
+                    val actual = shouldThrow<RuntimeException> {
+                        AdoptCommand.run(
+                            emptyList(),
+                            objectConfig(config, endpoint),
+                            { _, store -> store },
+                            CommandOutputCapture.current,
+                            operations,
+                        )
+                    }
+
+                    actual shouldBeSameInstanceAs closeFailure
+                    lockStates shouldBe linkedMapOf("object" to "HELD", "driver" to "HELD")
+                    events shouldBe listOf("object-close", "driver-close")
+                    probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
+                    fixture.clients.single().closeCount shouldBe 1
+                    fixture.clients.single().transportActive shouldBe false
+                    fixture.drivers.single().closeCount shouldBe 1
+                }
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
+            }
+        }
+    }
+
+    test("adopt closes the raw object store when the LIST endpoint refuses hydration") {
+        withCliTree { config ->
+            withListRefusalEndpoint { endpoint, requests ->
+                val fixture = OfflineStoreFixture()
+                fixture.use {
+                    captureStderr {
+                        AdoptCommand.run(
+                            emptyList(),
+                            objectConfig(config, endpoint),
+                            { _, store -> store },
+                            CommandOutputCapture.current,
+                            fixture.operations(),
+                        ) shouldBe 1
+                    }
+
+                    (requests.get() > 0) shouldBe true
+                    fixture.clients.single().closeCount shouldBe 1
+                    fixture.clients.single().transportActive shouldBe false
+                    fixture.drivers.single().closeCount shouldBe 1
+                }
+                fixture.clients.single().closeCount shouldBe 1
+                fixture.clients.single().transportActive shouldBe false
+                fixture.drivers.single().closeCount shouldBe 1
             }
         }
     }
@@ -276,7 +733,7 @@ private fun binding(config: PlainbaseConfig, root: RootName, path: String) =
 private fun withTwoRootCliTree(block: (PlainbaseConfig, java.nio.file.Path) -> Unit) {
     withCliTree { config ->
         val handbook = Files.createTempDirectory("pb-cli-handbook")
-        try {
+        withRetainedDirectories(handbook) {
             Files.writeString(handbook.resolve("onboarding.md"), "---\ntitle: Onboarding\n---\n\n# Onboarding\n")
             block(
                 config.copy(
@@ -290,8 +747,6 @@ private fun withTwoRootCliTree(block: (PlainbaseConfig, java.nio.file.Path) -> U
                 ),
                 handbook,
             )
-        } finally {
-            handbook.toFile().deleteRecursively()
         }
     }
 }
@@ -300,20 +755,26 @@ private fun withTwoRootCliTree(block: (PlainbaseConfig, java.nio.file.Path) -> U
 private fun withCliTree(block: (PlainbaseConfig) -> Unit) {
     val content = Files.createTempDirectory("pb-cli-content")
     val data = Files.createTempDirectory("pb-cli-data")
-    try {
+    withRetainedDirectories(content, data) {
         Files.writeString(content.resolve("plain.md"), "# Plain\n\nNo frontmatter here.\n")
         Files.writeString(content.resolve("titled.md"), "---\ntitle: Titled\n---\n# Titled\n")
         Files.writeString(content.resolve("refused.md"), "---\n'quoted': key\n---\nbody\n")
         block(PlainbaseConfig(contentDir = content, dataDir = data, host = "127.0.0.1", port = 0))
-    } finally {
-        listOf(content, data).forEach { dir ->
-            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
-        }
     }
 }
 
 private fun runAdopt(args: List<String>, config: PlainbaseConfig): Int =
     AdoptCommand.run(args, config, CommandOutputCapture.current)
+
+private fun objectConfig(base: PlainbaseConfig, endpoint: String): PlainbaseConfig = base.copy(
+    storage = StorageConfig(
+        backend = StorageBackend.OBJECT,
+        endpoint = endpoint,
+        bucket = "docs",
+        accessKeyId = "k",
+        secretAccessKey = "s",
+    ),
+)
 
 /** Captures the injected result channel for the duration of [block]. */
 private fun captureStdout(block: () -> Unit): String = CommandOutputCapture.captureStdout(block)

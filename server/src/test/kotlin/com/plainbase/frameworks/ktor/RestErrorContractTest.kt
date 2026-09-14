@@ -5,6 +5,7 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.plainbase.frameworks.filesystem.Fixtures
+import com.plainbase.frameworks.ktor.routes.readBodyCapped
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldNotBeEmpty
@@ -13,6 +14,7 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import io.ktor.client.request.get
 import io.ktor.client.request.head
+import io.ktor.client.request.post
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -20,9 +22,12 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
+import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -30,6 +35,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.Logger.ROOT_LOGGER_NAME
 import org.slf4j.LoggerFactory
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The hostile-input edges of the §A4 error contract: malformed percent-escapes (rejected by Ktor's
@@ -154,6 +160,70 @@ class RestErrorContractTest : FunSpec({
                     errorsMentioning("/__cancelled-probe2").shouldBeEmpty()
                     client.get("/__boom-probe")
                     errorsMentioning("/__boom-probe").shouldNotBeEmpty()
+                }
+            } finally {
+                root.detachAppender(appender)
+            }
+        }
+    }
+
+    test("a locally detected short body answers 400 without invoking downstream work") {
+        RestHarness(Fixtures.demoDocs).use { harness ->
+            val downstreamCalls = AtomicInteger()
+            val root = LoggerFactory.getLogger(ROOT_LOGGER_NAME) as Logger
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            root.addAppender(appender)
+            try {
+                testApplication {
+                    application {
+                        plainbaseModule(harness.services)
+                        routing {
+                            post("/__short-body-probe") {
+                                readBodyCapped(
+                                    ByteReadChannel("short".toByteArray()),
+                                    limit = 64,
+                                    declaredLength = 10,
+                                )
+                                downstreamCalls.incrementAndGet()
+                            }
+                            post("/__exact-body-probe") {
+                                val body = requireNotNull(
+                                    readBodyCapped(
+                                        ByteReadChannel("exact".toByteArray()),
+                                        limit = 64,
+                                        declaredLength = 5,
+                                    ),
+                                )
+                                call.respondText(body.decodeToString())
+                            }
+                            post("/__capped-body-probe") {
+                                val body = readBodyCapped(
+                                    ByteReadChannel(ByteArray(5) { 'x'.code.toByte() }),
+                                    limit = 4,
+                                    declaredLength = null,
+                                )
+                                call.respondText(body?.size?.toString() ?: "capped")
+                            }
+                        }
+                    }
+
+                    val short = client.post("/__short-body-probe")
+                    short.status shouldBe HttpStatusCode.BadRequest
+                    val (code, message) = short.errorBody()
+                    code shouldBe "invalid_request_body"
+                    message shouldBe "Request body is shorter than declared Content-Length"
+                    downstreamCalls.get() shouldBe 0
+                    appender.list
+                        .filter { it.level == Level.ERROR && it.formattedMessage.contains("/__short-body-probe") }
+                        .shouldBeEmpty()
+
+                    val exact = client.post("/__exact-body-probe")
+                    exact.status shouldBe HttpStatusCode.OK
+                    exact.bodyAsText() shouldBe "exact"
+
+                    val capped = client.post("/__capped-body-probe")
+                    capped.status shouldBe HttpStatusCode.OK
+                    capped.bodyAsText() shouldBe "capped"
                 }
             } finally {
                 root.detachAppender(appender)

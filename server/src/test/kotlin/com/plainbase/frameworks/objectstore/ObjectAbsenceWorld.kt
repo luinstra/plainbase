@@ -132,7 +132,7 @@ internal class ObjectAbsenceWorld : AutoCloseable {
         bindings = BindingLatch(topology),
     )
 
-    /** Main's durable rows + binding_epoch - the same boundary `contentModule` wires as the LIST's `rowsAtStart`
+    /** Main's durable rows + binding_epoch - the same boundary `createContentModule` wires as the LIST's `rowsAtStart`
      *  (epoch co-read FIRST, revoke-before-stamp C5). */
     fun rowsOfMain(): RowsAtStart {
         val bindingEpoch = retirements.bindingEpoch(RootName.PRIMARY)

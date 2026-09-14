@@ -140,7 +140,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
     /**
      * Builds the create-apply facade graph DIRECTLY (no Ktor) over a temp tree — the two-principal create-apply tests
      * need an AGENT proposer/degrader AND an ADMIN/agent approver, which the single-fixed-principal [withApp] cannot
-     * drive. Wires the `mutate <-> proposals` construction cycle the SAME 2-phase-lateinit way [buildRouteContext]
+     * drive. Wires the `mutate <-> proposals` construction cycle the SAME 2-phase-lateinit way [buildGuardedApplication]
      * does. [block] receives the harness, the content store, the proposal facade, the mutating facade, and the root.
      */
     fun withCreateApplyHarness(

@@ -25,8 +25,8 @@ import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
 
-// Mirrors production's `GitBundleDr.PRE_RESTORE_HUSK_PREFIX`, duplicated here because it is `internal` to
-// the `main` module and the `nativeTest` source set is not friend-associated with it.
+// Mirrors production's `GitBundleDr.PRE_RESTORE_HUSK_PREFIX`; keep this fixture literal so the on-disk husk prefix
+// remains pinned independently of the adapter's internal implementation constant.
 private const val HUSK_PREFIX = ".git.pre-restore-"
 
 /**
@@ -39,8 +39,8 @@ private const val HUSK_PREFIX = ".git.pre-restore-"
  * [GitPlumbing] chokepoint [GitCliHistoryProvider.commit] uses).
  *
  * [NativeFakeObjectStore] is a hand-rolled, in-memory [ObjectStoreClient] defined HERE (not reused from
- * `server/src/test`'s `FakeObjectStore`): the `nativeTest` source set's classpath is `main` output only
- * (no `test` sourceSet), by design (kotlin.test/JUnit only, no Kotest/MockK on this classpath).
+ * `server/src/test`'s `FakeObjectStore`): the native source set deliberately remains Kotlin-test/JUnit-only and
+ * does not depend on the JVM test source set (or Kotest/MockK).
  */
 @Tag("native")
 class GitBundleDrNativeTest {

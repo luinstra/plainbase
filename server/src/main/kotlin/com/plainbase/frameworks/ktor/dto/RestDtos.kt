@@ -33,6 +33,9 @@ val RestJson: Json = Json {
 
 /** The frozen error-code vocabulary (§A4, append-only). */
 object ErrorCodes {
+    /** 503: admission is closed while the server drains its admitted call jobs. */
+    const val SERVER_SHUTTING_DOWN: String = "server_shutting_down"
+
     /** 404: a canonical-shape-valid id (any version) absent from the index, or an unknown by-path. */
     const val PAGE_NOT_FOUND: String = "page_not_found"
 
@@ -95,6 +98,9 @@ object ErrorCodes {
 
     /** 413: a request body exceeding the configured PB-WRITE-1 max body size (the body carries the authoritative max_bytes). */
     const val BODY_TOO_LARGE: String = "body_too_large"
+
+    /** 400: the request body ended before its declared Content-Length. */
+    const val INVALID_REQUEST_BODY: String = "invalid_request_body"
 
     /** 415: a PUT without the accepted text/markdown media type. */
     const val UNSUPPORTED_MEDIA_TYPE: String = "unsupported_media_type"

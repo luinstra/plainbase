@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
@@ -11,11 +12,18 @@ import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.frameworks.config.AuthConfig
+import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.runtime.HistoryProviders
+import com.plainbase.frameworks.runtime.ObservedIndexRuntime
+import com.plainbase.frameworks.runtime.RootStores
+import com.plainbase.frameworks.runtime.ServingRuntime
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
+import com.plainbase.frameworks.security.ProxyCsrf
 import io.ktor.client.HttpClient
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
@@ -37,8 +45,7 @@ class RestHarness(
     root: Path,
     seed: (IdMapRepository) -> Unit = {},
     private val history: HistoryProvider = NoOpHistoryProvider,
-    private val builtinAuthEnabled: Boolean = true,
-    private val proxyAuthEnabled: Boolean = false,
+    private val authMode: AuthMode = AuthMode.BUILTIN,
     private val proxySecret: String? = null,
 ) : AutoCloseable {
 
@@ -99,8 +106,7 @@ class RestHarness(
         services = harness.testRouteContext(
             searchProvider = searchProvider,
             history = history,
-            builtinAuthEnabled = builtinAuthEnabled,
-            proxyAuthEnabled = proxyAuthEnabled,
+            authMode = authMode,
             proxySecret = proxySecret,
         )
     }
@@ -146,21 +152,22 @@ fun IndexHarness.testRouteContext(
     history: HistoryProvider = NoOpHistoryProvider,
     /** The PER-ROOT providers, when a test needs roots whose history differs (C4); defaults to main-only. */
     historiesByRoot: ((com.plainbase.domain.root.RootName) -> HistoryProvider)? = null,
-    idProvider: com.plainbase.domain.service.IdProvider = UuidV7IdProvider(),
+    idProvider: com.plainbase.domain.service.IdProvider = identityProvider,
     enforced: Boolean = false,
+    authMode: AuthMode = AuthMode.BUILTIN,
     trustedProxyCidrs: List<String> = emptyList(),
-    builtinAuthEnabled: Boolean = true,
-    proxyAuthEnabled: Boolean = false,
     proxySecret: String? = null,
     proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
     secureCookie: Boolean = false,
-    proxyCsrf: com.plainbase.frameworks.security.ProxyCsrf = com.plainbase.frameworks.security.ProxyCsrf(ByteArray(32) { 7 }),
+    proxyCsrf: ProxyCsrf = ProxyCsrf(ByteArray(32) { 7 }),
+    mcpAllowedHosts: List<String> = listOf("127.0.0.1", "localhost"),
+    mcpAllowedOrigins: List<String> = listOf("http://127.0.0.1", "http://localhost"),
     // P5: a defaulted glob list the enforced-mode tests set non-empty (the production wiring threads
-    // config.agentDirectCommitGlobs()); forwarded into buildRouteContext so the harness can exercise the gate.
+    // config.agentDirectCommitGlobs()); forwarded into buildGuardedApplication so the harness can exercise the gate.
     agentDirectCommitGlobs: List<com.plainbase.domain.service.CommitGlob> = emptyList(),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
     /** The watch-coverage holder `/healthz` reads. Defaults to all-whole: a harness with no watcher degrades nothing. */
-    convergence: com.plainbase.domain.root.RootConvergence = com.plainbase.domain.root.RootConvergence(),
+    convergence: com.plainbase.domain.root.RootConvergence = this.convergence,
     /**
      * The id->root resolver (C4). Defaults to the real one over the harness idMap; a window test injects a
      * PageRootResolver over an [AmbiguousIdMap] FAKE to pose the Ambiguous arm / a cross-root move it cannot make real.
@@ -182,11 +189,16 @@ fun IndexHarness.testRouteContext(
         enforced = enforced,
         editableOf = { rootRegistry.byName(it)?.editable == true },
     )
-    // Every root the harness registers resolves to its own store; history is main's provider for main, no-op
-    // elsewhere (an extra root with no declared history records nothing, exactly as production wires it) - unless
-    // the test declares the whole per-root map itself.
-    val histories: (com.plainbase.domain.root.RootName) -> HistoryProvider =
+    // Only roots backed by the builder's actual source subset enter the view; history overrides remain per-root.
+    val historiesByName: (RootName) -> HistoryProvider =
         historiesByRoot ?: { if (it == rootRegistry.primary.name) history else NoOpHistoryProvider }
+    val sourceByRoot = actualSources.associateBy { it.root.name }
+    val rootStores = RootStores(
+        rootRegistry.roots.mapNotNull { root -> sourceByRoot[root.name]?.let { root.name to it.store } }.toMap(),
+    )
+    val historyProviders = HistoryProviders(
+        rootRegistry.roots.mapNotNull { root -> sourceByRoot[root.name]?.let { root.name to historiesByName(root.name) } }.toMap(),
+    )
     val proposalReader =
         com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, stores = stores, absence = absence)
     val proposalService = com.plainbase.domain.service.ProposalService(
@@ -197,38 +209,64 @@ fun IndexHarness.testRouteContext(
         clock = Clock.System,
         rootStatus = { root -> resolver.statusOf(root, availability.current()) },
     )
-    return buildRouteContext(
-        policy = policy,
-        indexBuilder = builder,
-        pageService = PageService(builder, registry, CitationFactory()),
-        searchService = SearchService(provider = searchProvider, indexBuilder = builder, availability = availability),
-        aliasRegistry = registry,
+    val pageService = PageService(builder, registry, CitationFactory())
+    val searchService = SearchService(provider = searchProvider, indexBuilder = builder, availability = availability)
+    val proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository)
+    val auth = authServices(policy)
+    val serving = ServingRuntime(
+        index = ObservedIndexRuntime(
+            builder = builder,
+            registry = rootRegistry,
+            stores = rootStores,
+            histories = historyProviders,
+            availability = availability,
+            convergence = convergence,
+            limbo = limbo,
+            epochs = epochs,
+            bindings = bindings,
+            identity = identity,
+            idProvider = idProvider,
+            aliasRegistry = registry,
+        ),
+        pageService = pageService,
+        searchService = searchService,
         writePipeline = writePipeline,
-        registry = rootRegistry,
-        availability = availability,
-        convergence = convergence,
-        limbo = limbo,
         resolver = resolver,
         absence = absence,
-        stores = stores,
-        histories = histories,
-        idProvider = idProvider,
         proposalService = proposalService,
-        proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository),
-        tokens = apiTokens,
-        auth = authServices(policy),
-        trustedProxyCidrs = trustedProxyCidrs,
-        maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
-        maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
-        builtinAuthEnabled = builtinAuthEnabled,
-        proxyAuthEnabled = proxyAuthEnabled,
-        proxySecret = proxySecret,
-        proxyIdentityHeader = proxyIdentityHeader,
-        secureCookie = secureCookie,
-        proxyCsrf = proxyCsrf,
+        proposalLabeler = proposalLabeler,
         agentDirectCommitGlobs = agentDirectCommitGlobs,
-        extract = extract,
     )
+    val config = PlainbaseConfig(
+        contentDir = java.nio.file.Path.of("."),
+        dataDir = java.nio.file.Path.of("."),
+        host = "127.0.0.1",
+        port = 8080,
+        auth = AuthConfig(
+            mode = authMode,
+            trustedProxyCidrs = trustedProxyCidrs,
+            proxySecret = proxySecret,
+            proxyIdentityHeader = proxyIdentityHeader,
+        ),
+    )
+    val context = buildGuardedApplication(
+        serving = serving,
+        security = securityAssembly(
+            config = config,
+            policy = policy,
+            tokens = apiTokens,
+            auth = auth,
+            proxyCsrf = proxyCsrf,
+        ),
+        transport = TransportSettings(
+            maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+            maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+            mcpAllowedHosts = mcpAllowedHosts,
+            mcpAllowedOrigins = mcpAllowedOrigins,
+            secureCookie = secureCookie,
+        ),
+    )
+    return extract?.let(context::withExtract) ?: context
 }
 
 /** Builds the A4a [AuthServices] over the harness's in-memory repos, sharing [policy] for the admin checkManage. */

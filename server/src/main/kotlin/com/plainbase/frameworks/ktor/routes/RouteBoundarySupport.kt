@@ -8,6 +8,7 @@ import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.RestJson
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
 import io.ktor.http.charset
@@ -19,6 +20,7 @@ import io.ktor.server.request.uri
 import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
+import io.ktor.util.AttributeKey
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readRemaining
 import kotlinx.io.Buffer
@@ -31,12 +33,20 @@ import kotlinx.io.readByteArray
  * authority. Shared by the PB-WRITE-1 PUT (raw save) and POST (create) routes.
  */
 internal suspend fun ApplicationCall.receiveBodyCapped(limit: Long): ByteArray? {
+    attributes.getOrNull(RECEIVE_BODY_ENTRY_OBSERVER)?.invoke(this)
     val channel: ByteReadChannel = receiveChannel()
+    val declaredLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+    return readBodyCapped(channel, limit, declaredLength)
+}
+
+internal class ShortRequestBodyException(message: String) : RuntimeException(message)
+
+internal suspend fun readBodyCapped(channel: ByteReadChannel, limit: Long, declaredLength: Long?): ByteArray? {
     val out = Buffer()
     var count = 0L
     while (!channel.isClosedForRead) {
         // Read at most one chunk PAST the limit so an over-cap body aborts before the whole thing is
-        // buffered; Content-Length is never consulted (it can lie).
+        // buffered; Content-Length is not trusted for the cap because it can lie.
         val chunk = channel.readRemaining(BODY_READ_CHUNK).readByteArray()
         count += chunk.size
         if (count > limit) {
@@ -45,8 +55,18 @@ internal suspend fun ApplicationCall.receiveBodyCapped(limit: Long): ByteArray? 
         }
         out.write(chunk)
     }
+    // A shorter body is a canceled/truncated request, not an empty document. The streamed count remains authoritative
+    // for the cap; the declared length is used only to reject a premature HTTP message end before any delegate runs.
+    if (declaredLength != null && count < declaredLength) {
+        val failure = ShortRequestBodyException("request body ended before Content-Length ($count/$declaredLength bytes)")
+        channel.cancel(failure)
+        throw failure
+    }
     return out.readByteArray()
 }
+
+internal val RECEIVE_BODY_ENTRY_OBSERVER: AttributeKey<(ApplicationCall) -> Unit> =
+    AttributeKey("plainbase.receive-body-entry-observer")
 
 /** The cancellation cause when the body exceeds the cap — never surfaced; the route answers 413 itself. */
 private val BodyTooLargeCancellation = kotlinx.io.IOException("PB-WRITE-1 body exceeds the configured cap")
