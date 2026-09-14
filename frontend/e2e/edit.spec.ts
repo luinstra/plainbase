@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./smoke-fixtures";
 import { gotoExpectStatus } from "./helpers";
 
 /**
@@ -6,11 +6,8 @@ import { gotoExpectStatus } from "./helpers";
  * concurrent-409 `content_changed` path, both end-to-end against the installed server serving
  * fixtures/demo-docs. Mirrors smoke.spec.ts (resolve an id via the by-path API, drive the SPA).
  *
- * These specs MUTATE content via PUT/POST. They run in their own Playwright PROJECT pinned to a webServer
- * with `reuseExistingServer: false` (playwright.config.ts) — so a fresh, isolated `smoke-server.mjs`
- * (serving the throwaway `.smoke-content` copy) ALWAYS boots for them and a write can never land on a
- * foreign server reused over a dev's real docs. The read-only specs keep `reuseExistingServer: !CI` for
- * fast local iteration.
+ * Each test gets a fresh fixture-owned server and content copy, so retries and repeats cannot reuse a
+ * prior metadata or content mutation.
  */
 
 const PAGE = "/docs/guides/deploy-guide";

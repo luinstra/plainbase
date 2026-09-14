@@ -35,9 +35,9 @@ group = "com.plainbase"
 version = rootProject.version
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(25)
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_21)
+        jvmTarget.set(JvmTarget.JVM_25)
     }
 }
 
@@ -196,7 +196,7 @@ dependencies {
     // needs the logback classes at compile time. Runtime allowlist unaffected (same artifact).
     testImplementation(libs.logback.classic)
 
-    // nativeTest source set: kotlin.test (+ its JUnit 5 binding), the JUnit Platform launcher/engine,
+    // nativeTest source set: kotlin.test (+ its JUnit 6 binding), the JUnit Platform launcher/engine,
     // GraalVM's native JUnit launcher, and the ktor test host ONLY - deliberately no Kotest/MockK, so
     // the native test image's classpath carries no native-hostile engine. The junit-platform pieces
     // and GraalVM launcher are explicit here because the main `test` set inherited the jupiter engine
@@ -363,8 +363,8 @@ tasks.register<Exec>("traceMcpSseMetadata") {
     description = "Run the spike under -agentlib:native-image-agent to regenerate kotlin-sdk SSE reflect metadata"
     dependsOn(tasks.named("classes"))
     val runtimeClasspath = sourceSets["main"].runtimeClasspath
-    // The native-image tracing agent ships ONLY with GraalVM; the default build toolchain is Adoptium 21 (no
-    // agent). Run under the SAME GraalVM the native image uses (GRAALVM_HOME/JAVA_HOME, toolchainDetection=false)
+    // The native-image tracing agent ships ONLY with GraalVM; a general Java 25 toolchain need not provide the
+    // agent. Run under the SAME GraalVM the native image uses (GRAALVM_HOME/JAVA_HOME, toolchainDetection=false)
     // so the traced reachability matches what nativeCompile sees.
     val graalvmHome = providers.environmentVariable("GRAALVM_HOME")
     val javaHome = providers.environmentVariable("JAVA_HOME")
@@ -411,6 +411,10 @@ graalvmNative {
             // realistic corpora; it stays overridable by a runtime -Xmx for very large trees.
             buildArgs.add("-R:MaxHeapSize=256m")
             buildArgs.add("-J-Xmx6g")
+            // Preserve the macOS 14 deployment floor on newer build hosts.
+            if (System.getProperty("os.name") == "Mac OS X") {
+                buildArgs.add("-H:NativeLinkerOption=-mmacosx-version-min=14.0")
+            }
             resources.autodetect()
         }
         named("test") {
@@ -431,7 +435,7 @@ graalvmNative {
 }
 
 // ---- Re-point the native test image at the nativeTest source set --------------------------
-// How the plugin's native test image gets its test set: GraalVM Native Build Tools 1.1.1 attaches
+// How the plugin's native test image gets its test set: GraalVM Native Build Tools attaches
 // JUnit Platform UID tracking to a JVM `Test` task (system properties
 // `junit.platform.listeners.uid.tracking.{enabled,output.dir}`); `nativeTestCompile`
 // (BuildNativeImageTask) then reads that directory via `testListDirectory` and compiles/runs
@@ -466,12 +470,10 @@ run {
     }
 
     tasks.named<BuildNativeImageTask>("nativeTestCompile") {
-        // Read the native test set from `nativeTestList` (nativeTest source set) instead of the
-        // full-suite `test` task. Replacing the plugin's classpath also removed its implicit producer
-        // edge, so retain the real ordinary test prerequisite explicitly for the plugin's captured
-        // UID-directory predicate. `testListDirectory` still selects only the nativeTest list below.
+        // The plugin captured the default JVM UID path; replace both predicates so this gate follows
+        // nativeTestList and the consumer guard can reject an empty native list.
         dependsOn(nativeTestList)
-        dependsOn(tasks.named<Test>("test"))
+        setOnlyIf { graalvmNative.testSupport.get() }
         testListDirectory.set(nativeTestListDir)
         options.get().classpath.setFrom(nativeTestSourceSet.runtimeClasspath, nativeTestSourceSet.output)
         // Anti-vacuous-green guard, on the CONSUMER side. The native image is built from EXACTLY the
@@ -497,6 +499,7 @@ run {
     }
 
     tasks.named<org.graalvm.buildtools.gradle.tasks.NativeRunTask>("nativeTest") {
+        setOnlyIf { graalvmNative.testSupport.get() }
         // The plugin adds the default JVM `test` UID directory to the test binary's runtime arguments.
         // Re-point execution too, or the correctly compiled nativeTest image runs zero selected tests.
         runtimeArgs.add(
@@ -1367,13 +1370,13 @@ val prepareGitZombieJvmPid1 = tasks.register("prepareGitZombieJvmPid1") {
         val preparation = g3zJvmPreparationDir.get().asFile
         preparation.deleteRecursively()
         preparation.mkdirs()
-        val java21 = javaToolchains.launcherFor {
-            languageVersion.set(JavaLanguageVersion.of(21))
+        val jvmLauncher = javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(25))
         }.get().executablePath.asFile.absoluteFile
-        require(java21.isFile && java21.canExecute()) { "Java21 toolchain executable is unavailable: $java21" }
+        require(jvmLauncher.isFile && jvmLauncher.canExecute()) { "JVM toolchain executable is unavailable: $jvmLauncher" }
         val orderedClasspath = g3zNativeRuntimeClasspath.asPath
         require(orderedClasspath.isNotBlank()) { "nativeTest runtime classpath is empty" }
-        preparation.resolve("java21.txt").writeText("${java21.absolutePath}\n")
+        preparation.resolve("jvm-launcher.txt").writeText("${jvmLauncher.absolutePath}\n")
         preparation.resolve("classpath.txt").writeText("$orderedClasspath\n")
         preparation.resolve("classpath.entries.txt").writeText(
             g3zNativeRuntimeClasspath.files.joinToString("\n", postfix = "\n") { it.absoluteFile.normalize().path },
@@ -1394,9 +1397,9 @@ tasks.register("gitZombieJvmPid1") {
     doLast {
         g3zRequireLinux()
         val preparation = g3zJvmPreparationDir.get().asFile
-        val java21 = File(preparation.resolve("java21.txt").readText().trim())
+        val jvmLauncher = File(preparation.resolve("jvm-launcher.txt").readText().trim())
         val orderedClasspath = preparation.resolve("classpath.txt").readText().trim()
-        require(java21.isFile && java21.canExecute()) { "prepared Java21 executable is missing: $java21" }
+        require(jvmLauncher.isFile && jvmLauncher.canExecute()) { "prepared JVM executable is missing: $jvmLauncher" }
         require(orderedClasspath.isNotBlank()) { "prepared nativeTest classpath is empty" }
 
         val runId = UUID.randomUUID().toString()
@@ -1415,7 +1418,7 @@ tasks.register("gitZombieJvmPid1") {
                     workingDirectory = working,
                     home = home,
                     tmp = tmp,
-                    executable = java21,
+                    executable = jvmLauncher,
                     executableArguments = listOf(
                         "--enable-native-access=ALL-UNNAMED",
                         "-Dplainbase.test.g3z.pid1=true",
@@ -1556,9 +1559,9 @@ tasks.register("gitZombieForcedTimeoutPid1") {
     doLast {
         g3zRequireLinux()
         val preparation = g3zJvmPreparationDir.get().asFile
-        val java21 = File(preparation.resolve("java21.txt").readText().trim())
+        val jvmLauncher = File(preparation.resolve("jvm-launcher.txt").readText().trim())
         val orderedClasspath = preparation.resolve("classpath.txt").readText().trim()
-        require(java21.isFile && java21.canExecute()) { "prepared Java21 executable is missing: $java21" }
+        require(jvmLauncher.isFile && jvmLauncher.canExecute()) { "prepared JVM executable is missing: $jvmLauncher" }
         require(orderedClasspath.isNotBlank()) { "prepared nativeTest classpath is empty" }
         val runId = UUID.randomUUID().toString()
         val report = layout.buildDirectory.dir("reports/g3z/forced/$runId").get().asFile
@@ -1576,7 +1579,7 @@ tasks.register("gitZombieForcedTimeoutPid1") {
                     workingDirectory = working,
                     home = home,
                     tmp = tmp,
-                    executable = java21,
+                    executable = jvmLauncher,
                     executableArguments = listOf(
                         "-Dplainbase.test.g3z.pid1=true",
                         "-Dplainbase.test.g3z.forced.evidence=${evidence.absolutePath}",

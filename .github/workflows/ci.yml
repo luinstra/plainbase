@@ -16,14 +16,17 @@ jobs:
       id-token: write
       statuses: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
 
-      - uses: gradle/actions/setup-gradle@v4
+      # Keep the existing Actions-cache provider instead of adopting the new commercial default.
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       - name: Build (backend + embedded frontend) and run tests
         run: ./gradlew build --console=plain
@@ -35,7 +38,7 @@ jobs:
       - name: Upload G3z JVM evidence
         id: upload_g3z_jvm_evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: g3z-jvm-evidence
           if-no-files-found: error
@@ -66,7 +69,7 @@ jobs:
         run: ./gradlew koverXmlReport --console=plain
 
       - name: Upload coverage to Coveralls
-        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           file: build/reports/kover/report.xml
@@ -77,7 +80,7 @@ jobs:
         run: ./gradlew :server:run --args="spike" --console=plain
 
       - name: Upload distribution
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: plainbase-jvm-dist
           path: server/build/distributions/
@@ -90,14 +93,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: plainbase-jvm-dist
           path: dist
@@ -125,14 +128,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: plainbase-jvm-dist
           path: dist
@@ -157,12 +160,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -206,19 +209,27 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # GraalVM from the current line (25): native-image buildtools 1.x and its
-      # reachability-metadata repository require it. Kotlin bytecode still
-      # targets 21 via the Gradle toolchain — the native binary is built FROM
-      # 21-targeted class files BY the GraalVM 25 compiler.
+      # reachability-metadata repository require it. Kotlin bytecode targets 25
+      # via the Gradle toolchain — the native binary is built FROM 25-targeted
+      # class files BY the GraalVM 25 compiler.
       - uses: graalvm/setup-graalvm@v1
         with:
+          version: "25.3.4.1"
           java-version: "25"
           distribution: graalvm-community
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Verify GraalVM CE version
+        run: |
+          java -version
+          native-image --version | grep -F 'GraalVM Runtime Environment GraalVM CE 25.3.4.1+1.1'
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       - name: Build native binary
         run: ./gradlew :server:nativeCompile --console=plain
@@ -233,7 +244,7 @@ jobs:
       - name: Upload G3z native evidence
         id: upload_g3z_native_evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: g3z-native-evidence
           if-no-files-found: error
@@ -301,36 +312,37 @@ jobs:
         run: bash scripts/ci/multi-root-smoke.sh ./server/build/native/nativeCompile/plainbase 8083
 
       - name: Upload native binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: plainbase-linux-x64
           path: server/build/native/nativeCompile/plainbase
 
   # ---- Playwright smoke (C1c): deliberately OUTSIDE `./gradlew build` (hermetic-floor rationale,
   # frontend/build.gradle.kts) and a separate job so a browser-download/flake never paints the JAR
-  # floor red. Boots ALL FOUR webServers (playwright.config.ts) — auth-off, enforced-builtin
-  # (review.spec.ts approval flow), and the two multi-root installs: both-serving, and one whose
-  # extra root's path is gone (the 503/outage surfaces) — and carries the C1a CSP zero-violation
-  # gate (csp.spec.ts) into CI. ----
+  # floor red. The test-scoped fixture starts exactly one of four scenarios per attempt: auth-off,
+  # enforced-builtin (review.spec.ts approval flow), or either multi-root install. It carries the C1a CSP
+  # zero-violation gate (csp.spec.ts) into CI. ----
   frontend-smoke:
     name: Playwright smoke (open + enforced-builtin + multi-root, CSP gate)
     runs-on: ubuntu-latest
     needs: build-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       # Keyed on the lockfile: the browser revision is a function of the pinned @playwright/test
       # version. The task's own ensure-chromium.mjs sees the browser present on a warm cache and
       # skips the installer spawn entirely.
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ hashFiles('frontend/package-lock.json') }}
@@ -341,10 +353,19 @@ jobs:
       # pinning npx to the package.json version guarantees the SAME browser build the tests expect.
       # The tests themselves still run under the Gradle-managed hermetic node.
       - name: Install Chromium + system deps
-        run: npx --yes playwright@1.60.0 install --with-deps chromium
+        run: npx --yes playwright@1.63.0 install --with-deps chromium
 
-      - name: Playwright smoke (boots auth-off AND enforced-builtin servers)
+      - name: Playwright smoke (fixture owns a fresh server for every attempt)
         run: ./gradlew :frontend:smokeTest --console=plain
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-failure-artifacts
+          if-no-files-found: warn
+          path: |
+            frontend/test-results/
 
   # ---- The ONE required status check on `main`.
   #
@@ -371,7 +392,7 @@ jobs:
       - frontend-smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The gate's own completeness check. Routing every job through one gate moves the coupling
       # into this file rather than deleting it: forget a `needs` entry and that job quietly stops

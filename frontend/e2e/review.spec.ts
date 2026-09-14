@@ -1,14 +1,8 @@
-import { expect, test } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { AUTH_PORT } from "../playwright.config";
+import { expect, test } from "./smoke-fixtures";
 import { gotoExpectStatus } from "./helpers";
 
 /**
- * P4 review-queue E2E against the REAL server in ENFORCED builtin mode (the ci-runs-auth-off-blind lesson).
- * This spec runs in the "auth" Playwright project, bound to the seeded builtin server (playwright.config.ts);
- * `smoke-server.mjs` mints a bootstrap + agent token into `.smoke-data-<AUTH_PORT>/seed.json` BEFORE serving.
+ * P4 review-queue E2E against a fresh REAL server in ENFORCED builtin mode.
  *
  * One end-to-end flow (the bootstrap token is single-use, so the whole flow shares one login):
  *  1. consume the bootstrap → the first ADMIN, logged into the browser context.
@@ -17,14 +11,10 @@ import { gotoExpectStatus } from "./helpers";
  *  4. drift a second proposal's page out-of-band → its detail shows the banner and approve is disabled.
  */
 
-const seedPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", `.smoke-data-${AUTH_PORT}`, "seed.json");
-
-function seed(): { setupToken: string; agentToken: string } {
-  return JSON.parse(readFileSync(seedPath, "utf8"));
-}
-
-test("agent proposes → reviewer approves → applied; a drifted proposal blocks approval", async ({ page, request }) => {
-  const { setupToken, agentToken } = seed();
+test("agent proposes → reviewer approves → applied; a drifted proposal blocks approval", async ({ page, request, smokeServer }) => {
+  const seed = smokeServer.seed;
+  if (!seed) throw new Error("auth smoke server did not provide credentials");
+  const { setupToken, agentToken } = seed;
   const agentAuth = { Authorization: `Bearer ${agentToken}` };
   const stamp = Date.now();
 

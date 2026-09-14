@@ -32,13 +32,18 @@ Filesystem-native, agent-native internal docs product. Master plan:
 
 - `./gradlew build` = JAR floor: compile, tests, lintKotlin, dependency allowlist.
 - `./gradlew :server:nativeCompile` then `server/build/native/nativeCompile/plainbase spike`
-  = the native gate (9/9 required). GraalVM comes from asdf (`.tool-versions`).
+  = the native gate (9/9 required). It requires GraalVM CE 25.3.4.1 / JDK 25.0.4.1 on
+  `JAVA_HOME`/`GRAALVM_HOME`; the application toolchain remains Java 25.
+- Local native verification uses the official `graal-25.3.4.1` archive; CI uses
+  `setup-graalvm` with `version: 25.3.4.1` and `java-version: 25`. The asdf 25.0.2 entry is
+  a JVM-only fallback and is unsupported for this native gate.
 - CI mirrors both; the universal JAR is the release floor — native failures block the
   native artifact only.
 - **Native-tag by default on divergence surfaces:** tests exercising NIO edge behavior, process
   execution (`GitExecutor`), the xerial JDBC/JNI seam, charset/Unicode decoding, or SecureRandom/
   crypto get `@Tag("native")` (kotlin.test dialect) so they run under the native image — pure
   domain-logic tests stay Kotest/JVM-only. Surface coverage, not line coverage; keep nativeTest lean.
+- Keep `#` out of backtick test method names: JUnit 6 native unique-ID parsing treats it as a class separator.
 
 ### Frontend tests — always go through Gradle, never raw `vitest`/`playwright`
 

@@ -39,7 +39,9 @@ files.
 
 Grab a binary from the [latest release](https://github.com/luinstra/plainbase/releases/latest)
 (`linux-x64`, `linux-arm64`, `macos-arm64`, or the universal JAR for supported
-Linux/macOS environments with Java 21+):
+Linux/macOS environments with Java 25+):
+
+The universal JAR requires a Java 25+ runtime; users on Java 21–24 must upgrade.
 
 ```sh
 curl -L -o plainbase https://github.com/luinstra/plainbase/releases/latest/download/plainbase-macos-arm64

@@ -1,1 +1,2 @@
+# JVM-only fallback: asdf has no graalvm-community-25.3.4.1 release; unsupported for the native gate.
 java graalvm-community-25.0.2

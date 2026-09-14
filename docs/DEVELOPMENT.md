@@ -11,16 +11,16 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md).
 ./gradlew :server:run --args=serve       # run the server on the JVM
 ./gradlew :server:run --args=spike       # full-stack native dependency spike (JVM)
 ./gradlew :server:run --args="root list" # the topology CLI: root add|remove|list (docs/configuration.md)
-./gradlew :server:nativeCompile          # native binary (requires GraalVM 25+ on JAVA_HOME/GRAALVM_HOME)
+./gradlew :server:nativeCompile          # native binary (requires CE 25.3.4.1 / JDK 25.0.4.1 on JAVA_HOME/GRAALVM_HOME)
 ```
 
-Requirements: JDK 21+ (the build auto-provisions the 21 toolchain for
+Requirements: JDK 25+ (the build auto-provisions the 25 toolchain for
 bytecode). Node is downloaded by the Gradle build - no local install needed.
 
 The Linux-only PID1 regression gates are separate from ordinary test discovery:
 
 ```sh
-./gradlew :server:gitZombieJvmPid1       # Java 21 JVM launcher
+./gradlew :server:gitZombieJvmPid1       # Java 25 JVM launcher
 ./gradlew :server:gitZombieNativePid1    # GraalVM nativeTestCompile executable
 ./gradlew :server:gitZombieForcedTimeoutPid1
 ```
@@ -31,21 +31,35 @@ They require Linux permissions/capabilities to create the privileged PID, mount,
 the launcher. Separately, they require noninteractive `sudo -n` and trusted executable `sudo`; `unshare` and
 `setpriv` are from util-linux, while `timeout` and `id` are from coreutils, all in `/usr/bin` or `/bin`. No
 separate `kill` helper is a prerequisite. The fixtures also require executable `/bin/sh` and `sleep` with
-fractional-second support on `PATH`. The JVM gate uses Java 21; the native gate uses the
-pinned GraalVM toolchain below. CI gives its JVM and native PID1 steps a five-minute ceiling. Run reports and retained
+fractional-second support on `PATH`. The JVM gate uses Java 25; the native gate uses the
+documented GraalVM toolchain below. CI gives its JVM and native PID1 steps a five-minute ceiling. Run reports and retained
 evidence are under `server/build/reports/g3z/jvm/<run-id>/`, `server/build/reports/g3z/native/<run-id>/`, or
 `server/build/reports/g3z/forced/<run-id>/`,
 with preparation/staging material under `server/build/g3z/`. On non-Linux hosts, ordinary test discovery may
 report a topology-required skip/abort, but that is distinct from the required one-body PID1 successes.
 
-For native builds, the repo pins GraalVM via [asdf](https://asdf-vm.com/) -
-`.tool-versions` selects `graalvm-community-25.0.2`, so inside the repo
-`java` and `native-image` resolve to the same GraalVM the CI native gate
-uses:
+For native builds, use GraalVM CE 25.3.4.1 (JDK 25.0.4.1) from the
+[official release archive](https://github.com/graalvm/graalvm-ce-builds/releases/tag/graal-25.3.4.1).
+Set both `JAVA_HOME` and `GRAALVM_HOME` to the extracted `Contents/Home` (macOS) or
+`bin` parent (Linux) before running the native gate. CI uses
+`graalvm/setup-graalvm` with `version: 25.3.4.1` and `java-version: 25`.
+
+`.tool-versions` retains `graalvm-community-25.0.2` only as a JVM-only asdf fallback:
+it is explicitly unsupported for the updated native gate.
 
 ```sh
-asdf install        # one-time: installs the pinned GraalVM
+export JAVA_HOME=/path/to/graalvm-community-25.3.4.1+1.1/Contents/Home
+# Linux: use the extracted archive directory directly, for example:
+# export JAVA_HOME=/path/to/graalvm-community-25.3.4.1+1.1
+export GRAALVM_HOME="$JAVA_HOME"
+export PATH="$JAVA_HOME/bin:$PATH"
+java -version
+native-image --version
 ```
+
+The macOS release binary targets macOS 14.0 even though its release job runs on `macos-26`.
+The workflow checks the emitted Mach-O `minos` header with `otool`; that validates deployment
+metadata only and is not evidence that the binary ran on macOS 14.
 
 ## What CI checks
 
@@ -62,10 +76,12 @@ Five jobs gate `main` (`.github/workflows/ci.yml`):
 - **`native-gate` (linux-x64)** - `nativeCompile` → `nativeTest` → the positive `gitZombieNativePid1`
   control → the spike (9/9) → the enforced-auth smoke again, against the native binary → the native-startup
   regression tripwire.
-- **`frontend-smoke`** - Playwright, booting both an auth-off and an enforced-builtin server;
+- **`frontend-smoke`** - Playwright, with a fresh scenario server per test attempt;
   carries the CSP zero-violation gate (`csp.spec.ts`) and the enforced-builtin approval flow
   (`review.spec.ts`). Deliberately outside `./gradlew build` - a browser-download flake must never
   paint the JAR floor red.
+
+Focused smoke runs accept `-PsmokeArgs` as whitespace-separated tokens; arguments containing spaces are not preserved as one token.
 
 Release builds (`.github/workflows/release.yml`) produce the universal JAR
 plus three native binaries: linux-x64, linux-arm64, and macos-arm64.

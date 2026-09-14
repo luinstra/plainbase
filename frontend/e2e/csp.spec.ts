@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./smoke-fixtures";
 import { gotoExpectStatus } from "./helpers";
 
 /**
@@ -9,9 +9,7 @@ import { gotoExpectStatus } from "./helpers";
  * (`dangerouslySetInnerHTML`), an external `https:` markdown image (`img-src … https:`), and the History
  * diff (hljs `dangerouslySetInnerHTML`) all load.
  *
- * Isolation: uses the `scratch/` docs no mutating spec owns (edit.spec.ts owns deploy-guide; history.spec.ts
- * owns getting-started). The read-only legs use `/docs/scratch/todo`; the diff leg (the one place a Save is
- * required) is isolated to `/docs/scratch/ideas`.
+ * Each test attempt owns a fresh Git-enabled content copy.
  */
 
 type Violation = { violatedDirective: string; blockedURI: string };
@@ -65,7 +63,7 @@ test("editor + Prose + an external https image render under the real CSP with no
 test("the History diff renders under the real CSP with no violation", async ({ page }) => {
   await captureViolations(page);
 
-  // Two commits on an isolated page — the .smoke-content repo is git-init'd with no seed, so each save commits.
+  // Two commits on an isolated page — each save commits in the fresh Git repository.
   await makeCommit(page, "/docs/scratch/ideas", `csp diff one ${Date.now()}`);
   await makeCommit(page, "/docs/scratch/ideas", `csp diff two ${Date.now()}`);
 

@@ -1,12 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./smoke-fixtures";
 import { gotoExpectStatus, selectSidebarRoot } from "./helpers";
 
 /**
- * A configured root that is NOT SERVING, against a real server booted with its second root's tree
- * absent (playwright.config.ts `multi-root-unavailable` project: SMOKE_ROOTS=multi-missing).
+ * A configured root that is NOT SERVING, against a real server booted with its second root's tree absent.
  *
- * A separate SERVER, not a separate page state: availability is decided at boot and is sticky until
- * restart, so this shape cannot be reached from the both-serving one.
+ * Root availability is decided at boot and is sticky until restart, so this scenario has its own server.
  *
  * The server EMPTIES a down root's subtree rather than serving a stale listing, so the thing under
  * test is that the SPA says so. An empty list would tell the reader their docs are gone.
