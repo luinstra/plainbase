@@ -18,15 +18,14 @@ import com.plainbase.frameworks.lifecycle.OfflineStoreResources
 import com.plainbase.frameworks.runtime.ContentRepositories
 import com.plainbase.frameworks.runtime.IndexRuntimeFactory
 import com.plainbase.frameworks.runtime.IndexSupport
-import com.plainbase.frameworks.runtime.LocalStoreInputs
 import com.plainbase.frameworks.runtime.OfflineStoreOperations
 import com.plainbase.frameworks.runtime.RootStoreFactory
 import com.plainbase.frameworks.runtime.RootStores
+import com.plainbase.frameworks.runtime.offlineLocalStoreInputs
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.github.oshai.kotlinlogging.KotlinLogging
-import java.nio.file.Path
 
 /**
  * `plainbase reindex` - the OFFLINE/ops full-search-rebuild path. It runs the
@@ -216,7 +215,7 @@ object ReindexCommand {
             decorate(
                 root.name,
                 operations.openLocal(
-                    localInputs(
+                    offlineLocalStoreInputs(
                         config,
                         requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
                         root.name,
@@ -236,7 +235,7 @@ object ReindexCommand {
     ): ContentStore = RootStoreFactory.primary(
         backend = config.storage.backend,
         local = {
-            operations.openLocal(localInputs(config, config.mainContentRoot(), registry.primary.name))
+            operations.openLocal(offlineLocalStoreInputs(config, config.mainContentRoot(), registry.primary.name))
         },
         objectStore = {
             val store = resources.ownObject(
@@ -254,16 +253,6 @@ object ReindexCommand {
             store
         },
     )
-
-    private fun localInputs(config: PlainbaseConfig, root: Path, name: RootName): LocalStoreInputs =
-        LocalStoreInputs(
-            root = root,
-            ignoreRules = IgnoreRules(),
-            exclusions = listOf(config.dataDir), // DATA_DIR is state, not corpus.
-            rootName = name,
-            onRootUnavailable = {},
-            onIdentityRebind = {},
-        )
 
     /**
      * The PREFLIGHT: reports and refuses the run up front unless EVERY configured root is there. The search rebuild

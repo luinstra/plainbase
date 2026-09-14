@@ -16,10 +16,11 @@ import com.plainbase.frameworks.runtime.RootStores
 import org.koin.dsl.module
 
 /**
- * Wires the chunk-5 index pass. Constructor DSL only — no reflection (native-image gate).
+ * Lazily wires shared index recipes and aliases the observed builder. Constructor DSL only — no reflection
+ * (native-image gate).
  *
- * The runtime factory owns the typed source and holder assembly; Koin keeps the individual shared
- * recipes lazy and aliases the resulting builder without introducing a second graph.
+ * The runtime factory owns typed source and holder assembly; Koin aliases the resulting builder without a second
+ * graph.
  */
 val indexModule = module {
     single<FrontmatterParser> { IndexRuntimeFactory.frontmatterParser() }

@@ -1,22 +1,13 @@
 package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 
-/**
- * The ONE construction recipe for the object-backend hybrid, shared by `createContentModule` and the
- * offline CLIs (`adopt`/`reindex`) so the three build it one way, never three: the SigV4 client from
- * `storage.object.*`, the inner mirror over `DATA_DIR/mirror` (app-owned derived state, Q10), and
- * the etag map at `DATA_DIR/mirror-state` (M1).
- *
- * Callers construct this ONLY on the object path (Koin laziness / the CLI backend switch), so a
- * local boot never runs it (R9).
- */
+/** Assembles the configured object client, mirror, and mirror state. */
 @Suppress("TooGenericExceptionCaught")
 object ObjectContentStoreFactory {
 
@@ -24,14 +15,8 @@ object ObjectContentStoreFactory {
         config: PlainbaseConfig,
         ignoreRules: IgnoreRules,
         dirtyPaths: () -> Set<TreePath>,
-        // MINOR-1: an indexed per-path dirty check for the poll hot-path guard; defaults to membership in
-        // [dirtyPaths] so a caller that has no cheaper query (a CLI over a tiny journal) need not wire one.
-        isDirty: (TreePath) -> Boolean = { it in dirtyPaths() },
-        // C3: the pagination boundary, read fresh before each LIST - the root's durable bindings AND its binding_epoch,
-        // co-read (revoke-before-stamp, C5). Defaulted to NONE - a store built with no durable index behind it publishes
-        // generations that cover nothing, so it can prove nothing gone. That is the right authority for the offline
-        // CLIs, which reap on nobody's inference (they wire no proof source at all).
-        rowsAtStart: () -> RowsAtStart = { RowsAtStart(emptySet(), BindingEpoch(0)) },
+        isDirty: (TreePath) -> Boolean,
+        rowsAtStart: () -> RowsAtStart,
     ): ObjectContentStore = buildWithClient(
         config = config,
         ignoreRules = ignoreRules,

@@ -54,9 +54,7 @@ internal fun createRestModule(
         val index = get<ObservedIndexRuntime>()
         SearchService(provider = get(), indexBuilder = index.builder, availability = index.availability)
     }
-    // The ONE owner of the id->root and root->status questions. EXACTLY two deps: both snapshots arrive as call
-    // PARAMETERS, which is what keeps it stateless and holder-free (and therefore safe to reach from the domain
-    // proposal service through a lambda).
+    // Page-root resolver; root status is evaluated from request-time snapshots.
     single {
         val index = get<ObservedIndexRuntime>()
         PageRootResolver(get<IdMapRepository>(), index.registry)

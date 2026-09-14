@@ -2,6 +2,7 @@ package com.plainbase.frameworks.runtime
 
 import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.IgnoreRules
@@ -10,6 +11,17 @@ import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import java.nio.file.Path
+
+/** Builds local-store inputs for offline commands with inert callbacks. */
+internal fun offlineLocalStoreInputs(config: PlainbaseConfig, root: Path, name: RootName): LocalStoreInputs =
+    LocalStoreInputs(
+        root = root,
+        ignoreRules = IgnoreRules(),
+        exclusions = listOf(config.dataDir), // DATA_DIR is state, not corpus.
+        rootName = name,
+        onRootUnavailable = {},
+        onIdentityRebind = {},
+    )
 
 /** Typed constructor operations shared by the two offline commands and their resource-observing fixtures. */
 internal class OfflineStoreOperations(

@@ -24,17 +24,17 @@ import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.lifecycle.OfflineStoreResources
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.runtime.ContentRepositories
-import com.plainbase.frameworks.runtime.LocalStoreInputs
 import com.plainbase.frameworks.runtime.OfflineStoreOperations
 import com.plainbase.frameworks.runtime.RootStoreFactory
 import com.plainbase.frameworks.runtime.RootStores
+import com.plainbase.frameworks.runtime.offlineLocalStoreInputs
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.nio.file.Path
 import kotlin.time.Clock
 
 /**
- * `plainbase adopt [--write-ids [--dry-run]]` - the chunk 4b adoption CLI.
+ * `plainbase adopt [--write-ids [--dry-run]]` - the adoption CLI.
  *
  * **It covers EVERY configured root, and refuses to run unless it can see all of them.** Adoption is what moves a
  * page's identity OUT of `DATA_DIR` and into the page itself, so a root it skips is a root whose permalinks and
@@ -58,7 +58,7 @@ import kotlin.time.Clock
  *
  * Reports use the deterministic result channel and refusals use the deterministic error channel. Pre-write
  * intent is a separate checked event channel, synchronously flushed BEFORE each file write so an interrupted
- * run is reconcilable. Unexpected failures preserve their throwable through the logging facade.
+ * run is reconcilable.
  */
 object AdoptCommand {
     private val logger = KotlinLogging.logger {}
@@ -140,10 +140,10 @@ object AdoptCommand {
         val rawPrimary = RootStoreFactory.primary(
             backend = config.storage.backend,
             local = {
-                operations.openLocal(localInputs(config, config.mainContentRoot(), registry.primary.name))
+                operations.openLocal(offlineLocalStoreInputs(config, config.mainContentRoot(), registry.primary.name))
             },
             objectStore = {
-                val raw = resources.ownObject(
+                resources.ownObject(
                     operations.openObject(
                         config,
                         IgnoreRules(),
@@ -153,14 +153,13 @@ object AdoptCommand {
                         { RowsAtStart(emptySet(), BindingEpoch(0)) },
                     ),
                 )
-                raw
             },
         )
         val objectStore = rawPrimary as? ObjectContentStore
         val primary = decorate(registry.primary.name, rawPrimary)
         val stores = RootStoreFactory.roots(registry, primary) { root ->
             val path = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" }
-            decorate(root.name, operations.openLocal(localInputs(config, path, root.name)))
+            decorate(root.name, operations.openLocal(offlineLocalStoreInputs(config, path, root.name)))
         }
         if (mode != AdoptionPass.Mode.PREVIEW) {
             // Mutating hydration runs after lock acquisition; PREVIEW never reaches this branch.
@@ -327,16 +326,6 @@ object AdoptCommand {
     }
 
     private class CommandEventPublicationFailed(cause: Exception) : RuntimeException(cause)
-
-    private fun localInputs(config: PlainbaseConfig, root: Path, name: RootName): LocalStoreInputs =
-        LocalStoreInputs(
-            root = root,
-            ignoreRules = IgnoreRules(),
-            exclusions = listOf(config.dataDir), // DATA_DIR is state, not corpus.
-            rootName = name,
-            onRootUnavailable = {},
-            onIdentityRebind = {},
-        )
 
     /** The tree a root's pass actually walked: its own directory locally, the DATA_DIR mirror for an object main. */
     private fun adoptedTree(config: PlainbaseConfig, registry: RootRegistry, root: RootName): Path =
