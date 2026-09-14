@@ -22,7 +22,9 @@ import com.plainbase.frameworks.ktor.GuardedAdminFacade
 import com.plainbase.frameworks.ktor.IndexProposalBaseReader
 import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
-import com.plainbase.frameworks.ktor.buildRouteContext
+import com.plainbase.frameworks.ktor.buildGuardedApplication
+import com.plainbase.frameworks.ktor.securityAssembly
+import com.plainbase.frameworks.ktor.transportSettings
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.ServingRuntime
@@ -152,9 +154,7 @@ internal fun createRestModule(
             rootStatus = { root -> get<PageRootResolver>().statusOf(root, index.availability.current()) },
         )
     }
-    // P1b: the GuardedProposalFacade is no longer a standalone single — it needs the guarded MutatingFacade (built
-    // inside buildRouteContext) for the apply-on-approve content write, so it is assembled there with `mutate` in
-    // scope (RouteContextFactory option (b)). RestModule passes the raw ProposalService + the labeler in.
+    // P1b: the GuardedProposalFacade is assembled with the guarded MutatingFacade at the application boundary.
     // The A4b proxy-CSRF server key is SecureRandom-generated + persisted in app_meta on first boot (so issued tokens
     // survive a restart). The single is resolved INSIDE the DataDirLock region (serve() touches it before starting
     // KtorServer), so two processes never race a double-generate. The key bytes never log.
@@ -179,40 +179,18 @@ internal fun createRestModule(
                     agentDirectCommitGlobs = config.agentDirectCommitGlobs(),
                 )
                 onServingRuntimeCollected(serving)
-                buildRouteContext(
+                val security = securityAssembly(
+                    config = config,
                     policy = get(),
-                    indexBuilder = serving.index.builder,
-                    pageService = serving.pageService,
-                    searchService = serving.searchService,
-                    aliasRegistry = serving.index.aliasRegistry,
-                    writePipeline = serving.writePipeline,
-                    registry = serving.index.registry,
-                    availability = serving.index.availability,
-                    convergence = serving.index.convergence,
-                    limbo = serving.index.limbo,
-                    resolver = serving.resolver,
-                    absence = serving.absence,
-                    stores = serving.index.stores::get,
-                    histories = serving.index.histories::get,
-                    idProvider = serving.index.idProvider,
-                    proposalService = serving.proposalService,
-                    proposalLabeler = serving.proposalLabeler,
                     tokens = get(),
                     auth = get(),
-                    trustedProxyCidrs = config.auth.trustedProxyCidrs,
-                    maxWriteBodyBytes = config.maxWriteBodyBytes,
-                    maxAssetBytes = config.maxAssetBytes,
-                    // P3: the fail-closed MCP DNS-rebinding allowlists (default = the configured bind host + loopback).
-                    mcpAllowedHosts = config.mcpHostAllowlist(),
-                    mcpAllowedOrigins = config.mcpOriginAllowlist(),
-                    builtinAuthEnabled = config.auth.mode == AuthMode.BUILTIN,
-                    proxyAuthEnabled = config.auth.mode == AuthMode.PROXY,
-                    proxySecret = config.auth.proxySecret,
-                    proxyIdentityHeader = config.auth.proxyIdentityHeader,
-                    secureCookie = config.secureCookie(),
                     proxyCsrf = get(),
-                    // P5: the validated agent direct-commit globs (empty ⇒ every agent write degrades to a proposal).
-                    agentDirectCommitGlobs = serving.agentDirectCommitGlobs,
+                )
+                val transport = transportSettings(config)
+                buildGuardedApplication(
+                    serving = serving,
+                    security = security,
+                    transport = transport,
                 )
             }
             afterRouteContextBuilt(context)

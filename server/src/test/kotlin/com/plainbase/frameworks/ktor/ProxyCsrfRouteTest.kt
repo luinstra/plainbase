@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.Role
+import com.plainbase.frameworks.config.AuthMode
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.HttpClient
@@ -33,7 +34,7 @@ class ProxyCsrfRouteTest : FunSpec({
 
     /** A proxy harness with `bob` granted ADMIN as a proxy identity (so token mint — a manage mutation — is allowed). */
     fun proxyTest(block: suspend ApplicationTestBuilder.(AuthRouteHarness) -> Unit) =
-        authRouteTest(enforced = true, builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = secret) { harness ->
+        authRouteTest(enforced = true, authMode = AuthMode.PROXY, proxySecret = secret) { harness ->
             harness.seedProxyRole("bob", Role.ADMIN)
             block(harness)
         }

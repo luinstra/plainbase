@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.repository.Role
+import com.plainbase.frameworks.config.AuthMode
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
@@ -20,7 +21,7 @@ class ProxyRoleDenyByDefaultTest : FunSpec({
     fun ApplicationTestBuilder.proxyHeaders() = arrayOf("X-Forwarded-User" to "bob", PROXY_SECRET_HEADER to secret)
 
     test("a proxy-Human with NO role → 403 on a gated read; after grant admin → 200") {
-        authRouteTest(enforced = true, builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = secret) { harness ->
+        authRouteTest(enforced = true, authMode = AuthMode.PROXY, proxySecret = secret) { harness ->
             // No role granted yet — the manage-gated token list denies bob (authenticated but unauthorized → 403).
             val denied = client.get("/api/v1/admin/tokens") { proxyHeaders().forEach { header(it.first, it.second) } }
             denied.status shouldBe HttpStatusCode.Forbidden
@@ -32,7 +33,7 @@ class ProxyRoleDenyByDefaultTest : FunSpec({
     }
 
     test("an anonymous proxy request (no identity header) on a gated route → 401") {
-        authRouteTest(enforced = true, builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = secret) {
+        authRouteTest(enforced = true, authMode = AuthMode.PROXY, proxySecret = secret) {
             client.get("/api/v1/admin/tokens").status shouldBe HttpStatusCode.Unauthorized
         }
     }

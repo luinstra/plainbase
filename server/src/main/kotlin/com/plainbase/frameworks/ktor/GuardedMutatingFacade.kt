@@ -96,7 +96,7 @@ class GuardedMutatingFacade(
     /** The ONE owner of "is this absence a 404 or a 503?" (C1) - the same rule the read and index paths ask. */
     private val absence: AbsenceClassifier,
     // The degrade path files a proposal through the SAME guarded ProposalFacade routes use. The mutate↔proposals
-    // construction cycle is broken by a provider-lambda (RouteContextFactory's 2-phase lateinit) - invoked only at
+    // construction cycle is broken by a provider-lambda (the guarded application factory's 2-phase lateinit) - invoked only at
     // request time, never during assembly. Defaulted so the many older test constructors compile unchanged.
     private val proposals: () -> ProposalFacade = { error("ProposalFacade not wired for this GuardedMutatingFacade") },
     // The validated `agentDirectCommit` globs, each carrying the root its config key declared it under (config-parsed).
@@ -106,7 +106,7 @@ class GuardedMutatingFacade(
     // commit is git-attributed to the AGENT (author == committer), matching its agent-attributed audit row instead of
     // the server "Plainbase" identity. Defaulted null so the many older test constructors compile unchanged; the agent
     // DirectCommit path requires it (it is only ever reached with globs configured, where the production wiring + the
-    // testRouteContext harness both thread it in via buildRouteContext).
+    // testRouteContext harness both thread it in via buildGuardedApplication).
     private val proposalLabeler: ProposalAuthorLabeler? = null,
 ) : MutatingFacade {
 
@@ -309,7 +309,7 @@ class GuardedMutatingFacade(
      */
     private fun agentCommitIdentity(principal: Principal.Agent): CommitIdentity {
         val author = requireNotNull(proposalLabeler) {
-            "an agent direct commit needs the ProposalAuthorLabeler for git attribution (wire it in buildRouteContext)"
+            "an agent direct commit needs the ProposalAuthorLabeler for git attribution (wire it in buildGuardedApplication)"
         }.resolve(principal)
         return CommitIdentity(author.label, syntheticEmail(author.issuer, author.externalId))
     }

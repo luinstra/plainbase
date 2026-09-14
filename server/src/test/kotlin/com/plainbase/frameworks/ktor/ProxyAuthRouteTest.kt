@@ -1,5 +1,7 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.repository.Role
+import com.plainbase.frameworks.config.AuthMode
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
@@ -26,7 +28,7 @@ class ProxyAuthRouteTest : FunSpec({
     // case is the route-reliable one (the testApplication client coalesces duplicate request-header LINES into one
     // value, so the MULTI_VALUE verdict is proven at the pure-decision layer in ProxyIdentityExtractionTest instead).
     test("a control-char identity → 400 invalid_proxy_identity") {
-        authRouteTest(enforced = true, builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = secret) {
+        authRouteTest(enforced = true, authMode = AuthMode.PROXY, proxySecret = secret) {
             val response = client.get("/api/v1/admin/tokens") {
                 header("X-Forwarded-User", "a\tb")
                 header(secretHeader().first, secretHeader().second)
@@ -38,7 +40,7 @@ class ProxyAuthRouteTest : FunSpec({
     }
 
     test("an oversized identity → 400 invalid_proxy_identity") {
-        authRouteTest(enforced = true, builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = secret) {
+        authRouteTest(enforced = true, authMode = AuthMode.PROXY, proxySecret = secret) {
             val response = client.get("/api/v1/admin/tokens") {
                 header("X-Forwarded-User", "x".repeat(300))
                 header(secretHeader().first, secretHeader().second)
@@ -48,9 +50,20 @@ class ProxyAuthRouteTest : FunSpec({
     }
 
     test("an identity header WITHOUT the secret resolves to anonymous → 401 on a gated route (no Human conjured)") {
-        authRouteTest(enforced = true, builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = secret) {
+        authRouteTest(enforced = true, authMode = AuthMode.PROXY, proxySecret = secret) {
             client.get("/api/v1/admin/tokens") { header("X-Forwarded-User", "alice") }
                 .status shouldBe HttpStatusCode.Unauthorized
+        }
+    }
+
+    test("an alice proxy role with the WRONG secret → 401 on the protected token route") {
+        authRouteTest(enforced = true, authMode = AuthMode.PROXY, proxySecret = secret) { harness ->
+            harness.seedProxyRole("alice", Role.ADMIN)
+            val response = client.get("/api/v1/admin/tokens") {
+                header("X-Forwarded-User", "alice")
+                header(PROXY_SECRET_HEADER, "wrong-$secret")
+            }
+            response.status shouldBe HttpStatusCode.Unauthorized
         }
     }
 })

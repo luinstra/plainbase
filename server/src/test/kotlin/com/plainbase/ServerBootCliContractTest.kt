@@ -209,10 +209,13 @@ class ServerBootCliContractTest : FunSpec({
     test("healthyLocalSigterm") {
         watchdog.runCase("healthyLocalSigterm") {
             Fixture("healthy-local", watchdog).use { fixture ->
-                val result = fixture.runHealthy("healthyLocalSigterm")
+                val result = fixture.runHealthy("healthyLocalSigterm", authMode = "builtin")
                 result.healthStatus shouldBe 200
                 result.healthBody shouldContain "\"status\":\"ok\""
                 result.healthBody shouldContain "\"available\":true"
+                result.protectedPath shouldBe "/api/v1/tree"
+                result.protectedStatus shouldBe 401
+                result.protectedBody shouldContain "\"code\":\"unauthorized\""
                 result.signalExitCode shouldBe 0
                 result.exitCode shouldBe SIGTERM_EXIT_STATUS
             }
@@ -337,15 +340,25 @@ private class Fixture(
         }
     }
 
-    fun runHealthy(caseName: String): CompletedChild {
+    fun runHealthy(caseName: String, authMode: String = "off"): CompletedChild {
         val port = loopbackSocket().use { it.localPort.toString() }
-        return withChild(caseName, port, "127.0.0.1", false) { child ->
+        return withChild(
+            caseName,
+            port,
+            "127.0.0.1",
+            false,
+            extraEnvironment = mapOf("PLAINBASE_AUTH_MODE" to authMode),
+        ) { child ->
             val health = child.awaitHealth(SERVER_BOOT_DEADLINE_MILLIS)
+            val protected = if (authMode == "builtin") child.awaitProtectedTree() else null
             val signal = child.sendSigterm()
             child.awaitExit(SHUTDOWN_DEADLINE_MILLIS).copy(
                 healthStatus = health.status,
                 healthBody = health.body,
                 startupMillis = health.startupMillis,
+                protectedPath = protected?.path ?: "",
+                protectedStatus = protected?.status ?: 0,
+                protectedBody = protected?.body ?: "",
                 signalAction = signal.action,
                 signalExitCode = signal.exitCode,
             )
@@ -522,6 +535,17 @@ private class RunningChild(
             signal.inputStream.close()
             signal.errorStream.close()
         }
+    }
+
+    fun awaitProtectedTree(): ProtectedObservation {
+        val response = httpClient.send(
+            HttpRequest.newBuilder(URI("http://127.0.0.1:$port/api/v1/tree"))
+                .timeout(Duration.ofSeconds(1))
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
+        )
+        return ProtectedObservation("/api/v1/tree", response.statusCode(), response.body())
     }
 
     fun awaitExit(deadlineMillis: Long): CompletedChild {
@@ -704,6 +728,9 @@ private data class CompletedChild(
     val healthStatus: Int = 0,
     val healthBody: String = "",
     val startupMillis: Long = -1,
+    val protectedPath: String = "",
+    val protectedStatus: Int = 0,
+    val protectedBody: String = "",
     val shutdownMillis: Long = -1,
     val signalAction: String = "",
     val signalExitCode: Int = -1,
@@ -713,6 +740,8 @@ private data class CompletedChild(
 }
 
 private data class HealthObservation(val status: Int, val body: String, val startupMillis: Long)
+
+private data class ProtectedObservation(val path: String, val status: Int, val body: String)
 
 private data class SignalObservation(val action: String, val exitCode: Int)
 
@@ -875,6 +904,9 @@ private fun writeChildEvidence(
             appendLine("duration_ms=${result.durationMillis}")
             appendLine("startup_ms=${result.startupMillis}")
             appendLine("shutdown_ms=${result.shutdownMillis}")
+            appendLine("protected_path=${result.protectedPath}")
+            appendLine("protected_status=${result.protectedStatus}")
+            appendLine("protected_body=${result.protectedBody}")
             appendLine("health_status=${result.healthStatus}")
             appendLine("health_body=${result.healthBody}")
             appendLine("signal=${result.signalAction}")

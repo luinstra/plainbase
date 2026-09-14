@@ -482,7 +482,7 @@ object NativeSpike {
     /**
      * The P3 native bet: the in-binary `plainbaseMcp` mount, served over a REAL CIO server under ENFORCED auth, driven
      * by a REAL SSE MCP client. Wires the production Koin graph (config pointed at a temp tree, auth.mode=builtin so
-     * `enforced=true`, git off) so the spike exercises the SAME `buildRouteContext`/`plainbaseMcp` the server uses;
+     * `enforced=true`, git off) so the spike exercises the SAME guarded application assembly/`plainbaseMcp` the server uses;
      * mints a PROPOSE (-> EDITOR) agent token, opens an authed SSE stream, and asserts initialize + listTools(== the
      * seven) + TWO callTool round-trips (list_changes + read_page) over ONE open stream — proving keep-alive / SSE
      * flush work in the native image, not just a single round-trip. The SSE/MCP-server reflection this reaches is what

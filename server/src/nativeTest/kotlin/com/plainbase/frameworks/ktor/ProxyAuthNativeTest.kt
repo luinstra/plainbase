@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.frameworks.config.AuthMode
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -16,7 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The A4b end-to-end native gate: over `withRestServices(proxyMode = true)`, a request with the secret header + a
+ * The A4b end-to-end native gate: over `withRestServices(authMode = PROXY)`, a request with the secret header + a
  * clean `X-Forwarded-User` (the loopback peer counts as secure) resolves to a proxy-Human; `GET /api/v1/session`
  * returns 200 + a `pb_proxy_csrf` token; a proxy-Human mutation with the double-submit passes; a request with NO
  * secret → not authenticated (401 on a gated route). Proves the HMAC `Mac`, the `Source` branch, and the `app_meta`
@@ -29,7 +30,7 @@ class ProxyAuthNativeTest {
 
     @Test
     fun `proxy identity authenticates + the double-submit CSRF round-trips natively`() {
-        withRestServices(proxyMode = true, seedProxyAdmin = "alice") { services ->
+        withRestServices(authMode = AuthMode.PROXY, seedProxyAdmin = "alice") { services ->
             testApplication {
                 application { plainbaseModule(services) }
                 val client = createClient { install(HttpCookies) }
@@ -61,7 +62,7 @@ class ProxyAuthNativeTest {
 
     @Test
     fun `a request with NO secret is not authenticated (401 on a gated route)`() {
-        withRestServices(proxyMode = true, seedProxyAdmin = "alice") { services ->
+        withRestServices(authMode = AuthMode.PROXY, seedProxyAdmin = "alice") { services ->
             testApplication {
                 application { plainbaseModule(services) }
                 val response = client.get("/api/v1/admin/tokens") { header("X-Forwarded-User", "alice") }
