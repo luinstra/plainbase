@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
 
       # Keep the existing Actions-cache provider instead of adopting the new commercial default.
       - uses: gradle/actions/setup-gradle@v6
@@ -98,7 +98,7 @@ jobs:
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
 
       - uses: actions/download-artifact@v8
         with:
@@ -133,7 +133,7 @@ jobs:
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
 
       - uses: actions/download-artifact@v8
         with:
@@ -212,9 +212,9 @@ jobs:
       - uses: actions/checkout@v7
 
       # GraalVM from the current line (25): native-image buildtools 1.x and its
-      # reachability-metadata repository require it. Kotlin bytecode still
-      # targets 21 via the Gradle toolchain — the native binary is built FROM
-      # 21-targeted class files BY the GraalVM 25 compiler.
+      # reachability-metadata repository require it. Kotlin bytecode targets 25
+      # via the Gradle toolchain — the native binary is built FROM 25-targeted
+      # class files BY the GraalVM 25 compiler.
       - uses: graalvm/setup-graalvm@v1
         with:
           version: "25.3.4.1"
@@ -333,7 +333,7 @@ jobs:
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
 
       - uses: gradle/actions/setup-gradle@v6
         with:

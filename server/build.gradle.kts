@@ -35,9 +35,9 @@ group = "com.plainbase"
 version = rootProject.version
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(25)
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_21)
+        jvmTarget.set(JvmTarget.JVM_25)
     }
 }
 
@@ -363,8 +363,8 @@ tasks.register<Exec>("traceMcpSseMetadata") {
     description = "Run the spike under -agentlib:native-image-agent to regenerate kotlin-sdk SSE reflect metadata"
     dependsOn(tasks.named("classes"))
     val runtimeClasspath = sourceSets["main"].runtimeClasspath
-    // The native-image tracing agent ships ONLY with GraalVM; the default build toolchain is Adoptium 21 (no
-    // agent). Run under the SAME GraalVM the native image uses (GRAALVM_HOME/JAVA_HOME, toolchainDetection=false)
+    // The native-image tracing agent ships ONLY with GraalVM; a general Java 25 toolchain need not provide the
+    // agent. Run under the SAME GraalVM the native image uses (GRAALVM_HOME/JAVA_HOME, toolchainDetection=false)
     // so the traced reachability matches what nativeCompile sees.
     val graalvmHome = providers.environmentVariable("GRAALVM_HOME")
     val javaHome = providers.environmentVariable("JAVA_HOME")
@@ -1371,13 +1371,13 @@ val prepareGitZombieJvmPid1 = tasks.register("prepareGitZombieJvmPid1") {
         val preparation = g3zJvmPreparationDir.get().asFile
         preparation.deleteRecursively()
         preparation.mkdirs()
-        val java21 = javaToolchains.launcherFor {
-            languageVersion.set(JavaLanguageVersion.of(21))
+        val jvmLauncher = javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(25))
         }.get().executablePath.asFile.absoluteFile
-        require(java21.isFile && java21.canExecute()) { "Java21 toolchain executable is unavailable: $java21" }
+        require(jvmLauncher.isFile && jvmLauncher.canExecute()) { "JVM toolchain executable is unavailable: $jvmLauncher" }
         val orderedClasspath = g3zNativeRuntimeClasspath.asPath
         require(orderedClasspath.isNotBlank()) { "nativeTest runtime classpath is empty" }
-        preparation.resolve("java21.txt").writeText("${java21.absolutePath}\n")
+        preparation.resolve("jvm-launcher.txt").writeText("${jvmLauncher.absolutePath}\n")
         preparation.resolve("classpath.txt").writeText("$orderedClasspath\n")
         preparation.resolve("classpath.entries.txt").writeText(
             g3zNativeRuntimeClasspath.files.joinToString("\n", postfix = "\n") { it.absoluteFile.normalize().path },
@@ -1398,9 +1398,9 @@ tasks.register("gitZombieJvmPid1") {
     doLast {
         g3zRequireLinux()
         val preparation = g3zJvmPreparationDir.get().asFile
-        val java21 = File(preparation.resolve("java21.txt").readText().trim())
+        val jvmLauncher = File(preparation.resolve("jvm-launcher.txt").readText().trim())
         val orderedClasspath = preparation.resolve("classpath.txt").readText().trim()
-        require(java21.isFile && java21.canExecute()) { "prepared Java21 executable is missing: $java21" }
+        require(jvmLauncher.isFile && jvmLauncher.canExecute()) { "prepared JVM executable is missing: $jvmLauncher" }
         require(orderedClasspath.isNotBlank()) { "prepared nativeTest classpath is empty" }
 
         val runId = UUID.randomUUID().toString()
@@ -1419,7 +1419,7 @@ tasks.register("gitZombieJvmPid1") {
                     workingDirectory = working,
                     home = home,
                     tmp = tmp,
-                    executable = java21,
+                    executable = jvmLauncher,
                     executableArguments = listOf(
                         "--enable-native-access=ALL-UNNAMED",
                         "-Dplainbase.test.g3z.pid1=true",
@@ -1560,9 +1560,9 @@ tasks.register("gitZombieForcedTimeoutPid1") {
     doLast {
         g3zRequireLinux()
         val preparation = g3zJvmPreparationDir.get().asFile
-        val java21 = File(preparation.resolve("java21.txt").readText().trim())
+        val jvmLauncher = File(preparation.resolve("jvm-launcher.txt").readText().trim())
         val orderedClasspath = preparation.resolve("classpath.txt").readText().trim()
-        require(java21.isFile && java21.canExecute()) { "prepared Java21 executable is missing: $java21" }
+        require(jvmLauncher.isFile && jvmLauncher.canExecute()) { "prepared JVM executable is missing: $jvmLauncher" }
         require(orderedClasspath.isNotBlank()) { "prepared nativeTest classpath is empty" }
         val runId = UUID.randomUUID().toString()
         val report = layout.buildDirectory.dir("reports/g3z/forced/$runId").get().asFile
@@ -1580,7 +1580,7 @@ tasks.register("gitZombieForcedTimeoutPid1") {
                     workingDirectory = working,
                     home = home,
                     tmp = tmp,
-                    executable = java21,
+                    executable = jvmLauncher,
                     executableArguments = listOf(
                         "-Dplainbase.test.g3z.pid1=true",
                         "-Dplainbase.test.g3z.forced.evidence=${evidence.absolutePath}",

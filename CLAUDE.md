@@ -33,7 +33,7 @@ Filesystem-native, agent-native internal docs product. Master plan:
 - `./gradlew build` = JAR floor: compile, tests, lintKotlin, dependency allowlist.
 - `./gradlew :server:nativeCompile` then `server/build/native/nativeCompile/plainbase spike`
   = the native gate (9/9 required). It requires GraalVM CE 25.3.4.1 / JDK 25.0.4.1 on
-  `JAVA_HOME`/`GRAALVM_HOME`; the application toolchain remains Java 21.
+  `JAVA_HOME`/`GRAALVM_HOME`; the application toolchain remains Java 25.
 - Local native verification uses the official `graal-25.3.4.1` archive; CI uses
   `setup-graalvm` with `version: 25.3.4.1` and `java-version: 25`. The asdf 25.0.2 entry is
   a JVM-only fallback and is unsupported for this native gate.

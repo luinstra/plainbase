@@ -14,13 +14,13 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md).
 ./gradlew :server:nativeCompile          # native binary (requires CE 25.3.4.1 / JDK 25.0.4.1 on JAVA_HOME/GRAALVM_HOME)
 ```
 
-Requirements: JDK 21+ (the build auto-provisions the 21 toolchain for
+Requirements: JDK 25+ (the build auto-provisions the 25 toolchain for
 bytecode). Node is downloaded by the Gradle build - no local install needed.
 
 The Linux-only PID1 regression gates are separate from ordinary test discovery:
 
 ```sh
-./gradlew :server:gitZombieJvmPid1       # Java 21 JVM launcher
+./gradlew :server:gitZombieJvmPid1       # Java 25 JVM launcher
 ./gradlew :server:gitZombieNativePid1    # GraalVM nativeTestCompile executable
 ./gradlew :server:gitZombieForcedTimeoutPid1
 ```
@@ -31,7 +31,7 @@ They require Linux permissions/capabilities to create the privileged PID, mount,
 the launcher. Separately, they require noninteractive `sudo -n` and trusted executable `sudo`; `unshare` and
 `setpriv` are from util-linux, while `timeout` and `id` are from coreutils, all in `/usr/bin` or `/bin`. No
 separate `kill` helper is a prerequisite. The fixtures also require executable `/bin/sh` and `sleep` with
-fractional-second support on `PATH`. The JVM gate uses Java 21; the native gate uses the
+fractional-second support on `PATH`. The JVM gate uses Java 25; the native gate uses the
 documented GraalVM toolchain below. CI gives its JVM and native PID1 steps a five-minute ceiling. Run reports and retained
 evidence are under `server/build/reports/g3z/jvm/<run-id>/`, `server/build/reports/g3z/native/<run-id>/`, or
 `server/build/reports/g3z/forced/<run-id>/`,

@@ -1,5 +1,5 @@
 plugins {
-    // Auto-provisions the JDK 21 toolchain when the host JDK differs.
+    // Auto-provisions the JDK 25 toolchain when the host JDK differs.
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
