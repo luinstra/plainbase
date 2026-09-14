@@ -470,12 +470,10 @@ run {
     }
 
     tasks.named<BuildNativeImageTask>("nativeTestCompile") {
-        // Read the native test set from `nativeTestList` (nativeTest source set) instead of the
-        // full-suite `test` task. Replacing the plugin's classpath also removed its implicit producer
-        // edge, so retain the real ordinary test prerequisite explicitly for the plugin's captured
-        // UID-directory predicate. `testListDirectory` still selects only the nativeTest list below.
+        // The plugin captured the default JVM UID path; replace both predicates so this gate follows
+        // nativeTestList and the consumer guard can reject an empty native list.
         dependsOn(nativeTestList)
-        dependsOn(tasks.named<Test>("test"))
+        setOnlyIf { graalvmNative.testSupport.get() }
         testListDirectory.set(nativeTestListDir)
         options.get().classpath.setFrom(nativeTestSourceSet.runtimeClasspath, nativeTestSourceSet.output)
         // Anti-vacuous-green guard, on the CONSUMER side. The native image is built from EXACTLY the
@@ -501,6 +499,7 @@ run {
     }
 
     tasks.named<org.graalvm.buildtools.gradle.tasks.NativeRunTask>("nativeTest") {
+        setOnlyIf { graalvmNative.testSupport.get() }
         // The plugin adds the default JVM `test` UID directory to the test binary's runtime arguments.
         // Re-point execution too, or the correctly compiled nativeTest image runs zero selected tests.
         runtimeArgs.add(
