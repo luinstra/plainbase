@@ -2,6 +2,7 @@ package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.RowsAtStart
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
@@ -89,7 +90,7 @@ class ObjectContentStoreFactoryTest : FunSpec({
     }
 })
 
-private fun objectConfig(dataDir: java.nio.file.Path): PlainbaseConfig = PlainbaseConfig.fromEnv(emptyMap()).copy(
+private fun objectConfig(dataDir: java.nio.file.Path): PlainbaseConfig = ConfigLoader.fromEnv(emptyMap()).copy(
     dataDir = dataDir,
     storage = StorageConfig(
         backend = StorageBackend.OBJECT,

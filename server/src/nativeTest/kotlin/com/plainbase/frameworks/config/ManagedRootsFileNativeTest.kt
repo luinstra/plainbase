@@ -5,11 +5,16 @@ import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.filesystem.FileAtomics
+import com.typesafe.config.ConfigException
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Tag
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.DirectoryNotEmptyException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -20,7 +25,7 @@ import kotlin.test.assertTrue
  * The `roots.conf` writer, over the two divergence surfaces project policy native-tags by default: **charset
  * decoding** (a path with a non-ASCII character, a quote and a backslash) and **NIO** (the atomic promote).
  *
- * **The round trip goes through `PlainbaseConfig.fromEnvAndFile`, NOT through a reader in `ManagedRootsFile` -
+ * **The round trip goes through `ConfigLoader.fromEnvAndFile`, NOT through a reader in `ManagedRootsFile` -
  * because there ISN'T one.** That is the point. A twin parser that agreed with the writer while both disagreed
  * with the server is exactly the drift this test exists to exclude, so the only parser whose agreement means
  * anything is the one the server will actually use at boot.
@@ -48,7 +53,7 @@ class ManagedRootsFileNativeTest {
             val hocon = ManagedRootsFile.serialize(listOf(written))
             ManagedRootsFile.writeAtomically(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE), hocon)
 
-            val loaded = PlainbaseConfig.fromEnvAndFile(
+            val loaded = ConfigLoader.fromEnvAndFile(
                 mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString()),
             ).roots
 
@@ -60,9 +65,9 @@ class ManagedRootsFileNativeTest {
     }
 
     /**
-     * The ONE residual assumption the in-memory candidate mechanism rests on: `parseString` of text T versus
-     * `parseFile` of a file CONTAINING T. They agree - same parser, UTF-8 on both sides, and the writer pins
-     * `Charsets.UTF_8` - but the whole gate is built on that, so it is PINNED rather than assumed.
+     * The ONE residual assumption the in-memory candidate mechanism rests on: `parseString` of managed text T versus
+     * `parseFile` of a file CONTAINING T, with the operator roots merged on both paths. They agree - same parser, UTF-8
+     * on both sides, and the writer pins `Charsets.UTF_8` - but the whole gate is built on that, so it is PINNED.
      */
     @Test
     fun `the in-memory candidate and the on-disk file parse to the SAME roots - the gate's load-bearing assumption`() {
@@ -70,18 +75,110 @@ class ManagedRootsFileNativeTest {
         try {
             val data = Files.createDirectory(base.resolve("data"))
             val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString())
+            Files.writeString(
+                data.resolve("plainbase.conf"),
+                "roots { docs { path = \"" + base.resolve("docs") + "\" } }",
+            )
             val awkward = base.resolve("""tree-ünïcode-"q"-back\slash""")
             val text = ManagedRootsFile.serialize(listOf(root("notes", awkward.toString())))
 
             // The CLI validates THIS - the string, in memory, before anything exists on disk...
-            val candidate = PlainbaseConfig.fromEnvAndCandidateRoots(text, env).roots
+            val candidate = ConfigLoader.fromEnvAndCandidateRoots(text, env)
 
             // ...and then writes exactly those bytes. The next boot parses the FILE.
             ManagedRootsFile.writeAtomically(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE), text)
-            val onDisk = PlainbaseConfig.fromEnvAndFile(env).roots
+            val onDisk = ConfigLoader.fromEnvAndFile(env)
 
-            assertEquals(candidate.list, onDisk.list, "the artifact validated must BE the artifact served")
-            assertEquals(candidate.managed, onDisk.managed)
+            assertEquals(candidate, onDisk, "the operator+managed artifact validated must BE the artifact served")
+            assertEquals(listOf("docs", "notes"), candidate.roots.list.map { it.name.value })
+            assertEquals(RootsOrigin.EXPLICIT, candidate.roots.origin)
+            assertEquals(setOf(RootName.require("notes")), candidate.roots.managed)
+            assertEquals(
+                ConfigBootInspector.bootRefusals(candidate),
+                ConfigBootInspector.bootRefusals(onDisk),
+                "candidate and file refusal observations must agree",
+            )
+            assertEquals(
+                ConfigBootInspector.rootsWarnings(candidate),
+                ConfigBootInspector.rootsWarnings(onDisk),
+                "candidate and file warning observations must agree in order",
+            )
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `semantically invalid candidate bytes and the same managed file refuse identically`() {
+        val cases = listOf(
+            "extra history auto" to { base: Path -> "roots { notes { path = \"$base/notes\", history = auto } }" },
+            "machine primary" to { base: Path -> "roots { docs { path = \"$base/docs\" } }" },
+            "unknown root glob" to { base: Path -> "roots { notes { path = \"$base/notes\" } }" },
+        )
+        val expectedMessages = mapOf(
+            "extra history auto" to
+                "roots.notes.history = auto is not allowed on an extra root: auto detects a repository and may create " +
+                "one, which Plainbase will not do in a tree it does not own. Use `native` to claim an existing " +
+                "repository at that path (Plainbase then refuses to start if it is a linked worktree, a submodule, " +
+                "or somebody else's checkout), or `off` for no history.",
+            "machine primary" to
+                "roots.conf must not declare 'docs': primary's directory comes from CONTENT_DIR, or from a roots {} " +
+                "block you wrote yourself in plainbase.conf. `plainbase root` never manages docs.",
+            "unknown root glob" to
+                "auth.agentDirectCommit.roots.ghost names no configured root (declared roots: docs, notes). " +
+                "A direct-commit glob for a root that does not exist authorizes nothing - fix the name, or remove the entry.",
+        )
+        cases.forEach { (label, rootsText) ->
+            val base = Files.createTempDirectory("pb-managed-native-semantic")
+            try {
+                val data = Files.createDirectory(base.resolve("data"))
+                val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString())
+                if (label == "unknown root glob") {
+                    Files.writeString(
+                        data.resolve("plainbase.conf"),
+                        "auth { agentDirectCommit { roots { ghost = [\"*.md\"] } } }",
+                    )
+                }
+                val text = rootsText(base)
+                val candidateFailure = assertFailsWith<IllegalArgumentException> {
+                    ConfigLoader.fromEnvAndCandidateRoots(text, env)
+                }
+                ManagedRootsFile.writeAtomically(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE), text)
+                val onDiskFailure = assertFailsWith<IllegalArgumentException> {
+                    ConfigLoader.fromEnvAndFile(env)
+                }
+                assertEquals(candidateFailure::class, onDiskFailure::class, label)
+                assertEquals(expectedMessages.getValue(label), candidateFailure.message, label)
+                assertEquals(candidateFailure.message, onDiskFailure.message, label)
+            } finally {
+                base.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun `malformed candidate syntax stays a parse error while malformed managed syntax is wrapped`() {
+        val base = Files.createTempDirectory("pb-managed-native-parse-errors")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString())
+            val candidateFailure = assertFailsWith<ConfigException.Parse> {
+                ConfigLoader.fromEnvAndCandidateRoots("roots {", env)
+            }
+            assertEquals("String: 1: expecting a close parentheses ')' here, not: end of file", candidateFailure.message)
+
+            val managed = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+            Files.writeString(managed, "roots {")
+            val managedFailure = assertFailsWith<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
+            assertEquals(ConfigException.Parse::class, managedFailure.cause!!::class)
+            assertEquals(
+                "$managed is the machine-managed roots file and it does not parse: $managed: 1: " +
+                    "expecting a close parentheses ')' here, not: end of file. Refusing to start rather than serve a " +
+                    "topology that may have lost roots: booting without them would 404 every page they hold, which reads " +
+                    "as deleted rather than as an outage. Remedies: restore it from a backup; or, to accept a " +
+                    "CONTENT_DIR-only topology and re-add roots with `plainbase root add`, delete $managed.",
+                managedFailure.message,
+            )
         } finally {
             base.toFile().deleteRecursively()
         }
@@ -143,7 +240,7 @@ class ManagedRootsFileNativeTest {
             }
             assertTrue(litter.isEmpty(), "the temp sibling must be removed after the fallback too: $litter")
             // And the REAL loader still reads it back - a degraded promote is still a promote.
-            val loaded = PlainbaseConfig.fromEnvAndFile(
+            val loaded = ConfigLoader.fromEnvAndFile(
                 mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString()),
             ).roots
             assertEquals(setOf(RootName.require("alpha")), loaded.managed)
@@ -185,7 +282,7 @@ class ManagedRootsFileNativeTest {
 
             assertContentEquals(before, Files.readAllBytes(target), "the last-known-good config must survive a failed promote")
             // And it is still a CONFIG, not just the right bytes: the loader the next boot runs still reads it.
-            assertEquals(setOf(RootName.require("alpha")), PlainbaseConfig.fromEnvAndFile(env).roots.managed)
+            assertEquals(setOf(RootName.require("alpha")), ConfigLoader.fromEnvAndFile(env).roots.managed)
             val litter = Files.list(data).use { stream ->
                 stream.map { it.fileName.toString() }.filter { it.endsWith(".tmp") || it.endsWith(ManagedRootsFile.BACKUP_SUFFIX) }.toList()
             }
@@ -233,7 +330,7 @@ class ManagedRootsFileNativeTest {
      * one root, and every page under the others 404'd - and a 404 does not read as an outage, it reads as deleted.
      *
      * Each case is a real residue of the copy-replace fallback (the only non-atomic promote path) or of a kill
-     * during it, and each asserts the OUTCOME - what `PlainbaseConfig.fromEnvAndFile`, the parser the next boot
+     * during it, and each asserts the OUTCOME - what `ConfigLoader.fromEnvAndFile`, the parser the next boot
      * actually runs, does with the bytes on disk. `ABSENT_CLEAN` is the one legitimate absence: an install that
      * never ran `plainbase root add`, with nothing beside it to say otherwise.
      */
@@ -267,19 +364,19 @@ class ManagedRootsFileNativeTest {
                 }
 
                 if (residue.boots) {
-                    val config = PlainbaseConfig.fromEnvAndFile(env)
+                    val config = ConfigLoader.fromEnvAndFile(env)
                     val expected = if (residue == Residue.WHOLE_WITH_STALE_BACKUP) setOf(RootName.require("alpha")) else emptySet()
                     assertEquals(expected, config.roots.managed, "$residue must boot with exactly the topology on disk")
                     if (residue.backup) {
                         assertTrue(
-                            config.rootsWarnings().any { it.contains(ManagedRootsFile.BACKUP_SUFFIX) },
+                            ConfigBootInspector.rootsWarnings(config).any { it.contains(ManagedRootsFile.BACKUP_SUFFIX) },
                             "$residue boots, but the leftover backup is the only evidence a promote died - it must be named",
                         )
                     }
                 } else {
                     // The REFUSAL, and it must be actionable: an operator staring at this needs to be told what is
                     // wrong and both ways out, not handed a HOCON parse error against a file they never wrote.
-                    val failure = assertFailsWith<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+                    val failure = assertFailsWith<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                     val message = requireNotNull(failure.message)
                     assertTrue(message.contains(PlainbaseConfig.MANAGED_ROOTS_FILE), "$residue: the refusal must name the file: $message")
                     assertTrue(message.contains("delete"), "$residue: the refusal must offer the delete-and-re-add way out: $message")
@@ -306,7 +403,7 @@ class ManagedRootsFileNativeTest {
             val data = Files.createDirectory(base.resolve("data"))
             Files.writeString(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE), "roots {\n}\n")
 
-            val config = PlainbaseConfig.fromEnvAndFile(
+            val config = ConfigLoader.fromEnvAndFile(
                 mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString()),
             )
 
@@ -349,7 +446,182 @@ class ManagedRootsFileNativeTest {
             assertFailsWith<IOException> { ManagedRootsFile.writeAtomically(target, next, lyingCopy) }
 
             assertContentEquals(before, Files.readAllBytes(target), "an unverifiable promote must leave the previous config in place")
-            assertEquals(setOf(RootName.require("alpha")), PlainbaseConfig.fromEnvAndFile(env).roots.managed)
+            assertEquals(setOf(RootName.require("alpha")), ConfigLoader.fromEnvAndFile(env).roots.managed)
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `delete refuses a regular backup entry while loader keeps its regular-file warning predicate`() {
+        assertBackupRefusal(
+            name = "regular",
+            warningExpected = true,
+            create = { target, backup ->
+                Files.copy(target, backup)
+                assertTrue(
+                    Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isRegularFile,
+                )
+            },
+            verify = { _, backup -> assertTrue(Files.isRegularFile(backup)) },
+        )
+    }
+
+    @Test
+    fun `delete refuses a directory backup entry while loader keeps its regular-file warning predicate`() {
+        assertBackupRefusal(
+            name = "directory",
+            warningExpected = false,
+            create = { _, backup ->
+                val child = Files.createDirectory(backup).resolve("recovery.txt")
+                Files.writeString(child, "keep")
+                assertTrue(
+                    Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isDirectory,
+                )
+            },
+            verify = { _, backup -> assertEquals("keep", Files.readString(backup.resolve("recovery.txt"))) },
+        )
+    }
+
+    @Test
+    fun `delete refuses a symlink-to-regular backup while loader keeps its regular-file warning predicate`() {
+        assertBackupRefusal(
+            name = "symlink-regular",
+            warningExpected = true,
+            create = { _, backup ->
+                val targetSpelling = Path.of("recovery-target.conf")
+                val target = backup.parent.resolve(targetSpelling)
+                val targetBytes = "recovery bytes".toByteArray()
+                Files.write(target, targetBytes)
+                createSymbolicLinkOrSkip(backup, targetSpelling)
+                assertTrue(
+                    Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isSymbolicLink,
+                )
+                assertEquals(targetSpelling, Files.readSymbolicLink(backup))
+                assertContentEquals(targetBytes, Files.readAllBytes(target))
+            },
+            verify = { _, backup ->
+                assertEquals(Path.of("recovery-target.conf"), Files.readSymbolicLink(backup))
+                assertContentEquals("recovery bytes".toByteArray(), Files.readAllBytes(backup.parent.resolve("recovery-target.conf")))
+            },
+        )
+    }
+
+    @Test
+    fun `delete refuses a dangling symlink backup while loader keeps its regular-file warning predicate`() {
+        assertBackupRefusal(
+            name = "symlink-dangling",
+            warningExpected = false,
+            create = { _, backup ->
+                val targetSpelling = Path.of("missing-recovery.conf")
+                createSymbolicLinkOrSkip(backup, targetSpelling)
+                assertTrue(
+                    Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isSymbolicLink,
+                )
+                assertEquals(targetSpelling, Files.readSymbolicLink(backup))
+                assertTrue(!Files.exists(backup))
+            },
+            verify = { _, backup ->
+                assertEquals(Path.of("missing-recovery.conf"), Files.readSymbolicLink(backup))
+                assertTrue(!Files.exists(backup))
+            },
+        )
+    }
+
+    @Test
+    fun `delete refuses an absent live file when a backup entry exists`() {
+        val base = Files.createTempDirectory("pb-managed-native-delete-absent")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val target = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+            val backup = ManagedRootsFile.backupPath(target)
+            Files.writeString(backup, "recovery")
+            assertTrue(
+                Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isRegularFile,
+            )
+
+            val failure = assertFailsWith<ManagedRootsBackupPresentException> { ManagedRootsFile.delete(target) }
+            assertEquals(
+                "cannot delete $target while backup entry $backup exists; resolve the backup deliberately, then retry",
+                failure.message,
+            )
+            assertTrue(!Files.exists(target))
+            assertEquals("recovery", Files.readString(backup))
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `loader treats a regular backup as damage beside missing and nonregular managed entries`() {
+        listOf("missing", "directory", "dangling symlink").forEach { kind ->
+            val base = Files.createTempDirectory("pb-managed-native-loader-backup-" + kind.replace(' ', '-'))
+            try {
+                val data = Files.createDirectory(base.resolve("data"))
+                val content = Files.createDirectory(base.resolve("content"))
+                val target = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+                val backup = ManagedRootsFile.backupPath(target)
+                val backupBytes = "regular backup for $kind".toByteArray()
+                Files.write(backup, backupBytes)
+
+                when (kind) {
+                    "missing" -> assertTrue(!Files.exists(target))
+                    "directory" -> {
+                        val child = Files.createDirectory(target).resolve("still-here")
+                        Files.writeString(child, "target bytes")
+                        assertTrue(
+                            Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isDirectory,
+                        )
+                    }
+                    "dangling symlink" -> {
+                        createSymbolicLinkOrSkip(target, Path.of("missing-live.conf"))
+                        assertTrue(
+                            Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isSymbolicLink,
+                        )
+                        assertEquals(Path.of("missing-live.conf"), Files.readSymbolicLink(target))
+                        assertTrue(!Files.exists(target))
+                    }
+                }
+
+                val failure = assertFailsWith<IllegalArgumentException> {
+                    ConfigLoader.fromEnvAndFile(
+                        mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to content.toString()),
+                    )
+                }
+                val deletionTarget = if (Files.exists(target)) target else backup
+                assertEquals(
+                    "$target is the machine-managed roots file and it is MISSING. Refusing to start rather than serve a " +
+                        "topology that may have lost roots: booting without them would 404 every page they hold, which reads " +
+                        "as deleted rather than as an outage. Remedies: restore the last-known-good with `mv $backup $target`; " +
+                        "or, to accept a CONTENT_DIR-only topology and re-add roots with `plainbase root add`, delete $deletionTarget.",
+                    failure.message,
+                )
+                assertContentEquals(backupBytes, Files.readAllBytes(backup))
+                when (kind) {
+                    "missing" -> assertTrue(!Files.exists(target))
+                    "directory" -> assertEquals("target bytes", Files.readString(target.resolve("still-here")))
+                    "dangling symlink" -> {
+                        assertEquals(Path.of("missing-live.conf"), Files.readSymbolicLink(target))
+                        assertTrue(!Files.exists(target))
+                    }
+                }
+            } finally {
+                base.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun `delete preserves an unrelated nonempty-directory unlink failure`() {
+        val base = Files.createTempDirectory("pb-managed-native-delete-failure")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val target = Files.createDirectory(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE))
+            Files.writeString(target.resolve("still-here"), "content")
+            assertTrue(!Files.exists(ManagedRootsFile.backupPath(target)))
+
+            assertFailsWith<DirectoryNotEmptyException> { ManagedRootsFile.delete(target) }
+            assertEquals("content", Files.readString(target.resolve("still-here")))
         } finally {
             base.toFile().deleteRecursively()
         }
@@ -371,5 +643,46 @@ class ManagedRootsFileNativeTest {
         } finally {
             base.toFile().deleteRecursively()
         }
+    }
+
+    private fun assertBackupRefusal(
+        name: String,
+        warningExpected: Boolean,
+        create: (Path, Path) -> Unit,
+        verify: (Path, Path) -> Unit,
+    ) {
+        val base = Files.createTempDirectory("pb-managed-native-delete-$name")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val content = Files.createDirectory(base.resolve("content"))
+            val rootPath = Files.createDirectory(base.resolve("root"))
+            val target = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+            val backup = ManagedRootsFile.backupPath(target)
+            val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to content.toString())
+            Files.writeString(target, ManagedRootsFile.serialize(listOf(root("notes", rootPath.toString()))))
+            val liveBefore = Files.readAllBytes(target)
+            create(target, backup)
+
+            val loaded = ConfigLoader.fromEnvAndFile(env)
+            assertEquals(warningExpected, ConfigBootInspector.rootsWarnings(loaded).any { it.startsWith("$backup is left over") })
+
+            val failure = assertFailsWith<ManagedRootsBackupPresentException> { ManagedRootsFile.delete(target) }
+            assertEquals(
+                "cannot delete $target while backup entry $backup exists; resolve the backup deliberately, then retry",
+                failure.message,
+            )
+            assertContentEquals(liveBefore, Files.readAllBytes(target))
+            verify(target, backup)
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+}
+
+private fun createSymbolicLinkOrSkip(link: Path, target: Path) {
+    try {
+        Files.createSymbolicLink(link, target)
+    } catch (failure: UnsupportedOperationException) {
+        assumeTrue(false, "the native filesystem does not support symbolic links: ${failure.message}")
     }
 }

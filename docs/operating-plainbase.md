@@ -9,6 +9,18 @@ For **single-sign-on behind a reverse proxy** (`auth.mode=proxy`), see
 [`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) and the standalone Caddy + oauth2-proxy
 reference stack under `deploy/proxy/`.
 
+## Bind and proxy address safety
+
+The bind guard and proxy trust checks accept numeric address literals only. IPv4 must use four ASCII
+decimal octets without abbreviation or leading-zero ambiguity; IPv4 zones are rejected, while IPv6 may carry
+a zone, which is removed before classification. Host ports are validated as ASCII decimal `0`–`65535`, with bracketed IPv6
+syntax for a port-bearing value. Case-insensitive, unbracketed `localhost` and `ip6-localhost` remain supported aliases for
+loopback bind/remote checks, but bracketed aliases and arbitrary hostnames are not loopback evidence.
+
+`PLAINBASE_TRUSTED_PROXY` must contain valid numeric CIDRs. Plainbase refuses startup with an error
+naming that variable when an entry is malformed. The guard performs no hostname lookup, so a DNS name
+cannot turn a bind or socket peer into a trusted address; put a proxy's numeric CIDR in configuration.
+
 ## Upgrading the binary: stop the old one FIRST (schema v17)
 
 Per-root page identity ([ADR-0012](decisions/0012-per-root-page-identity.md)) makes a page's identity the
@@ -334,6 +346,13 @@ interrupted halfway leaves the previous file untouched. On a `DATA_DIR` whose fi
 rename - an NFS/SMB mount - the CLI falls back to a copy, warns that it did, and copies the previous
 file to `roots.conf.bak` first. If you ever find that `.bak` sitting there, a write was interrupted
 mid-copy: it is the last config that booted, and `mv roots.conf.bak roots.conf` restores it.
+
+A last-root `remove` also refuses to unlink `roots.conf` when any `roots.conf.bak` entry is present, including a
+directory or symlink, and leaves both entries untouched. The command checks that sibling without following symlinks;
+the startup warning and damaged-file recovery path still recognize only a regular backup file, so a directory or
+dangling symlink may be silent at startup. Inspect such an entry deliberately: restore a known-good regular backup
+with `mv roots.conf.bak roots.conf`, or resolve/remove the entry intentionally before retrying the command. The
+refusal ends the command with exit `1` and no success or detached-row consequence output.
 
 ## When to upgrade to Meilisearch
 

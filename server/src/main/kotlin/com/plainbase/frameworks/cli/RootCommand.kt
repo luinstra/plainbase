@@ -7,6 +7,9 @@ import com.plainbase.domain.root.ReservedSegments
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.config.ConfigBootInspector
+import com.plainbase.frameworks.config.ConfigLoader
+import com.plainbase.frameworks.config.ManagedRootsBackupPresentException
 import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -102,7 +105,7 @@ object RootCommand {
         // the one field that can never come from one - it is resolved from env/default, never file-derived. This
         // is therefore the same value config.dataDir will hold, by construction rather than by luck. It locates
         // the lock and is authoritative for nothing else.
-        val dataDir = PlainbaseConfig.dataDirFrom(env)
+        val dataDir = ConfigLoader.dataDirFrom(env)
         val lock = awaitRootsLock(dataDir)
         if (lock == null) {
             output.error(
@@ -127,7 +130,7 @@ object RootCommand {
 
     /** The config as it stands, through the loader's own error funnel (a clean `<command>: <msg>` line + null). */
     private fun load(command: String, env: Map<String, String>, output: CommandOutput): PlainbaseConfig? =
-        PlainbaseConfig.loadForCommand(command, output::error, resolve = { PlainbaseConfig.fromEnvAndFile(env) })
+        ConfigLoader.loadForCommand(command, output::error, resolve = { ConfigLoader.fromEnvAndFile(env) })
 
     /**
      * `root add <name> <path>`. A refusal writes NO CONFIG, and under this ordering that is structural rather
@@ -214,7 +217,12 @@ object RootCommand {
         // produces - "there is no roots.conf" - so the artifact validated IS the artifact promoted, even when
         // promoting it means unlinking a file.
         if (hocon.text == null) {
-            ManagedRootsFile.delete(config.managedRootsPath)
+            try {
+                ManagedRootsFile.delete(config.managedRootsPath)
+            } catch (failure: ManagedRootsBackupPresentException) {
+                output.error("root remove: ${failure.message}")
+                return 1
+            }
             output.result("removed root '${request.name.value}' (the last CLI-managed root; ${config.managedRootsPath} deleted)")
         } else {
             ManagedRootsFile.writeAtomically(config.managedRootsPath, hocon.text)
@@ -340,10 +348,10 @@ object RootCommand {
         output: CommandOutput,
     ): Artifact? {
         val text = if (candidateRoots.isEmpty()) null else ManagedRootsFile.serialize(candidateRoots)
-        val candidate = PlainbaseConfig.loadForCommand(
+        val candidate = ConfigLoader.loadForCommand(
             "root $verb",
             output::error,
-            resolve = { PlainbaseConfig.fromEnvAndCandidateRoots(text, env) },
+            resolve = { ConfigLoader.fromEnvAndCandidateRoots(text, env) },
         ) ?: return null
         val candidateRefusals = bootGateFor(candidate).refusals
         val baselineKeys = bootGateFor(config).refusals.map { it.key }.toSet()
@@ -364,7 +372,7 @@ object RootCommand {
         // printed only refusals would exit 0 with nothing but cheerful news about a root that will 503. `serve`
         // prints these; a CLI that validated half the server's surface would be back to keeping its own list of
         // which half matters.
-        candidate.rootsWarnings().forEach { output.error("root $verb: WARNING: $it") }
+        ConfigBootInspector.rootsWarnings(candidate).forEach { output.error("root $verb: WARNING: $it") }
         return Artifact(text)
     }
 

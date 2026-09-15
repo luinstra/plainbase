@@ -1,4 +1,4 @@
-package com.plainbase.frameworks.ktor
+package com.plainbase.frameworks.net
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -21,6 +21,11 @@ class AddressParsingTest : FunSpec({
             "ip6-localhost" to true,
             "127.0.0.1:8080" to true, // host:port form normalized first
             "[::1]:8080" to true,
+            "127.0.0.1:0" to true,
+            "127.0.0.1:65535" to true,
+            " [::1]:8080 " to true,
+            "[::1]:65535" to true,
+            "[::ffff:127.0.0.1]:8080" to true,
             "10.0.0.5" to false,
             "203.0.113.7" to false,
             "2001:db8::1" to false,
@@ -32,9 +37,39 @@ class AddressParsingTest : FunSpec({
             "[::1" to false, // unterminated bracket → unparseable → non-loopback (fail-closed)
             "[::1]junk" to false, // garbage suffix after `]` → unparseable → non-loopback (fail-closed)
             "::1%lo0" to true, // a zone id is stripped before classification → same as `::1` (loopback)
+            "127.0.0.1%lo0" to false, // IPv4 zone suffixes are rejected before zone stripping
             "fe80::1%eth0" to false, // link-local + zone → non-loopback, same as its zoneless form
             "%eth0" to false, // a bare `%zone` with no literal → unparseable → non-loopback (fail-closed)
             "garbage%eth0" to false, // a `%`-bearing garbage string → non-loopback
+            "dead.beef" to false, // dotted hex must not reach hostname resolution
+            "127.1" to false,
+            "010.0.0.1" to false,
+            "127.000.0.1" to false,
+            "127.+0.0.1" to false,
+            "127.-0.0.1" to false,
+            "١٢٧.0.0.1" to false,
+            "127.0.0.1:abc" to false,
+            "[::1]:٨٠" to false,
+            "127.0.0.1:" to false,
+            "127.0.0.1:٨٠" to false,
+            "127.0.0.1:+80" to false,
+            "127.0.0.1:-1" to false,
+            "127.0.0.1:8 0" to false,
+            "127.0.0.1:65536" to false,
+            "127.0.0.1:999999999999999999999999" to false,
+            "[::1]:" to false,
+            "[::1]:abc" to false,
+            "[::1]:+80" to false,
+            "[::1]:-1" to false,
+            "[::1]:8 0" to false,
+            "[::1]:65536" to false,
+            "[::1]:999999999999999999999999" to false,
+            "[localhost]" to false,
+            "[127.0.0.1%:zone]" to false,
+            ".::1" to false,
+            ":::1" to false,
+            "::ffff:127.1" to false,
+            "[::ffff:١٢٧.0.0.1]" to false,
             "" to false,
         ).forEach { (input, expected) ->
             test("'$input' loopback == $expected") {
@@ -62,6 +97,26 @@ class AddressParsingTest : FunSpec({
             // the one resolved result we happened to read (BLOCKING-2 fix).
             "example.com" to true,
             "localhost.localdomain" to true, // resolves to 127.0.0.1 in many setups — still non-loopback (no DNS)
+            "dead.beef" to true,
+            "١٢٧.0.0.1" to true,
+            "[localhost]" to true,
+            "[127.0.0.1]" to true,
+            "[127.0.0.1%:zone]" to true,
+            ".::1" to true,
+            ":::1" to true,
+            "::ffff:127.1" to true,
+            "[::ffff:١٢٧.0.0.1]" to true,
+            "127.0.0.1%lo0" to true,
+            "127.0.1" to true,
+            "127.1" to true,
+            "127..0.1" to true,
+            "2130706433" to true,
+            "010.0.0.1" to true,
+            "127.000.0.1" to true,
+            "256.0.0.1" to true,
+            "127.+0.0.1" to true,
+            "127.-0.0.1" to true,
+            "127.0.0.1:abc" to true,
             "[::1" to true, // unterminated bracket → unparseable → fail-closed exposed
             "[::1]junk" to true, // garbage suffix after `]` → unparseable → fail-closed exposed
             "" to true, // empty bind host → fail-closed (treat as exposed)
@@ -101,6 +156,25 @@ class AddressParsingTest : FunSpec({
             RemoteAddress.isInAnyCidr("fe80::1%eth0", listOf("fe80::/16")) shouldBe true
             RemoteAddress.isInAnyCidr("fe80::1%eth0", listOf("2001:db8::/32")) shouldBe false
         }
+        test("strict IPv4 parsing applies to runtime CIDR matching, including embedded IPv4") {
+            RemoteAddress.isInAnyCidr("127.1", listOf("127.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("010.0.0.1", listOf("10.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("::ffff:010.0.0.1", listOf("10.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("dead.beef", listOf("127.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("[127.0.0.1%:zone]", listOf("127.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr(".::1", listOf("::/0")) shouldBe false
+            RemoteAddress.isInAnyCidr(":::1", listOf("::/0")) shouldBe false
+            RemoteAddress.isInAnyCidr("::ffff:127.1", listOf("127.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("[::ffff:١٢٧.0.0.1]", listOf("127.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("127.0.0.1%lo0", listOf("127.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("127.0.1", listOf("127.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("127..0.1", listOf("127.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("2130706433", listOf("127.0.0.0/8")) shouldBe false
+            RemoteAddress.isInAnyCidr("256.0.0.1", listOf("127.0.0.0/8")) shouldBe false
+        }
+        test("a mapped IPv4 literal still matches an IPv4 CIDR") {
+            RemoteAddress.isInAnyCidr("::ffff:127.0.0.1", listOf("127.0.0.0/8")) shouldBe true
+        }
     }
 
     context("isParseableCidr (config-load fail-fast, A1-amber)") {
@@ -114,7 +188,7 @@ class AddressParsingTest : FunSpec({
             "10.0.0.0" to false, // a bare address with no /prefix is NOT a CIDR
             "not-a-cidr" to false,
             "10.0.0.0/33" to false, // out-of-range IPv4 prefix
-            "10.0/8" to false, // legacy abbreviated IPv4 — getByName would expand to 10.0.0.0, masking a typo
+            "10.0/8" to false, // abbreviated IPv4 must not mask a typo
             "192.168.1/24" to false, // a dropped octet must fail fast, not silently expand
             "10/8" to false, // single component
             "010.0.0.0/8" to false, // leading-zero octet (octal ambiguity)
@@ -122,6 +196,20 @@ class AddressParsingTest : FunSpec({
             "2001:db8::/129" to false, // out-of-range IPv6 prefix
             "10.0.0.0/-1" to false, // negative prefix
             "10.0.0.0/abc" to false, // non-numeric prefix
+            "dead.beef/8" to false,
+            "١٢٧.0.0.0/8" to false,
+            "::ffff:010.0.0.0/8" to false,
+            "::ffff:127.1/8" to false,
+            ".::1/128" to false,
+            ":::1/128" to false,
+            "[::ffff:١٢٧.0.0.1]/128" to false,
+            "[127.0.0.1%:zone]/8" to false,
+            "127.0.0.0%lo0/8" to false,
+            "127.0.1/8" to false,
+            "127..0.1/8" to false,
+            "2130706433/8" to false,
+            "256.0.0.1/8" to false,
+            "127.000.0.1/8" to false,
             "" to false,
         ).forEach { (input, expected) ->
             test("'$input' parseableCidr == $expected") {

@@ -49,7 +49,7 @@ class RootsConfigTest : FunSpec({
             }
             """.trimIndent(),
         ) { env ->
-            val roots = PlainbaseConfig.fromEnvAndFile(env).roots
+            val roots = ConfigLoader.fromEnvAndFile(env).roots
             roots.origin shouldBe RootsOrigin.EXPLICIT
             roots.list shouldBe listOf(
                 Root(RootName.require("docs"), RootBackend.Local(Path.of("/roots/docs")), editable = true, history = HistoryMode.AUTO),
@@ -75,7 +75,7 @@ class RootsConfigTest : FunSpec({
             }
             """.trimIndent(),
         ) { env ->
-            PlainbaseConfig.fromEnvAndFile(env).roots.list.map { it.name.value } shouldBe listOf("zeta", "docs", "alpha")
+            ConfigLoader.fromEnvAndFile(env).roots.list.map { it.name.value } shouldBe listOf("zeta", "docs", "alpha")
         }
     }
 
@@ -88,7 +88,7 @@ class RootsConfigTest : FunSpec({
             }
             """.trimIndent(),
         ) { env ->
-            PlainbaseConfig.fromEnvAndFile(env).roots.list.map { it.name.value } shouldBe listOf("docs", "alpha", "zeta")
+            ConfigLoader.fromEnvAndFile(env).roots.list.map { it.name.value } shouldBe listOf("docs", "alpha", "zeta")
         }
     }
 
@@ -96,7 +96,7 @@ class RootsConfigTest : FunSpec({
 
     test("an invalid slug key fails naming the key and the rule") {
         withDataDir("""roots { docs { path = "/roots/m" }, "Bad_Name" { path = "/roots/b" } }""") { env ->
-            val failure = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            val failure = shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
             failure.message shouldContain "roots.Bad_Name"
             failure.message shouldContain "[a-z][a-z0-9]*(-[a-z0-9]+)*"
         }
@@ -107,7 +107,7 @@ class RootsConfigTest : FunSpec({
         // repeat the grammar. The fixture declares `main` because a block that omits the primary is refused
         // FIRST, and this row would then pass without ever reaching the reserved check.
         withDataDir("""roots { docs { path = "/roots/m" }, api { path = "/roots/a" } }""") { env ->
-            val failure = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            val failure = shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
             failure.message shouldContain "roots.api"
             failure.message shouldContain "reserved"
         }
@@ -116,28 +116,28 @@ class RootsConfigTest : FunSpec({
     test("a page-id-shaped root key fails with the permalink ambiguity message") {
         val hex32 = "a".repeat(32)
         withDataDir("""roots { docs { path = "/roots/m" }, "$hex32" { path = "/roots/b" } }""") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                 .message shouldContain "look like a page id"
         }
     }
 
     test("a block without a main root fails naming the required primary") {
         withDataDir("""roots { extra { path = "/roots/e" } }""") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                 .message shouldContain "must declare a root named 'docs'"
         }
     }
 
     test("an empty roots block fails the required-main rule") {
         withDataDir("roots {}") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                 .message shouldContain "must declare a root named 'docs'"
         }
     }
 
     test("a missing path fails naming the entry") {
         withDataDir("""roots { docs { editable = true } }""") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                 .message shouldContain "roots.docs.path is required"
         }
     }
@@ -145,7 +145,7 @@ class RootsConfigTest : FunSpec({
     test("a blank or whitespace path fails naming the entry (Path.of of a blank resolves to the working directory)") {
         listOf("""roots { docs { path = "" } }""", """roots { docs { path = "   " } }""").forEach { conf ->
             withDataDir(conf) { env ->
-                shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+                shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                     .message shouldContain "roots.docs.path is required and must be a non-blank directory path"
             }
         }
@@ -153,32 +153,32 @@ class RootsConfigTest : FunSpec({
 
     test("a non-local backend fails naming the entry, on main and on an extra alike") {
         withDataDir("""roots { docs { path = "/roots/m", backend = object } }""") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                 .message shouldContain "roots.docs.backend 'object'"
         }
         withDataDir("""roots { docs { path = "/roots/m" }, extra { path = "/roots/e", backend = s3 } }""") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                 .message shouldContain "roots.extra.backend 's3'"
         }
     }
 
     test("a non-object entry fails telling the operator the block shape") {
         withDataDir("""roots { docs = "/roots/m" }""") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                 .message shouldContain "roots.docs must be a block"
         }
     }
 
     test("a bad editable value fails naming the full key") {
         withDataDir("""roots { docs { path = "/roots/m", editable = maybe } }""") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                 .message shouldContain "roots.docs.editable must be one of 1/0/true/false"
         }
     }
 
     test("a bad history value fails naming the full key and the legal values") {
         withDataDir("""roots { docs { path = "/roots/m", history = sometimes } }""") { env ->
-            val failure = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            val failure = shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
             failure.message shouldContain "roots.docs.history 'sometimes'"
             failure.message shouldContain "off, auto, native"
         }
@@ -195,7 +195,7 @@ class RootsConfigTest : FunSpec({
                 git { enabled = $gitEnabled }
                 """.trimIndent(),
             ) { env ->
-                shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+                shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                     .message shouldContain expected
             }
         }
@@ -210,7 +210,7 @@ class RootsConfigTest : FunSpec({
                 "PLAINBASE_S3_ACCESS_KEY_ID" to "k",
                 "PLAINBASE_S3_SECRET_ACCESS_KEY" to "s",
             )
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(objectEnv) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(objectEnv) }
                 .message shouldContain "roots {} cannot be combined with storage.backend=object"
         }
     }
@@ -231,34 +231,34 @@ class RootsConfigTest : FunSpec({
             roots = RootsConfig.of(listOf(root("docs")), RootsOrigin.EXPLICIT),
         )
 
-        config.bootRefusals().single().message shouldContain "roots {} cannot be combined with storage.backend=object"
+        ConfigBootInspector.bootRefusals(config).single().message shouldContain "roots {} cannot be combined with storage.backend=object"
     }
 
     // --- warnings (D11/D12) --------------------------------------------------------------------------
 
     test("an explicit block with an explicitly set CONTENT_DIR warns that the legacy key is ignored (D11)") {
         withDataDir("""roots { docs { path = "/roots/m" } }""") { env ->
-            val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/legacy"))
-            config.rootsWarnings().any { it.contains("CONTENT_DIR") && it.contains("ignored") } shouldBe true
+            val config = ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/legacy"))
+            ConfigBootInspector.rootsWarnings(config).any { it.contains("CONTENT_DIR") && it.contains("ignored") } shouldBe true
             config.mainContentRoot() shouldBe Path.of("/roots/m")
         }
     }
 
     test("the C1 unserved-extras warning is RETIRED: extras ARE served now, so warning about them would be a lie") {
         withDataDir("""roots { docs { path = "/roots/m" }, memoria { path = "/roots/mem" }, notes { path = "/roots/n" } }""") { env ->
-            PlainbaseConfig.fromEnvAndFile(env).rootsWarnings().any { it.contains("only main is served") } shouldBe false
+            ConfigBootInspector.rootsWarnings(ConfigLoader.fromEnvAndFile(env)).any { it.contains("only main is served") } shouldBe false
         }
     }
 
     test("a synthesized (legacy) config emits no roots warnings, even with CONTENT_DIR set") {
         withDataDir(conf = null) { env ->
-            PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/legacy")).rootsWarnings().shouldBeEmpty()
+            ConfigBootInspector.rootsWarnings(ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/legacy"))).shouldBeEmpty()
         }
     }
 
     test("the C1 dormant-knob warning is RETIRED: editable/history ARE enforced now") {
         withDataDir("""roots { docs { path = "/roots/m", editable = false } }""") { env ->
-            PlainbaseConfig.fromEnvAndFile(env).rootsWarnings().any { it.contains("not yet enforced") } shouldBe false
+            ConfigBootInspector.rootsWarnings(ConfigLoader.fromEnvAndFile(env)).any { it.contains("not yet enforced") } shouldBe false
         }
     }
 
@@ -269,12 +269,12 @@ class RootsConfigTest : FunSpec({
             listOf(Root(RootName.PRIMARY, RootBackend.Local(dir), editable = true, history = HistoryMode.AUTO))
         }
         withDataDir(conf = null) { env ->
-            val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs"))
+            val config = ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs"))
             config.roots.origin shouldBe RootsOrigin.SYNTHESIZED
             config.roots.list shouldBe expectedRoot(Path.of("/roots/docs"))
         }
         withDataDir("""contentDir = "/roots/docs"""") { env ->
-            val config = PlainbaseConfig.fromEnvAndFile(env)
+            val config = ConfigLoader.fromEnvAndFile(env)
             config.roots.origin shouldBe RootsOrigin.SYNTHESIZED
             config.roots.list shouldBe expectedRoot(Path.of("/roots/docs"))
         }
@@ -283,7 +283,7 @@ class RootsConfigTest : FunSpec({
     test("a legacy env-only config equals the hand-built expected config field for field") {
         withDataDir(conf = null) { env ->
             val legacyEnv = env + ("CONTENT_DIR" to "/roots/docs")
-            PlainbaseConfig.fromEnvAndFile(legacyEnv) shouldBe PlainbaseConfig(
+            ConfigLoader.fromEnvAndFile(legacyEnv) shouldBe PlainbaseConfig(
                 contentDir = Path.of("/roots/docs"),
                 dataDir = Path.of(env.getValue("DATA_DIR")),
                 host = PlainbaseConfig.DEFAULT_HOST,
@@ -294,7 +294,7 @@ class RootsConfigTest : FunSpec({
     }
 
     test("object-mode synthesis carries the bucket descriptor and falls back to contentDir for the local seams") {
-        val config = PlainbaseConfig.fromEnv(
+        val config = ConfigLoader.fromEnv(
             mapOf(
                 "CONTENT_DIR" to "/roots/ignored",
                 "PLAINBASE_STORAGE_BACKEND" to "object",
@@ -313,11 +313,11 @@ class RootsConfigTest : FunSpec({
 
     test("mainContentRoot equals contentDir for local synthesis and roots.main.path for an explicit block") {
         withDataDir(conf = null) { env ->
-            val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs"))
+            val config = ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs"))
             config.mainContentRoot() shouldBe config.contentDir
         }
         withDataDir("""roots { docs { path = "/roots/elsewhere" } }""") { env ->
-            val config = PlainbaseConfig.fromEnvAndFile(env)
+            val config = ConfigLoader.fromEnvAndFile(env)
             config.mainContentRoot() shouldBe Path.of("/roots/elsewhere")
         }
     }
@@ -325,7 +325,7 @@ class RootsConfigTest : FunSpec({
     test("copy(storage = object) keeps the stale synthesized main but mainContentRoot still equals contentDir") {
         // The roots default runs at CONSTRUCTION only - this pins the equal-value invariant that keeps
         // every copy()-built test config correct (the PlainbaseConfig.roots KDoc rule).
-        val copied = PlainbaseConfig.fromEnv(emptyMap()).copy(
+        val copied = ConfigLoader.fromEnv(emptyMap()).copy(
             storage = StorageConfig(
                 backend = StorageBackend.OBJECT,
                 endpoint = "https://acct.example.com",

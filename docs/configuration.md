@@ -2,9 +2,10 @@
 
 Full reference for every environment variable Plainbase reads. The README keeps a five-row quick
 table for the everyday knobs (`CONTENT_DIR`, `DATA_DIR`, `PLAINBASE_HOST`, `PLAINBASE_PORT`,
-`PLAINBASE_LOG_LEVEL`); this is the complete surface. Every row below is read directly from
-`PlainbaseConfig.build()` (`server/src/main/kotlin/com/plainbase/frameworks/config/PlainbaseConfig.kt`),
-with one exception - `PLAINBASE_LOG_LEVEL`, a logback-level env var - noted below. The one
+`PLAINBASE_LOG_LEVEL`); this is the complete surface. `ConfigLoader` loads the configuration sources;
+`ConfigDecoder` and the pure `ConfigValuePolicy` decode them into `PlainbaseConfig`
+(`server/src/main/kotlin/com/plainbase/frameworks/config/`). The exception is
+`PLAINBASE_LOG_LEVEL`, a logback-level env var noted below. The one
 file-only key with no env twin is the `roots {}` block (its own section below).
 
 ## Logging and command channels
@@ -28,37 +29,50 @@ supplies values env omits. Secrets (`PLAINBASE_PROXY_SECRET`) belong in env, not
 file path exists for completeness, not as the recommended place for a secret. Config loads once at
 boot; every key here is restart-only, there is no hot reload.
 
+## Address inputs and trusted-proxy CIDRs
+
+`PLAINBASE_HOST` is passed to the server as configured. The bind guard treats only the case-insensitive,
+unbracketed `localhost`/`ip6-localhost` aliases and numeric loopback literals as loopback; another hostname is
+fail-closed as exposed and is never resolved by the guard. Numeric IPv4 values must be four ASCII
+decimal octets (`0`–`255`), with no abbreviations or leading-zero forms; IPv4 zone suffixes are rejected.
+IPv6 zones are stripped for classification, and IPv4-mapped IPv6 literals retain their IPv4 CIDR behavior.
+
+An optional host port accepts only ASCII decimal `0`–`65535`; bracketed IPv6 uses `[address]:port`.
+Malformed ports, bracketed aliases, hostnames, Unicode digits and dotted-hex forms are rejected by
+the security predicates. `PLAINBASE_TRUSTED_PROXY` is a comma-separated list of numeric CIDRs and
+is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUSTED_PROXY`.
+
 ## Reference table
 
 | Env var | Config path | Default | Source |
 |---|---|---|---|
-| `CONTENT_DIR` | `contentDir` | `./content` | PlainbaseConfig.kt |
-| `DATA_DIR` | (env/default only, never file) | `./data` | PlainbaseConfig.kt |
-| `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`) | PlainbaseConfig.kt |
-| `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`) | PlainbaseConfig.kt |
+| `CONTENT_DIR` | `contentDir` | `./content` | ConfigDecoder.kt |
+| `DATA_DIR` | (env/default only, never file) | `./data` | ConfigValuePolicy.kt |
+| `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`) | ConfigDecoder.kt |
+| `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`) | ConfigDecoder.kt |
 | `PLAINBASE_LOG_LEVEL` | - | `INFO` | `logback.xml:8-9` (`${PLAINBASE_LOG_LEVEL:-INFO}`; **not** a `PlainbaseConfig` field) |
-| `PLAINBASE_MAX_WRITE_BODY_BYTES` | `maxWriteBodyBytes` | 1 MiB | PlainbaseConfig.kt |
-| `PLAINBASE_MAX_ASSET_BYTES` | `maxAssetBytes` | 10 MiB | PlainbaseConfig.kt |
-| `PLAINBASE_AUTH_MODE` | `auth.mode` | `off` (blank parses to `OFF`) | PlainbaseConfig.kt |
-| `PLAINBASE_TRUSTED_PROXY` | `auth.trustedProxy` | `[]` | PlainbaseConfig.kt (comma-list, CIDR-validated at load) |
-| `PLAINBASE_PROXY_SECRET` | `auth.proxySecret` | none (required in `proxy` mode) | PlainbaseConfig.kt |
-| `PLAINBASE_PROXY_IDENTITY_HEADER` | `auth.proxyIdentityHeader` | `X-Forwarded-User` | PlainbaseConfig.kt |
-| `PLAINBASE_INSECURE_HTTP` | `auth.insecureHttp` | `false` | PlainbaseConfig.kt |
-| `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS` | `auth.agentDirectCommit.globs` | `[]` | PlainbaseConfig.kt |
-| `PLAINBASE_MCP_ALLOWED_HOSTS` | `auth.mcpAllowedHosts` | fail-closed bind-host default | PlainbaseConfig.kt |
-| `PLAINBASE_MCP_ALLOWED_ORIGINS` | `auth.mcpAllowedOrigins` | fail-closed bind-host default | PlainbaseConfig.kt |
-| `PLAINBASE_GIT_ENABLED` | `git.enabled` | auto-detect (`null`) | PlainbaseConfig.kt |
-| `PLAINBASE_GIT_AUTHOR_NAME` | `git.authorName` | `Plainbase` | PlainbaseConfig.kt |
-| `PLAINBASE_GIT_AUTHOR_EMAIL` | `git.authorEmail` | `plainbase@localhost` | PlainbaseConfig.kt |
-| `PLAINBASE_STORAGE_BACKEND` | `storage.backend` | `local` | PlainbaseConfig.kt (`local` \| `object`; `object` serves an S3-compatible bucket as the authority) |
-| `PLAINBASE_S3_ENDPOINT` | `storage.object.endpoint` | none (**required** in `object` mode) | PlainbaseConfig.kt (absolute https URL; `http` refused unless `PLAINBASE_INSECURE_HTTP`) |
-| `PLAINBASE_S3_BUCKET` | `storage.object.bucket` | none (**required** in `object` mode) | PlainbaseConfig.kt |
-| `PLAINBASE_S3_ACCESS_KEY_ID` | (env only, never file) | none (**required** in `object` mode) | PlainbaseConfig.kt (secret: env only, never `plainbase.conf`) |
-| `PLAINBASE_S3_SECRET_ACCESS_KEY` | (env only, never file) | none (**required** in `object` mode) | PlainbaseConfig.kt (secret: env only, never `plainbase.conf`) |
-| `PLAINBASE_S3_REGION` | `storage.object.region` | `auto` (R2) | PlainbaseConfig.kt |
-| `PLAINBASE_S3_PREFIX` | `storage.object.prefix` | `""` | PlainbaseConfig.kt (validated through the `TreePath` funnel when non-empty) |
-| `PLAINBASE_S3_PATH_STYLE` | `storage.object.pathStyle` | `true` (R2 account-endpoint) | PlainbaseConfig.kt |
-| `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | PlainbaseConfig.kt |
+| `PLAINBASE_MAX_WRITE_BODY_BYTES` | `maxWriteBodyBytes` | 1 MiB | ConfigDecoder.kt |
+| `PLAINBASE_MAX_ASSET_BYTES` | `maxAssetBytes` | 10 MiB | ConfigDecoder.kt |
+| `PLAINBASE_AUTH_MODE` | `auth.mode` | `off` (blank parses to `OFF`) | ConfigDecoder.kt |
+| `PLAINBASE_TRUSTED_PROXY` | `auth.trustedProxy` | `[]` | ConfigDecoder.kt (comma-list, CIDR-validated at load) |
+| `PLAINBASE_PROXY_SECRET` | `auth.proxySecret` | none (required in `proxy` mode) | ConfigDecoder.kt |
+| `PLAINBASE_PROXY_IDENTITY_HEADER` | `auth.proxyIdentityHeader` | `X-Forwarded-User` | ConfigDecoder.kt |
+| `PLAINBASE_INSECURE_HTTP` | `auth.insecureHttp` | `false` | ConfigDecoder.kt |
+| `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS` | `auth.agentDirectCommit.globs` | `[]` | ConfigDecoder.kt |
+| `PLAINBASE_MCP_ALLOWED_HOSTS` | `auth.mcpAllowedHosts` | fail-closed bind-host default | ConfigDecoder.kt |
+| `PLAINBASE_MCP_ALLOWED_ORIGINS` | `auth.mcpAllowedOrigins` | fail-closed bind-host default | ConfigDecoder.kt |
+| `PLAINBASE_GIT_ENABLED` | `git.enabled` | auto-detect (`null`) | ConfigDecoder.kt |
+| `PLAINBASE_GIT_AUTHOR_NAME` | `git.authorName` | `Plainbase` | ConfigDecoder.kt |
+| `PLAINBASE_GIT_AUTHOR_EMAIL` | `git.authorEmail` | `plainbase@localhost` | ConfigDecoder.kt |
+| `PLAINBASE_STORAGE_BACKEND` | `storage.backend` | `local` | ConfigDecoder.kt (`local` \| `object`; `object` serves an S3-compatible bucket as the authority) |
+| `PLAINBASE_S3_ENDPOINT` | `storage.object.endpoint` | none (**required** in `object` mode) | ConfigDecoder.kt (absolute https URL; `http` refused unless `PLAINBASE_INSECURE_HTTP`) |
+| `PLAINBASE_S3_BUCKET` | `storage.object.bucket` | none (**required** in `object` mode) | ConfigDecoder.kt |
+| `PLAINBASE_S3_ACCESS_KEY_ID` | (env only, never file) | none (**required** in `object` mode) | ConfigDecoder.kt (secret: env only, never `plainbase.conf`) |
+| `PLAINBASE_S3_SECRET_ACCESS_KEY` | (env only, never file) | none (**required** in `object` mode) | ConfigDecoder.kt (secret: env only, never `plainbase.conf`) |
+| `PLAINBASE_S3_REGION` | `storage.object.region` | `auto` (R2) | ConfigDecoder.kt |
+| `PLAINBASE_S3_PREFIX` | `storage.object.prefix` | `""` | ConfigDecoder.kt (validated through the `TreePath` funnel when non-empty) |
+| `PLAINBASE_S3_PATH_STYLE` | `storage.object.pathStyle` | `true` (R2 account-endpoint) | ConfigDecoder.kt |
+| `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | ConfigDecoder.kt |
 
 Any `storage.object.*` key set while `storage.backend=local` is ignored with a single startup warning
 that names the keys (a shared `plainbase.conf` across a local and an object deploy stays legal). In
@@ -277,8 +291,8 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error (the same conventi
 - `plainbase.conf`'s `roots {}` block is yours, by hand. `plainbase root` never opens it for
   writing - not a best-effort round-trip, an absence of code. Comments, formatting, key order and
   every hand-written value survive by construction.
-- `DATA_DIR/roots.conf` is the CLI's. Every `add` or `remove` **rewrites it in full**. Do not
-  hand-edit it - a hand edit is lost on the next `add`/`remove`.
+- `DATA_DIR/roots.conf` is the CLI's. Every successful `add`, and every `remove` that leaves a managed survivor,
+  **rewrites it in full**. Do not hand-edit it - a hand edit is lost on the next `add`/`remove`.
 - At boot the two files **merge**. A root name declared in both is a **boot error** naming the
   file - never a silent winner, never a merge of the two declarations.
 - **`docs` is never CLI-managed.** `plainbase root add docs` and `plainbase root remove docs` are
@@ -311,11 +325,20 @@ visible, not silent.
 
 `--editable` defaults to `false` for an extra root; `--history` defaults to `off`.
 
-`root remove` of the **last** managed root deletes `roots.conf` outright, so the topology is then
+`root remove` of the **last** managed root normally deletes `roots.conf` outright, so the topology is then
 whatever `plainbase.conf` alone says: docs from its `roots {}` block or from `CONTENT_DIR`, plus any
 **other** roots you declared there by hand. `plainbase root` never writes that file, so it cannot
 remove those - deleting `roots.conf` returns the install to single-root behavior only if
 `plainbase.conf` declares no extra roots of its own.
+
+If `roots.conf.bak` (or any other entry with that backup name, including a directory or symlink) exists beside the
+live file, a last-root remove exits `1` before unlinking and leaves both entries in place. Its stderr ends with
+`root remove: cannot delete <live-path> while backup entry <backup-path> exists; resolve the backup deliberately, then retry`;
+no success or detached-row consequence lines are printed. This delete guard checks the backup entry without following
+symlinks. Startup's warning and damaged-file recovery classification remains narrower: only a regular backup file is
+classified as backup evidence, so inspect a directory or dangling symlink manually too. If the regular backup is the
+topology you intend to keep, restore it deliberately with `mv roots.conf.bak roots.conf`; otherwise resolve the entry
+deliberately before retrying the remove.
 
 `root list` prints, per root: name, path, `editable`, `history`, **provenance**
 (`plainbase.conf` / `roots.conf` / `CONTENT_DIR`), and whether the path is a readable directory
@@ -402,7 +425,8 @@ then restart the server.
 ## `auth.mode` - the three modes
 
 - **`off`** - no login, no auth. Loopback-dev only, and despite being the "no auth" mode it is
-  still subject to the fail-closed bind guard (`bindGuardRefusal()` in `PlainbaseConfig.kt`): a
+  still subject to the fail-closed bind guard (`TransportSecurityPolicy.derive(config).bindRefusal` in
+  `TransportSecurityPolicy.kt`): a
   non-loopback `off` bind is refused unless a trusted proxy or `PLAINBASE_INSECURE_HTTP` override
   is present, because `off` is the **most dangerous** mode if it ever reached a public interface.
 - **`builtin`** - password login; Plainbase manages its own users and sessions.

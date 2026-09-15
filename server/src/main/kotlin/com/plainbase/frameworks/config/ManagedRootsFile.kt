@@ -6,13 +6,23 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
+
+internal class ManagedRootsBackupPresentException(
+    path: Path,
+    backup: Path,
+) : IOException(
+    "cannot delete $path while backup entry $backup exists; resolve the backup deliberately, then retry",
+)
 
 /**
  * The writer for `DATA_DIR/roots.conf` (C5 D-C5-1) - the file `plainbase root` owns end to end.
  *
- * **IT IS WRITE-ONLY, AND THERE IS NO `read`.** `PlainbaseConfig.fromEnvAndFile` is the ONLY code in the
+ * **IT IS WRITE-ONLY, AND THERE IS NO `read`.** `ConfigLoader.fromEnvAndFile` is the ONLY code in the
  * repository that parses `roots.conf`, and every consumer takes the managed roots off the ONE config snapshot
  * it produces (`config.roots.managed`). A reader here would be a SECOND parser of a file that `root add`
  * replaces atomically: a `list` racing an `add` would print a topology from read #1 annotated with a
@@ -29,6 +39,9 @@ object ManagedRootsFile {
 
     /** The last-known-good sibling the no-atomic-rename fallback leaves behind when it cannot restore one itself. */
     const val BACKUP_SUFFIX: String = ".bak"
+
+    /** The sibling path used for the last-known-good managed-roots backup. */
+    internal fun backupPath(path: Path): Path = path.resolveSibling("${path.fileName}$BACKUP_SUFFIX")
 
     private val HEADER = """
         # Managed by `plainbase root` - do not edit by hand.
@@ -77,7 +90,7 @@ object ManagedRootsFile {
      * ([FileAtomics.fsync]). Without them the promote can survive exactly the kill it was designed for and come
      * back as a zero-length file - and a zero-length `roots.conf` used to read as "this install has no extra
      * roots", which boots GREEN, main-only, with every extra root's pages 404ing. The loader now refuses that
-     * file rather than believing it ([PlainbaseConfig] `loadManagedRoots`), and this end makes it far less likely
+     * file rather than believing it ([ConfigLoader] `loadManagedRoots`), and this end makes it far less likely
      * to exist: two ends of one guarantee, because a fail-closed boot over an install that already lost its
      * topology is a good last resort and a bad only resort.
      *
@@ -131,7 +144,7 @@ object ManagedRootsFile {
      * the last one a promote can still answer for itself.
      *
      * A byte compare, NOT a re-parse, and that is not a shortcut: the candidate TEXT has already been through the
-     * real loader and the real boot gate before it ever reaches this file ([PlainbaseConfig.fromEnvAndCandidateRoots]),
+     * real loader and the real boot gate before it ever reaches this file ([ConfigLoader.fromEnvAndCandidateRoots]),
      * so its MEANING is settled and the only thing left to establish is that the file says what was validated.
      * Re-parsing here would also be the second parser of `roots.conf` this object exists not to have.
      */
@@ -162,7 +175,7 @@ object ManagedRootsFile {
      * verification that can do nothing but print.
      */
     private fun copyPreservingPrevious(temp: Path, path: Path, hocon: String, atomics: FileAtomics) {
-        val backup = if (Files.isRegularFile(path)) path.resolveSibling("${path.fileName}$BACKUP_SUFFIX") else null
+        val backup = if (Files.isRegularFile(path)) backupPath(path) else null
         backup?.let { Files.copy(path, it, StandardCopyOption.REPLACE_EXISTING) }
         runCatching {
             atomics.copyReplace(temp, path)
@@ -182,13 +195,19 @@ object ManagedRootsFile {
     }
 
     /**
-     * Unlinks the file. `root remove` of the LAST managed root does this rather than leaving an empty
-     * `roots {}` husk: for the MANAGED file emptiness IS absence (no refusal hangs off its presence), so the
-     * unlink returns the install to `SYNTHESIZED` and byte-identical legacy behavior instead of stranding it in
-     * the strict EXPLICIT matrix over a file with nothing in it.
+     * Unlinks the file after confirming there is no backup entry beside it. `root remove` of the LAST managed root
+     * does this rather than leaving an empty `roots {}` husk; an existing backup refuses the unlink so the live
+     * topology and its recovery evidence remain available. A missing live file without a backup stays idempotent.
      */
     fun delete(path: Path) {
-        Files.deleteIfExists(path)
+        val backup = backupPath(path)
+        try {
+            Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        } catch (_: NoSuchFileException) {
+            Files.deleteIfExists(path)
+            return
+        }
+        throw ManagedRootsBackupPresentException(path, backup)
     }
 
     /**

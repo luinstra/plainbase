@@ -11,6 +11,7 @@ import com.plainbase.domain.service.MutatingFacade
 import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ReadFacade
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.TransportSecurityPolicy
 import com.plainbase.frameworks.security.ProxyCsrf
 import io.ktor.server.application.ApplicationCall
 
@@ -81,7 +82,7 @@ class RouteContext(
     /** A4b: the operator-configurable proxy identity header name (default `X-Forwarded-User`). */
     val proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
     /**
-     * A4b: the `Secure` attribute for the `pb_proxy_csrf` cookie (mirrors [PlainbaseConfig.secureCookie] — TLS-fronted
+     * A4b: the `Secure` attribute for the `pb_proxy_csrf` cookie (mirrors [TransportSecurityPolicy.derive] — TLS-fronted
      * iff a non-loopback bind OR a trusted proxy is declared). Defaults false (loopback-dev/test).
      */
     val secureCookie: Boolean = false,

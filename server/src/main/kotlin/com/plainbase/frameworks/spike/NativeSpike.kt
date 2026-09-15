@@ -12,6 +12,7 @@ import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.frameworks.cli.CommandOutput
 import com.plainbase.frameworks.cli.systemCommandOutput
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.createContentModule
@@ -227,7 +228,7 @@ object NativeSpike {
         val app = koinApplication {
             modules(
                 module {
-                    single { PlainbaseConfig.fromEnv(emptyMap()) }
+                    single { ConfigLoader.fromEnv(emptyMap()) }
                     single { SpikeGreeter(get()) }
                 },
             )
@@ -492,7 +493,7 @@ object NativeSpike {
         val contentDir = Files.createTempDirectory("plainbase-spike-mcp-content")
         val dataDir = Files.createTempDirectory("plainbase-spike-mcp-data")
         Files.writeString(contentDir.resolve("index.md"), "---\ntitle: Spike Home\n---\n\n# Spike Home\n\nMCP SSE spike body.\n")
-        val config = PlainbaseConfig.fromEnv(
+        val config = ConfigLoader.fromEnv(
             mapOf(
                 "CONTENT_DIR" to contentDir.toString(),
                 "DATA_DIR" to dataDir.toString(),

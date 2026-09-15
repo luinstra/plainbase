@@ -38,8 +38,8 @@ external reverse proxy or tunnel; Plainbase serves plain HTTP behind it.** **Cad
 the blessed reference; a reference `Caddyfile` ships in the docs. nginx/Traefik and Cloudflare
 Tunnel/Access (zero inbound port) are documented alternatives.
 
-A **fail-closed bind guard** makes the safe path the default (mirrors the `requireContentDir()` idiom in
-`PlainbaseConfig`):
+A **fail-closed bind guard** makes the safe path the default (mirrors the
+`ConfigBootInspector.requireContentDir` idiom):
 
 - If human auth is enabled and the server binds a **non-loopback** interface (e.g. `0.0.0.0`) **without**
   a declared TLS/trusted-proxy configuration → **refuse to start**, with an operator-actionable message.

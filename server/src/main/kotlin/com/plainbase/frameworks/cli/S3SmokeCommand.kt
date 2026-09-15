@@ -1,6 +1,6 @@
 package com.plainbase.frameworks.cli
 
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigValuePolicy
 import com.plainbase.frameworks.objectstore.FetchedObject
 import com.plainbase.frameworks.objectstore.ListResponseParser
 import com.plainbase.frameworks.objectstore.ObjectStat
@@ -282,10 +282,10 @@ object S3SmokeCommand {
 
     private fun endpointValidationError(endpoint: String, env: Map<String, String>): String? =
         when {
-            !PlainbaseConfig.isAbsoluteHttpUrl(endpoint) ->
+            !ConfigValuePolicy.isAbsoluteHttpUrl(endpoint) ->
                 "PLAINBASE_SMOKE_ENDPOINT is not an absolute http(s) URL: '$endpoint'"
 
-            !insecureHttpOverride(env) && !PlainbaseConfig.isHttpsUrl(endpoint) ->
+            !insecureHttpOverride(env) && !ConfigValuePolicy.isHttpsUrl(endpoint) ->
                 "PLAINBASE_SMOKE_ENDPOINT must be https to protect S3 credentials in transit: '$endpoint' " +
                     "(set PLAINBASE_INSECURE_HTTP=1 to knowingly send credentials over plaintext)"
 

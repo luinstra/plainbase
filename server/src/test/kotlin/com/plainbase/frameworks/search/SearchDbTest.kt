@@ -5,7 +5,7 @@ import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -97,7 +97,7 @@ class SearchDbTest : FunSpec({
 
     test("§4 hard rule: search.db is a separate file; deleting it never touches app state") {
         dataDir { dir ->
-            val config = PlainbaseConfig.fromEnv(mapOf("DATA_DIR" to dir.toString()))
+            val config = ConfigLoader.fromEnv(mapOf("DATA_DIR" to dir.toString()))
             config.searchDatabasePath shouldNotBe config.appDatabasePath
             config.searchDatabasePath.parent shouldBe config.appDatabasePath.parent
 

@@ -1,6 +1,6 @@
 package com.plainbase
 
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.objectstore.S3ObjectClient
 import io.kotest.core.spec.style.FunSpec
@@ -37,7 +37,7 @@ class BootGateNoObjectConstructionTest : FunSpec({
             val objectBefore = ObjectContentStore.constructions.get()
             val s3Before = S3ObjectClient.constructions.get()
 
-            val config = PlainbaseConfig.fromEnvAndFile(
+            val config = ConfigLoader.fromEnvAndFile(
                 mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to content.toString()),
             )
             bootGateFor(config)

@@ -2,7 +2,8 @@ package com.plainbase
 
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.RootName
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigBootInspector
+import com.plainbase.frameworks.config.ConfigLoader
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
 import java.nio.file.Path
@@ -61,7 +62,7 @@ class BootGateOrderingTest {
                 }
                 """.trimIndent(),
             )
-            val config = PlainbaseConfig.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
+            val config = ConfigLoader.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
             val gate = bootGateFor(config)
 
             // Registry (rank) order, which is the order `serve()` replays them in.
@@ -103,10 +104,10 @@ class BootGateOrderingTest {
             )
             // An explicitly-set CONTENT_DIR on a hand-declared main is a rootsWarnings() line - the warning that
             // must survive. It prints BETWEEN the topology stage and the bind stage.
-            val config = PlainbaseConfig.fromEnvAndFile(
+            val config = ConfigLoader.fromEnvAndFile(
                 mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("ignored").toString()),
             )
-            assertTrue(config.rootsWarnings().isNotEmpty(), "precondition: there must BE a warning to lose")
+            assertTrue(ConfigBootInspector.rootsWarnings(config).isNotEmpty(), "precondition: there must BE a warning to lose")
 
             val gate = bootGateFor(config)
             assertTrue(gate.refusals.any { it.kind == BootRefusal.Kind.GIT_GATE }, "precondition: the git gate must have refused")

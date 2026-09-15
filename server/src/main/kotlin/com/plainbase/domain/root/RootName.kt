@@ -44,7 +44,8 @@ value class RootName private constructor(val value: String) {
         /**
          * Letter-leading, no trailing hyphen, no doubled hyphen. This pattern and its 2-32 bound are spelled out
          * again in eight hand-maintained places: five operator-facing messages ([require] here,
-         * `PlainbaseConfig.parseRoot`, the `auth.agentDirectCommit.roots` refusal, and `root add`/`root remove`)
+         * private `RootsConfigParser.parseRoot` in `ConfigDecoder.kt`, the `auth.agentDirectCommit.roots` refusal,
+         * and `root add`/`root remove`)
          * and three doc copies (`docs/configuration.md`'s shape paragraph AND its boot-validation bullets, plus
          * ADR-0011's URL-grammar supersession note). Different frames with different key names, so they are copies
          * rather than one awkward shared string. Three of the five MESSAGES are asserted by tests (`RootNameTest`,

@@ -34,7 +34,9 @@ import com.plainbase.frameworks.cli.CommandOutput
 import com.plainbase.frameworks.cli.WriteIntent
 import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.GitConfig
+import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsConfig
 import com.plainbase.frameworks.config.RootsOrigin
@@ -100,82 +102,141 @@ import io.ktor.client.engine.cio.CIO as ClientCIO
 /** In-process proof of the serving runtime seam: gates, ownership, cleanup, and primary-failure preservation. */
 class ServerRunTest : FunSpec({
 
-    test("config warnings are emitted before a bind refusal and refusal cleanup closes the isolated context") {
-        withLocalFixture { content, data ->
-            val nestedContent = Files.createDirectory(data.resolve("content"))
-            Files.writeString(nestedContent.resolve("readme.md"), "---\ntitle: Readme\n---\n\n# Readme\n")
-            val timeline = Collections.synchronizedList(mutableListOf<String>())
-            val output = RecordingOutput(timeline)
-            val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
-            val appender = TimelineAppender(timeline).apply { start() }
-            root.addAppender(appender)
-            val contextCloses = AtomicInteger()
-            val opens = AtomicInteger()
-            val defaults = ServerOpeners()
-            try {
-                val config = PlainbaseConfig(
-                    contentDir = nestedContent,
-                    dataDir = data,
-                    host = "0.0.0.0",
-                    port = 0,
-                    auth = AuthConfig(),
-                    git = GitConfig(enabled = false),
-                )
-                val status = runServerBounded {
-                    runServer(
-                        config,
-                        output,
-                        openers = ServerOpeners(
-                            openDriver = { path ->
-                                opens.incrementAndGet()
-                                defaults.openDriver(path)
-                            },
-                            openLocal = { inputs ->
-                                opens.incrementAndGet()
-                                defaults.openLocal(inputs)
-                            },
-                            openObject = { objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
-                                opens.incrementAndGet()
-                                defaults.openObject(objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart)
-                            },
-                            openSearch = { path ->
-                                opens.incrementAndGet()
-                                defaults.openSearch(path)
-                            },
-                        ),
-                        control = ServerRunControl(closeContext = { app ->
-                            app.close()
-                            contextCloses.incrementAndGet()
-                            timeline += "context-close-complete"
-                        }),
-                    )
+    listOf(false, true).forEach { explicit ->
+        val warningCase = "config warnings are emitted before a bind refusal and refusal cleanup closes the isolated context"
+        test(warningCase + if (explicit) " with explicit roots" else "") {
+            withLocalFixture { content, data ->
+                val nestedContent = Files.createDirectory(data.resolve("content"))
+                Files.writeString(nestedContent.resolve("readme.md"), "---\ntitle: Readme\n---\n\n# Readme\n")
+                val zeta = data.resolve("zeta")
+                val alpha = data.resolve("alpha")
+                val rootsFile = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+                val backup = ManagedRootsFile.backupPath(rootsFile)
+                Files.writeString(rootsFile, "roots {}")
+                Files.copy(rootsFile, backup)
+                val explicitSettings = if (explicit) {
+                    """
+                    roots {
+                      zeta { path = "$zeta", editable = false }
+                      docs { path = "$nestedContent", editable = false }
+                      alpha { path = "$alpha", editable = false }
+                    }
+                    auth.agentDirectCommit.roots {
+                      zeta = ["**"]
+                      docs = ["**"]
+                      alpha = ["**"]
+                    }
+                    """.trimIndent()
+                } else {
+                    ""
                 }
+                Files.writeString(data.resolve("plainbase.conf"), "storage.object.bucket=docs\n$explicitSettings")
+                val timeline = Collections.synchronizedList(mutableListOf<String>())
+                val output = RecordingOutput(timeline)
+                val applicationLogger = LoggerFactory.getLogger("com.plainbase.Application") as Logger
+                val appender = LogTimelineAppender(timeline).apply { start() }
+                applicationLogger.addAppender(appender)
+                val contextCloses = AtomicInteger()
+                val opens = AtomicInteger()
+                val defaults = ServerOpeners()
+                try {
+                    val config = ConfigLoader.fromEnvAndFile(
+                        mapOf(
+                            "CONTENT_DIR" to (if (explicit) content else nestedContent).toString(),
+                            "DATA_DIR" to data.toString(),
+                            "PLAINBASE_HOST" to "0.0.0.0",
+                            "PLAINBASE_GIT_ENABLED" to "false",
+                        ),
+                    )
+                    config.roots.origin shouldBe if (explicit) RootsOrigin.EXPLICIT else RootsOrigin.SYNTHESIZED
+                    val status = runServerBounded {
+                        runServer(
+                            config,
+                            output,
+                            openers = ServerOpeners(
+                                openDriver = { path ->
+                                    opens.incrementAndGet()
+                                    defaults.openDriver(path)
+                                },
+                                openLocal = { inputs ->
+                                    opens.incrementAndGet()
+                                    defaults.openLocal(inputs)
+                                },
+                                openObject = { objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
+                                    opens.incrementAndGet()
+                                    defaults.openObject(objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart)
+                                },
+                                openSearch = { path ->
+                                    opens.incrementAndGet()
+                                    defaults.openSearch(path)
+                                },
+                            ),
+                            control = ServerRunControl(closeContext = { app ->
+                                app.close()
+                                contextCloses.incrementAndGet()
+                                timeline += "context-close-complete"
+                            }),
+                        )
+                    }
 
-                status shouldBe 1
-                output.errors.shouldContainExactly(
-                    "serve: binds 0.0.0.0 with auth.mode=off but no TLS/trusted-proxy and no insecure override. " +
-                        "Remedies: (1) front with a TLS proxy and set PLAINBASE_TRUSTED_PROXY CIDRs; " +
-                        "(2) bind loopback (PLAINBASE_HOST=127.0.0.1) behind the proxy; " +
-                        "(3) set PLAINBASE_INSECURE_HTTP=1 to knowingly serve plaintext.",
-                )
-                contextCloses.get() shouldBe 1
-                opens.get() shouldBe 0
-                val expectedWarning =
-                    "warn:roots.docs (${nestedContent.toRealPath()}) is INSIDE DATA_DIR (${data.toRealPath()}). This serves " +
-                        "correctly, but DATA_DIR is app-owned state whose contents are routinely wiped and rebuilt " +
-                        "(`search.db` and the object mirror are explicitly disposable) - a wipe here takes this root's " +
-                        "content with it. Move the root outside DATA_DIR."
-                timeline.count { it == expectedWarning } shouldBe 1
-                val warningIndex = timeline.indexOf(expectedWarning)
-                val errorIndex = timeline.indexOfFirst { it.startsWith("error:serve:") }
-                (warningIndex >= 0) shouldBe true
-                (errorIndex >= 0) shouldBe true
-                (warningIndex < errorIndex) shouldBe true
-                timeline.count { it == "context-close-complete" } shouldBe 1
-                timeline += "returned"
-                (timeline.indexOf("context-close-complete") < timeline.indexOf("returned")) shouldBe true
-            } finally {
-                root.detachAppender(appender)
+                    status shouldBe 1
+                    output.errors.shouldContainExactly(
+                        "serve: binds 0.0.0.0 with auth.mode=off but no TLS/trusted-proxy and no insecure override. " +
+                            "Remedies: (1) front with a TLS proxy and set PLAINBASE_TRUSTED_PROXY CIDRs; " +
+                            "(2) bind loopback (PLAINBASE_HOST=127.0.0.1) behind the proxy; " +
+                            "(3) set PLAINBASE_INSECURE_HTTP=1 to knowingly serve plaintext.",
+                    )
+                    contextCloses.get() shouldBe 1
+                    opens.get() shouldBe 0
+                    val expectedStorageWarning =
+                        "warn:storage.backend=local ignores the configured object-storage key(s): storage.object.bucket " +
+                            "(set storage.backend=object to use them)"
+                    fun containment(name: String, path: Path): String =
+                        "warn:roots.$name ($path) is INSIDE DATA_DIR (${data.toRealPath()}). This serves " +
+                            "correctly, but DATA_DIR is app-owned state whose contents are routinely wiped and rebuilt " +
+                            "(`search.db` and the object mirror are explicitly disposable) - a wipe here takes this root's " +
+                            "content with it. Move the root outside DATA_DIR."
+                    fun unavailable(name: String, path: Path): String =
+                        "warn:roots.$name.path does not exist or is not a readable/searchable directory: $path - the root will " +
+                            "serve 503 for every request until the path is restored AND the server is restarted (its pages, " +
+                            "aliases and checkpoints are left untouched in the meantime)"
+                    fun glob(name: String): String =
+                        "warn:auth.agentDirectCommit declares direct-commit globs for root '$name', but roots.$name is " +
+                            "editable = false - the globs can never authorize anything there, because the root refuses page " +
+                            "writes outright. Set editable = true, or drop the globs."
+                    val backupWarning =
+                        "warn:$backup is left over from an interrupted `plainbase root` promote. $rootsFile itself is intact and is " +
+                            "the topology being served; remove the backup once you have satisfied yourself that is the topology you want."
+                    val expectedRootsWarnings = if (explicit) {
+                        listOf(
+                            containment("zeta", data.toRealPath().resolve("zeta")),
+                            containment("docs", nestedContent.toRealPath()),
+                            containment("alpha", data.toRealPath().resolve("alpha")),
+                            backupWarning,
+                            "warn:roots {} is configured: the explicitly set CONTENT_DIR/contentDir (via env) is ignored - " +
+                                "primary's path comes from roots.docs.path",
+                            unavailable("zeta", zeta),
+                            unavailable("alpha", alpha),
+                            glob("zeta"),
+                            glob("docs"),
+                            glob("alpha"),
+                        )
+                    } else {
+                        listOf(containment("docs", nestedContent.toRealPath()), backupWarning)
+                    }
+                    val expectedBindError =
+                        "error:serve: binds 0.0.0.0 with auth.mode=off but no TLS/trusted-proxy and no insecure override. " +
+                            "Remedies: (1) front with a TLS proxy and set PLAINBASE_TRUSTED_PROXY CIDRs; " +
+                            "(2) bind loopback (PLAINBASE_HOST=127.0.0.1) behind the proxy; " +
+                            "(3) set PLAINBASE_INSECURE_HTTP=1 to knowingly serve plaintext."
+                    timeline.filter { it.startsWith("warn:") || it.startsWith("error:") } shouldContainExactly
+                        (listOf(expectedStorageWarning) + expectedRootsWarnings + expectedBindError)
+                    timeline.count { it == "context-close-complete" } shouldBe 1
+                    timeline += "returned"
+                    (timeline.indexOf("context-close-complete") < timeline.indexOf("returned")) shouldBe true
+                } finally {
+                    applicationLogger.detachAppender(appender)
+                }
             }
         }
     }
@@ -2533,11 +2594,11 @@ private class RecordingOutput(
     override fun intent(event: WriteIntent) = Unit
 }
 
-private class TimelineAppender(
+private class LogTimelineAppender(
     private val timeline: MutableList<String>,
 ) : AppenderBase<ILoggingEvent>() {
     override fun append(event: ILoggingEvent) {
-        timeline += "warn:${event.formattedMessage}"
+        timeline += "${event.level.levelStr.lowercase()}:${event.formattedMessage}"
     }
 }
 
@@ -2689,7 +2750,7 @@ private fun objectConfigFromEnv(
     port: Int = freePort(),
     gitEnabled: Boolean = false,
 ): PlainbaseConfig =
-    PlainbaseConfig.fromEnv(
+    ConfigLoader.fromEnv(
         mapOf(
             "CONTENT_DIR" to content.toString(),
             "DATA_DIR" to data.toString(),

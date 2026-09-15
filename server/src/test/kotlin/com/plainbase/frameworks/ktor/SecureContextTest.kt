@@ -1,7 +1,12 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.frameworks.config.AuthConfig
+import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.TransportSecurityPolicy
+import com.plainbase.frameworks.net.RemoteAddress
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import java.nio.file.Path
 
 /**
  * The ADR-0008 per-request secure-context predicate. Built on [RemoteAddress] (shares the AddressParsingTest
@@ -51,5 +56,17 @@ class SecureContextTest : FunSpec({
         isSecureContext("203.0.113.7", emptyList(), emptyList()) shouldBe false // → 421 transport_insecure, body never read
         isSecureContext("127.0.0.1", emptyList(), emptyList()) shouldBe true // loopback dev reaches the handler
         isSecureContext("10.1.2.3", listOf("https"), listOf("10.0.0.0/8")) shouldBe true // allowlisted proxy https
+    }
+
+    test("insecureHttp permits bind only; it does not enter or relax the secure-context predicate") {
+        val config = PlainbaseConfig(
+            contentDir = Path.of("/tmp/content"),
+            dataDir = Path.of("/tmp/data"),
+            host = "203.0.113.7",
+            port = PlainbaseConfig.DEFAULT_PORT,
+            auth = AuthConfig(insecureHttp = true),
+        )
+        TransportSecurityPolicy.derive(config).bindRefusal shouldBe null
+        isSecureContext(config.host, listOf("http"), config.auth.trustedProxyCidrs) shouldBe false
     }
 })

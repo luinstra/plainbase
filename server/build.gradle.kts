@@ -1,4 +1,5 @@
 import org.graalvm.buildtools.gradle.tasks.BuildNativeImageTask
+import org.gradle.api.file.FileCollection
 import org.gradle.api.tasks.ClasspathNormalizer
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
@@ -297,6 +298,7 @@ sourceSets {
 // always exercises every test on the JVM. The `nativeTest` source set additionally feeds the
 // GraalVM native test image - and ONLY it does, so the closed-world image never sees Kotest/MockK.
 val mainRuntimeClasspathInput = sourceSets["main"].runtimeClasspath
+val testRuntimeClasspathInput: FileCollection = sourceSets["test"].runtimeClasspath
 
 fun Test.configurePlainbaseMainRuntimeClasspath() {
     inputs.files(mainRuntimeClasspathInput)
@@ -311,7 +313,11 @@ tasks.test {
     useJUnitPlatform()
     // ServerBootCliContractTest consumes this execution-time production classpath and evidence identity.
     configurePlainbaseMainRuntimeClasspath()
+    inputs.files(testRuntimeClasspathInput)
+        .withPropertyName("plainbaseTestRuntimeClasspath")
+        .withNormalizer(ClasspathNormalizer::class)
     doFirst {
+        systemProperty("plainbase.test.childRuntimeClasspath", testRuntimeClasspathInput.asPath)
         systemProperty(
             "plainbase.test.evidenceDir",
             layout.buildDirectory.dir("reports/cli-contract/run-${UUID.randomUUID()}").get().asFile.absolutePath,

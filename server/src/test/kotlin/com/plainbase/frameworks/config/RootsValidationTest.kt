@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.config
 
+import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
@@ -65,7 +66,9 @@ class RootsValidationTest : FunSpec({
     test("synthesized: a missing CONTENT_DIR keeps today's exact message") {
         withBase { base ->
             val failure = shouldThrow<IllegalArgumentException> {
-                legacyConfig(dataDir = base.resolve("data"), contentDir = base.resolve("missing")).requireContentDir()
+                ConfigBootInspector.requireContentDir(
+                    legacyConfig(dataDir = base.resolve("data"), contentDir = base.resolve("missing")),
+                )
             }
             failure.message shouldContain "CONTENT_DIR does not exist or is not a directory"
         }
@@ -83,7 +86,9 @@ class RootsValidationTest : FunSpec({
             try {
                 if (Files.isExecutable(content)) return@withBase // running as root: the permission drop is inert
                 val failure = shouldThrow<IllegalArgumentException> {
-                    legacyConfig(dataDir = base.resolve("data"), contentDir = content).requireContentDir()
+                    ConfigBootInspector.requireContentDir(
+                        legacyConfig(dataDir = base.resolve("data"), contentDir = content),
+                    )
                 }
                 failure.message shouldContain "CONTENT_DIR is not readable/searchable"
             } finally {
@@ -95,7 +100,7 @@ class RootsValidationTest : FunSpec({
     test("synthesized: DATA_DIR == CONTENT_DIR keeps today's exact message") {
         withBase { base ->
             val failure = shouldThrow<IllegalArgumentException> {
-                legacyConfig(dataDir = base, contentDir = base).requireContentDir()
+                ConfigBootInspector.requireContentDir(legacyConfig(dataDir = base, contentDir = base))
             }
             failure.message shouldContain "DATA_DIR and CONTENT_DIR must be different directories"
         }
@@ -105,11 +110,11 @@ class RootsValidationTest : FunSpec({
         withBase { base ->
             val content = Files.createDirectories(base.resolve("content"))
             val nestedData = Files.createDirectories(content.resolve("data"))
-            legacyConfig(dataDir = nestedData, contentDir = content).requireContentDir() shouldBe content
+            ConfigBootInspector.requireContentDir(legacyConfig(dataDir = nestedData, contentDir = content)) shouldBe content
 
             val data = Files.createDirectories(base.resolve("outer"))
             val nestedContent = Files.createDirectories(data.resolve("content"))
-            legacyConfig(dataDir = data, contentDir = nestedContent).requireContentDir() shouldBe nestedContent
+            ConfigBootInspector.requireContentDir(legacyConfig(dataDir = data, contentDir = nestedContent)) shouldBe nestedContent
         }
     }
 
@@ -127,8 +132,9 @@ class RootsValidationTest : FunSpec({
     test("explicit: a missing main path is fatal, naming roots.docs") {
         withBase { base ->
             val failure = shouldThrow<IllegalArgumentException> {
-                config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to base.resolve("missing")))
-                    .requireContentDir()
+                ConfigBootInspector.requireContentDir(
+                    config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to base.resolve("missing"))),
+                )
             }
             failure.message shouldContain "roots.docs.path does not exist or is not a directory"
         }
@@ -137,13 +143,19 @@ class RootsValidationTest : FunSpec({
     test("explicit: a missing extra path boots, and rootsWarnings names it (D13)") {
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
+            val missing = base.resolve("gone")
             val cfg = config(
                 base.resolve("data"),
                 base.resolve("legacy"),
-                explicitRoots("docs" to main, "extra" to base.resolve("gone")),
+                explicitRoots("docs" to main, "extra" to missing),
             )
-            cfg.requireContentDir() shouldBe main
-            cfg.rootsWarnings().any { it.contains("roots.extra.path") && it.contains(base.resolve("gone").toString()) } shouldBe true
+            ConfigBootInspector.requireContentDir(cfg) shouldBe main
+            ConfigBootInspector.bootRefusals(cfg) shouldBe emptyList()
+            ConfigBootInspector.rootsWarnings(cfg) shouldBe listOf(
+                "roots.extra.path does not exist or is not a readable/searchable directory: $missing - the root will " +
+                    "serve 503 for every request until the path is restored AND the server is restarted (its pages, " +
+                    "aliases and checkpoints are left untouched in the meantime)",
+            )
         }
     }
 
@@ -151,12 +163,11 @@ class RootsValidationTest : FunSpec({
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
             val link = Files.createSymbolicLink(base.resolve("docs-link"), main)
-            val failure = shouldThrow<IllegalArgumentException> {
-                config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "twin" to link))
-                    .requireContentDir()
-            }
-            failure.message shouldContain "resolve to the same directory"
-            failure.message shouldContain "twin"
+            val cfg = config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "twin" to link))
+            val refusal = ConfigBootInspector.bootRefusals(cfg).single()
+            refusal.key shouldBe (BootRefusal.Kind.ROOT_PAIR to setOf(RootName.PRIMARY, RootName.require("twin")))
+            refusal.message shouldBe "roots.docs and roots.twin resolve to the same directory: ${main.toRealPath()}"
+            shouldThrow<IllegalArgumentException> { ConfigBootInspector.requireContentDir(cfg) }.message shouldBe refusal.message
         }
     }
 
@@ -165,8 +176,9 @@ class RootsValidationTest : FunSpec({
             val main = Files.createDirectories(base.resolve("docs"))
             val nested = Files.createDirectories(main.resolve("sub"))
             val failure = shouldThrow<IllegalArgumentException> {
-                config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "inner" to nested))
-                    .requireContentDir()
+                ConfigBootInspector.requireContentDir(
+                    config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "inner" to nested)),
+                )
             }
             failure.message shouldContain "nested inside"
             failure.message shouldContain "roots.inner"
@@ -179,7 +191,9 @@ class RootsValidationTest : FunSpec({
             val main = Files.createDirectories(base.resolve("docs"))
             val data = Files.createDirectories(base.resolve("data"))
             val failure = shouldThrow<IllegalArgumentException> {
-                config(data, base.resolve("legacy"), explicitRoots("docs" to main, "extra" to data)).requireContentDir()
+                ConfigBootInspector.requireContentDir(
+                    config(data, base.resolve("legacy"), explicitRoots("docs" to main, "extra" to data)),
+                )
             }
             failure.message shouldContain "roots.extra and DATA_DIR must be different directories"
         }
@@ -195,15 +209,15 @@ class RootsValidationTest : FunSpec({
     // It is now a WARN, in BOTH arms and for EVERY root. Nothing the app writes lands under such a root - app state
     // sits directly in DATA_DIR, a sibling of it - so there is no rebuild loop and nothing is mis-served. What IS true
     // is that ADR-0004 tells operators DATA_DIR holds derived state they may delete to rebuild, and here that would
-    // take the corpus: an operator trap, which is what rootsWarnings() is for.
+    // take the corpus: an operator trap, which is what ConfigBootInspector.rootsWarnings() is for.
     test("explicit: a root strictly inside DATA_DIR boots with a WARN, symmetrically with the legacy arm") {
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
             val data = Files.createDirectories(base.resolve("data"))
             val inside = Files.createDirectories(data.resolve("root"))
             val cfg = config(data, base.resolve("legacy"), explicitRoots("docs" to main, "extra" to inside))
-            cfg.requireContentDir() shouldBe main
-            cfg.rootsWarnings().any { it.contains("roots.extra") && it.contains("is INSIDE DATA_DIR") } shouldBe true
+            ConfigBootInspector.requireContentDir(cfg) shouldBe main
+            ConfigBootInspector.rootsWarnings(cfg).any { it.contains("roots.extra") && it.contains("is INSIDE DATA_DIR") } shouldBe true
         }
     }
 
@@ -212,8 +226,8 @@ class RootsValidationTest : FunSpec({
             val data = Files.createDirectories(base.resolve("data"))
             val content = Files.createDirectories(data.resolve("content"))
             val cfg = legacyConfig(dataDir = data, contentDir = content)
-            cfg.requireContentDir() shouldBe content
-            cfg.rootsWarnings().any { it.contains("roots.docs") && it.contains("is INSIDE DATA_DIR") } shouldBe true
+            ConfigBootInspector.requireContentDir(cfg) shouldBe content
+            ConfigBootInspector.rootsWarnings(cfg).any { it.contains("roots.docs") && it.contains("is INSIDE DATA_DIR") } shouldBe true
         }
     }
 
@@ -226,7 +240,7 @@ class RootsValidationTest : FunSpec({
             val link = Files.createSymbolicLink(base.resolve("docs-link"), docs)
             val data = Files.createDirectories(docs.resolve("data"))
             val failure = shouldThrow<IllegalArgumentException> {
-                legacyConfig(dataDir = data, contentDir = link).requireContentDir()
+                ConfigBootInspector.requireContentDir(legacyConfig(dataDir = data, contentDir = link))
             }
             failure.message shouldContain "declare CONTENT_DIR and DATA_DIR through consistent paths"
         }
@@ -236,7 +250,9 @@ class RootsValidationTest : FunSpec({
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
             val data = Files.createDirectories(main.resolve("data"))
-            config(data, base.resolve("legacy"), explicitRoots("docs" to main)).requireContentDir() shouldBe main
+            ConfigBootInspector.requireContentDir(
+                config(data, base.resolve("legacy"), explicitRoots("docs" to main)),
+            ) shouldBe main
         }
     }
 
@@ -248,7 +264,9 @@ class RootsValidationTest : FunSpec({
             // On disk DATA_DIR sits inside the root, but the root is DECLARED through the symlink, so
             // the store's lexical DATA_DIR exclusion would never match and app state would be indexed.
             val failure = shouldThrow<IllegalArgumentException> {
-                config(data, base.resolve("legacy"), explicitRoots("docs" to link)).requireContentDir()
+                ConfigBootInspector.requireContentDir(
+                    config(data, base.resolve("legacy"), explicitRoots("docs" to link)),
+                )
             }
             failure.message shouldContain "declare the root and DATA_DIR through consistent paths"
         }
@@ -261,9 +279,14 @@ class RootsValidationTest : FunSpec({
             // DATA_DIR does not exist yet; a plain normalize() would keep the alias form, miss the
             // nesting, and DataDirLock would then CREATE the data dir physically inside the served
             // tree. The best-effort canonicalization resolves the existing symlinked ancestor.
-            shouldThrow<IllegalArgumentException> {
-                config(alias.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to docs)).requireContentDir()
-            }.message shouldContain "declare the root and DATA_DIR through consistent paths"
+            val declaredData = alias.resolve("data").toAbsolutePath().normalize()
+            val cfg = config(declaredData, base.resolve("legacy"), explicitRoots("docs" to docs))
+            val refusal = ConfigBootInspector.bootRefusals(cfg).single()
+            refusal.key shouldBe (BootRefusal.Kind.ROOT_VS_DATA_DIR to setOf(RootName.PRIMARY))
+            refusal.message shouldBe
+                "DATA_DIR ($declaredData) is inside roots.docs on disk but not by its declared path ($docs): " +
+                "declare the root and DATA_DIR through consistent paths so the app-state exclusion can apply"
+            shouldThrow<IllegalArgumentException> { ConfigBootInspector.requireContentDir(cfg) }.message shouldBe refusal.message
         }
     }
 
@@ -271,8 +294,9 @@ class RootsValidationTest : FunSpec({
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
             shouldNotThrowAny {
-                config(base.resolve("data-not-created-yet"), base.resolve("legacy"), explicitRoots("docs" to main))
-                    .requireContentDir()
+                ConfigBootInspector.requireContentDir(
+                    config(base.resolve("data-not-created-yet"), base.resolve("legacy"), explicitRoots("docs" to main)),
+                )
             }
         }
     }
@@ -281,11 +305,19 @@ class RootsValidationTest : FunSpec({
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
             val gone = base.resolve("gone")
-            val failure = shouldThrow<IllegalArgumentException> {
-                config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "one" to gone, "two" to gone))
-                    .requireContentDir()
-            }
-            failure.message shouldContain "resolve to the same directory"
+            val cfg = config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "one" to gone, "two" to gone))
+            val refusal = ConfigBootInspector.bootRefusals(cfg).single()
+            refusal.key shouldBe (BootRefusal.Kind.ROOT_PAIR to setOf(RootName.require("one"), RootName.require("two")))
+            refusal.message shouldBe "roots.one and roots.two resolve to the same directory: $gone"
+            shouldThrow<IllegalArgumentException> { ConfigBootInspector.requireContentDir(cfg) }.message shouldBe refusal.message
+            ConfigBootInspector.rootsWarnings(cfg) shouldBe listOf(
+                "roots.one.path does not exist or is not a readable/searchable directory: $gone - the root will serve " +
+                    "503 for every request until the path is restored AND the server is restarted (its pages, aliases " +
+                    "and checkpoints are left untouched in the meantime)",
+                "roots.two.path does not exist or is not a readable/searchable directory: $gone - the root will serve " +
+                    "503 for every request until the path is restored AND the server is restarted (its pages, aliases " +
+                    "and checkpoints are left untouched in the meantime)",
+            )
         }
     }
 
@@ -297,8 +329,8 @@ class RootsValidationTest : FunSpec({
             val main = Files.createDirectories(base.resolve("docs"))
             val data = Files.createDirectories(base.resolve("data"))
             val cfg = config(data, base.resolve("legacy"), explicitRoots("docs" to main, "extra" to data.resolve("gone")))
-            cfg.requireContentDir() shouldBe main
-            cfg.rootsWarnings().any { it.contains("roots.extra") && it.contains("is INSIDE DATA_DIR") } shouldBe true
+            ConfigBootInspector.requireContentDir(cfg) shouldBe main
+            ConfigBootInspector.rootsWarnings(cfg).any { it.contains("roots.extra") && it.contains("is INSIDE DATA_DIR") } shouldBe true
         }
     }
 
@@ -312,15 +344,19 @@ class RootsValidationTest : FunSpec({
                 if (Files.isReadable(locked)) return@withBase // running as root: the permission drop is inert, the case is unprovable
 
                 // Participation: two roots declaring the unreadable path still collide via the declared form.
+                val duplicateUnreadable = config(
+                    base.resolve("data"),
+                    base.resolve("legacy"),
+                    explicitRoots("docs" to main, "one" to locked, "two" to locked),
+                )
                 shouldThrow<IllegalArgumentException> {
-                    config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "one" to locked, "two" to locked))
-                        .requireContentDir()
+                    ConfigBootInspector.requireContentDir(duplicateUnreadable)
                 }.message shouldContain "resolve to the same directory"
 
                 // No collision: boots, and the D13 warning names the unreadable extra - never a silent skip.
                 val cfg = config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "extra" to locked))
-                cfg.requireContentDir() shouldBe main
-                cfg.rootsWarnings().any { it.contains("roots.extra.path") } shouldBe true
+                ConfigBootInspector.requireContentDir(cfg) shouldBe main
+                ConfigBootInspector.rootsWarnings(cfg).any { it.contains("roots.extra.path") } shouldBe true
             } finally {
                 Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("rwxr-xr-x"))
             }
@@ -336,8 +372,8 @@ class RootsValidationTest : FunSpec({
             try {
                 if (Files.isExecutable(readonly)) return@withBase // running as root: the permission drop is inert
                 val cfg = config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "extra" to readonly))
-                cfg.requireContentDir() shouldBe main
-                cfg.rootsWarnings().any { it.contains("roots.extra.path") } shouldBe true
+                ConfigBootInspector.requireContentDir(cfg) shouldBe main
+                ConfigBootInspector.rootsWarnings(cfg).any { it.contains("roots.extra.path") } shouldBe true
             } finally {
                 Files.setPosixFilePermissions(readonly, PosixFilePermissions.fromString("rwxr-xr-x"))
             }
@@ -356,7 +392,9 @@ class RootsValidationTest : FunSpec({
                     try {
                         if (inertWhen(main)) return@withBase // running as root: the permission drop is inert
                         val failure = shouldThrow<IllegalArgumentException> {
-                            config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main)).requireContentDir()
+                            ConfigBootInspector.requireContentDir(
+                                config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main)),
+                            )
                         }
                         failure.message shouldContain "roots.docs.path is not readable/searchable"
                     } finally {
@@ -366,10 +404,9 @@ class RootsValidationTest : FunSpec({
             }
     }
 
-    // A main path under an UNSEARCHABLE parent cannot even be stat'ed, so it is the existence guard
-    // that fires (an actionable IAE, never a raw IOException). The toRealPath IOException rethrow in
-    // validateExplicitRoots stays untested here by design: with existence and read/execute permissions
-    // already guarded it is TOCTOU defense-in-depth, reachable only by a permission change racing validation.
+    // An unsearchable parent triggers the existence guard as an actionable IAE, not a raw IOException. If the path
+    // changes during canonicalization, the inspector catches that IOException and records PRIMARY_UNUSABLE; this
+    // TOCTOU branch remains untested by design.
     test("explicit: a main path under an unsearchable parent fails via the existence guard, never a raw IOException") {
         withBase { base ->
             if (!base.fileSystem.supportedFileAttributeViews().contains("posix")) return@withBase
@@ -379,7 +416,9 @@ class RootsValidationTest : FunSpec({
             try {
                 if (Files.isReadable(locked)) return@withBase // running as root: the permission drop is inert
                 val failure = shouldThrow<IllegalArgumentException> {
-                    config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main)).requireContentDir()
+                    ConfigBootInspector.requireContentDir(
+                        config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main)),
+                    )
                 }
                 failure.message shouldContain "roots.docs.path does not exist or is not a directory"
             } finally {
@@ -393,7 +432,7 @@ class RootsValidationTest : FunSpec({
             val main = Files.createDirectories(base.resolve("docs"))
             val legacy = Files.createDirectories(base.resolve("legacy"))
             val cfg = config(base.resolve("data"), legacy, explicitRoots("docs" to main))
-            cfg.requireContentDir() shouldBe main
+            ConfigBootInspector.requireContentDir(cfg) shouldBe main
             cfg.mainContentRoot() shouldBe main
         }
     }

@@ -53,7 +53,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { globs = ["archive:2024/**"] } }
             """.trimIndent(),
         ) { env ->
-            val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
+            val globs = ConfigValuePolicy.agentDirectCommitGlobs(ConfigLoader.fromEnvAndFile(env))
 
             withClue("the pattern did NOT move: it still authorizes the colon-bearing FOLDER in MAIN") {
                 globs.single().root shouldBe RootName.PRIMARY
@@ -81,7 +81,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { globs = ["notes/**", "guides/*.md"] } }
             """.trimIndent(),
         ) { env ->
-            val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
+            val globs = ConfigValuePolicy.agentDirectCommitGlobs(ConfigLoader.fromEnvAndFile(env))
             globs.map { it.root } shouldContainExactly listOf(RootName.PRIMARY, RootName.PRIMARY)
             globs[0].matches(TreePath.require("notes/a.md")).shouldBeTrue()
             globs[1].matches(TreePath.require("guides/a.md")).shouldBeTrue()
@@ -95,7 +95,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { globs = ["notes/**"], roots { archive = ["2024/**"] } } }
             """.trimIndent(),
         ) { env ->
-            val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
+            val globs = ConfigValuePolicy.agentDirectCommitGlobs(ConfigLoader.fromEnvAndFile(env))
             globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("notes/a.md")).shouldBeTrue()
             globs.single { it.root == RootName.require("archive") }.matches(TreePath.require("2024/plan.md")).shouldBeTrue()
         }
@@ -108,7 +108,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { roots { docs = ["drafts/**"], archive = ["2024/**"] } } }
             """.trimIndent(),
         ) { env ->
-            val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
+            val globs = ConfigValuePolicy.agentDirectCommitGlobs(ConfigLoader.fromEnvAndFile(env))
 
             globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("drafts/plan.md")).shouldBeTrue()
             globs.single { it.root == RootName.require("archive") }.matches(TreePath.require("2024/plan.md")).shouldBeTrue()
@@ -122,8 +122,8 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { globs = ["notes/**"], roots { archive = ["2024/**"] } } }
             """.trimIndent(),
         ) { env ->
-            val config = PlainbaseConfig.fromEnvAndFile(env + ("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "from-env/**"))
-            val globs = config.agentDirectCommitGlobs()
+            val config = ConfigLoader.fromEnvAndFile(env + ("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "from-env/**"))
+            val globs = ConfigValuePolicy.agentDirectCommitGlobs(config)
 
             withClue("env-wins over the FILE key, exactly as it always has") {
                 globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
@@ -143,7 +143,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { globs = ["notes/**"], roots { docs = ["other/**"] } } }
             """.trimIndent(),
         ) { env ->
-            val error = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            val error = shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
             error.message!! shouldContain "agentDirectCommit.globs"
             error.message!! shouldContain "agentDirectCommit.roots.docs"
         }
@@ -160,7 +160,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             """.trimIndent(),
         ) { env ->
             val error = shouldThrow<IllegalArgumentException> {
-                PlainbaseConfig.fromEnvAndFile(env + ("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "from-env/**"))
+                ConfigLoader.fromEnvAndFile(env + ("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "from-env/**"))
             }
             error.message!! shouldContain "PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"
             error.message!! shouldContain "agentDirectCommit.roots.docs"
@@ -174,8 +174,9 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { roots { archive = ["2024/**"] } } }
             """.trimIndent(),
         ) { env ->
-            val globs = PlainbaseConfig.fromEnvAndFile(env + ("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "from-env/**"))
-                .agentDirectCommitGlobs()
+            val globs = ConfigValuePolicy.agentDirectCommitGlobs(
+                ConfigLoader.fromEnvAndFile(env + ("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "from-env/**")),
+            )
             globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
         }
     }
@@ -189,7 +190,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { roots { nosuchroot = ["**"] } } }
             """.trimIndent(),
         ) { env ->
-            val error = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            val error = shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
             withClue("a glob for a root that does not exist authorizes nothing - and an operator who wrote it believes it does") {
                 error.message!! shouldContain "auth.agentDirectCommit.roots.nosuchroot"
             }
@@ -203,7 +204,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { roots { "Not A Root" = ["**"] } } }
             """.trimIndent(),
         ) { env ->
-            val error = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            val error = shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
             error.message!! shouldContain "not a valid root name"
         }
     }
@@ -215,7 +216,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { roots { archive = ["**"] } } }
             """.trimIndent(),
         ) { env ->
-            val warning = PlainbaseConfig.fromEnvAndFile(env).rootsWarnings().single { it.contains("agentDirectCommit") }
+            val warning = ConfigBootInspector.rootsWarnings(ConfigLoader.fromEnvAndFile(env)).single { it.contains("agentDirectCommit") }
             withClue("silently doing nothing is how an operator ends up believing an agent has write access it does not have") {
                 warning shouldContain "archive"
                 warning shouldContain "editable = false"
@@ -230,7 +231,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             auth { agentDirectCommit { globs = ["**"] } }
             """.trimIndent(),
         ) { env ->
-            val warning = PlainbaseConfig.fromEnvAndFile(env).rootsWarnings().single { it.contains("agentDirectCommit") }
+            val warning = ConfigBootInspector.rootsWarnings(ConfigLoader.fromEnvAndFile(env)).single { it.contains("agentDirectCommit") }
             withClue("main is the root every glob was written for, so a by-root-map walk would miss the likeliest trap of all") {
                 warning shouldContain "docs"
                 warning shouldContain "editable = false"

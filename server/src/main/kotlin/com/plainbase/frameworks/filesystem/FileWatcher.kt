@@ -40,7 +40,7 @@ import kotlin.time.Duration.Companion.seconds
  * would exclude every content path, a silently dead watcher. Ignoring it is safe in both remaining
  * shapes: under a STRICT ancestor (CONTENT_DIR nested inside DATA_DIR, a perfectly normal config)
  * the app's writes land outside the watched tree, and the equal-dirs case is rejected at the
- * config boundary ([com.plainbase.frameworks.config.PlainbaseConfig.requireContentDir]) before a
+ * config boundary ([com.plainbase.frameworks.config.ConfigBootInspector.requireContentDir]) before a
  * watcher ever exists.
  *
  * Events are delivered, not interpreted: each one becomes a single [onChange] call and the

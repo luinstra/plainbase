@@ -4,8 +4,8 @@
 # Boots the given plainbase launcher ($1: JVM dist or native binary — binary-agnostic) with
 # auth.mode=builtin on LOOPBACK and asserts the nine-step auth/CSRF matrix with curl + jq.
 #
-# Why loopback: a loopback bind with no trusted-proxy CIDRs means secureCookie() is false
-# (PlainbaseConfig.secureCookie), so pb_session is NOT `Secure` and a plain curl cookie jar
+# Why loopback: a loopback bind with no trusted-proxy CIDRs means
+# `TransportSecurityPolicy.derive(config).secureCookie` is false, so pb_session is NOT `Secure` and a plain curl cookie jar
 # (-c/-b) replays it over http. The non-loopback legs (421 transport refusal, proxy mode) need a
 # real non-loopback socket peer and live in enforced-auth-docker-smoke.sh.
 #

@@ -22,6 +22,7 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.WriteHistoryHook
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.GitConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsConfig
@@ -106,7 +107,7 @@ class ContentModuleWiringTest : FunSpec({
     }
 
     test("the production module set resolves ContentStore to LocalContentStore in LOCAL mode") {
-        val config = PlainbaseConfig.fromEnv(emptyMap())
+        val config = ConfigLoader.fromEnv(emptyMap())
         val owner = ServerResourceOwner()
         val app = createOwnedTestKoinApplication(owner, preparedModules(config, owner).toList())
         try {
@@ -119,7 +120,7 @@ class ContentModuleWiringTest : FunSpec({
 
     test("prepared LOCAL store, history, and availability retain identity after Koin registration") {
         withTempDataDir { dataDir ->
-            val config = PlainbaseConfig.fromEnv(emptyMap()).copy(dataDir = dataDir)
+            val config = ConfigLoader.fromEnv(emptyMap()).copy(dataDir = dataDir)
             val openers = ServerOpeners()
             val inputs = prepareRootBootInputs(config, openers.openLocal)
             val owner = ServerResourceOwner()
@@ -217,7 +218,7 @@ class ContentModuleWiringTest : FunSpec({
             val primaryDir = Files.createDirectory(dataDir.resolve("primary"))
             val extraDir = Files.createDirectory(dataDir.resolve("extra"))
             val extra = RootName.require("extra")
-            val config = PlainbaseConfig.fromEnv(emptyMap()).copy(
+            val config = ConfigLoader.fromEnv(emptyMap()).copy(
                 contentDir = primaryDir,
                 dataDir = dataDir,
                 roots = RootsConfig.of(
@@ -249,7 +250,7 @@ class ContentModuleWiringTest : FunSpec({
 
     test("an omitted required LOCAL primary fails with the named missing input") {
         withTempDataDir { dataDir ->
-            val config = PlainbaseConfig.fromEnv(emptyMap()).copy(dataDir = dataDir)
+            val config = ConfigLoader.fromEnv(emptyMap()).copy(dataDir = dataDir)
             val fullInputs = prepareRootBootInputs(config, ServerOpeners().openLocal)
             val omittedInputs = fullInputs.copy(localStores = fullInputs.localStores - RootName.PRIMARY)
             val owner = ServerResourceOwner()
@@ -405,7 +406,7 @@ private fun objectConfig(
     gitEnabled: Boolean? = null,
     endpoint: String = "https://acct.example.com",
 ): PlainbaseConfig =
-    PlainbaseConfig.fromEnv(emptyMap()).copy(
+    ConfigLoader.fromEnv(emptyMap()).copy(
         dataDir = dataDir,
         storage = StorageConfig(
             backend = StorageBackend.OBJECT,

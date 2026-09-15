@@ -3,6 +3,7 @@ package com.plainbase
 import com.plainbase.frameworks.cli.CommandOutput
 import com.plainbase.frameworks.cli.WriteIntent
 import com.plainbase.frameworks.config.AuthConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.GitConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -264,7 +265,7 @@ private fun nativeLocalConfig(content: Path, data: Path): PlainbaseConfig = Plai
     git = GitConfig(enabled = false),
 )
 
-private fun nativeObjectConfig(content: Path, data: Path): PlainbaseConfig = PlainbaseConfig.fromEnv(
+private fun nativeObjectConfig(content: Path, data: Path): PlainbaseConfig = ConfigLoader.fromEnv(
     mapOf(
         "CONTENT_DIR" to content.toString(),
         "DATA_DIR" to data.toString(),

@@ -1,7 +1,7 @@
 package com.plainbase
 
 import com.plainbase.domain.root.BootRefusal
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
 import java.nio.file.Path
@@ -73,7 +73,7 @@ class BootGatePurityTest {
                 }
                 """.trimIndent(),
             )
-            val config = PlainbaseConfig.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
+            val config = ConfigLoader.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
             val gitHome = data.resolve("git-home")
             assertFalse(Files.exists(gitHome), "precondition: the git-home must not exist before the gate runs")
 
@@ -121,7 +121,7 @@ class BootGatePurityTest {
             Files.writeString(main.resolve("page.md"), "---\ntitle: P\n---\n\n# P\n")
             assertFalse(Files.exists(main.resolve(".git")), "precondition: main must NOT be a repo yet")
 
-            val config = PlainbaseConfig.fromEnvAndFile(
+            val config = ConfigLoader.fromEnvAndFile(
                 mapOf(
                     "DATA_DIR" to data.toString(),
                     "CONTENT_DIR" to main.toString(),
@@ -162,7 +162,7 @@ class BootGatePurityTest {
             val main = Files.createDirectory(base.resolve("main"))
             Files.writeString(main.resolve("page.md"), "---\ntitle: P\n---\n\n# P\n")
 
-            val config = PlainbaseConfig.fromEnvAndFile(
+            val config = ConfigLoader.fromEnvAndFile(
                 mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to main.toString()),
             )
             bootGateFor(config)

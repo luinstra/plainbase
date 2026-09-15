@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.GitConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
@@ -62,7 +63,7 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
     // Local), hence this second, synthesized-from-env graph.
     test("object synthesis (main has no local path): HistoryProvider resolves and gate-checks without throwing") {
         withTempDataDir { dataDir ->
-            val objectEnvConfig = PlainbaseConfig.fromEnv(
+            val objectEnvConfig = ConfigLoader.fromEnv(
                         mapOf(
                             "DATA_DIR" to dataDir.toString(),
                             "PLAINBASE_STORAGE_BACKEND" to "object",
@@ -96,7 +97,7 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
 })
 
 private fun objectGitEnabledConfig(dataDir: java.nio.file.Path): PlainbaseConfig =
-    PlainbaseConfig.fromEnv(emptyMap()).copy(
+    ConfigLoader.fromEnv(emptyMap()).copy(
         dataDir = dataDir,
         storage = StorageConfig(
             backend = StorageBackend.OBJECT,

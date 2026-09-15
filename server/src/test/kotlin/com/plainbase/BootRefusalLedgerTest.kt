@@ -33,9 +33,9 @@ class BootRefusalLedgerTest : FunSpec({
     // Every boot refusal semantic, with its CLI disposition. Counted IN THE FILE, not remembered - a guard is only
     // ever as good as its count.
     val ledger = mapOf(
-        "loadForCommand" to "COVERED: the CLI runs the same loader (the same `build`) over the candidate it is about to write",
-        "gate: topology matrix" to "COVERED: evaluateBootGate, via bootGateFor",
-        "gate: bind guard" to "COVERED: evaluateBootGate, via bootGateFor",
+        "loadForCommand" to "COVERED: the CLI runs ConfigLoader and ConfigDecoder.decode over the candidate it is about to write",
+        "gate: topology matrix" to "COVERED: ConfigBootInspector.bootRefusals, then evaluateBootGate via bootGateFor",
+        "gate: bind guard" to "COVERED: ConfigBootInspector.bootRefusals, then evaluateBootGate via bootGateFor",
         "gate: per-root git gate" to "COVERED: evaluateBootGate, via bootGateFor",
         "DataDirLock contention" to
             "EXCLUDED: a CONCURRENCY refusal, not a config one - no candidate roots.conf can change who ELSE holds " +

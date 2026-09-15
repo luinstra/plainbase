@@ -1,5 +1,9 @@
 package com.plainbase.frameworks.cli
 
+import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.config.ConfigBootInspector
+import com.plainbase.frameworks.config.ConfigLoader
+import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -11,6 +15,7 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermissions
 
 /**
@@ -283,7 +288,9 @@ class RootCommandTest : FunSpec({
             val before = Files.readAllBytes(w.rootsConf)
 
             val err = captureStderr { w.root("add", "inner", inner.toString()) shouldBe 1 }
-            err shouldContain "nested inside"
+            err shouldBe
+                "root add: roots.inner (${inner.toRealPath()}) is nested inside roots.outer (${outer.toRealPath()}): " +
+                "roots must be disjoint directories${System.lineSeparator()}"
 
             withClue("roots.conf is byte-identical - no candidate bytes reached disk") {
                 Files.readAllBytes(w.rootsConf) shouldBe before
@@ -306,9 +313,7 @@ class RootCommandTest : FunSpec({
     // --- the server's WARNINGS, not just its refusals ----------------------------------------------------
 
     test("a typo'd path is added (it may be an unmounted volume) but the boot WARNING is surfaced, not swallowed") {
-        // `serve` prints rootsWarnings(); the CLI read only the refusals, so `root add notes /srv/dosc` exited 0
-        // with nothing but cheerful news about a root that will 503 on every request. Same principle as the gate:
-        // call the server's own check, do not keep half a list of it.
+        // `serve` prints the same roots warning projection; keep the candidate warning visible on the CLI too.
         world { w ->
             val err = captureStderr { captureStdout { w.root("add", "notes", "/srv/dosc") shouldBe 0 } }
             err shouldContain "WARNING"
@@ -330,10 +335,64 @@ class RootCommandTest : FunSpec({
             val extra = Files.createDirectory(w.tmp("notes"))
             captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 }
             w.config().roots.origin shouldBe RootsOrigin.EXPLICIT
+            val expectedCandidate = ConfigLoader.fromEnvAndCandidateRoots(null, w.env)
 
             captureStdout { w.root("remove", "notes") shouldBe 0 }
             Files.exists(w.rootsConf) shouldBe false
-            w.config().roots.origin shouldBe RootsOrigin.SYNTHESIZED
+            w.config() shouldBe expectedCandidate
+        }
+    }
+
+    test("C04-06: removing the last managed root refuses while a regular backup preserves the live file") {
+        world { w ->
+            val extra = Files.createDirectory(w.tmp("notes"))
+            Files.writeString(extra.resolve("note.md"), "---\ntitle = note\n---\n")
+            captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 }
+
+            val backup = ManagedRootsFile.backupPath(w.rootsConf)
+            Files.copy(w.rootsConf, backup, StandardCopyOption.REPLACE_EXISTING)
+            val liveBefore = Files.readAllBytes(w.rootsConf)
+            val backupBefore = Files.readAllBytes(backup)
+            val before = w.config()
+            before.roots.extras.single().localPath shouldBe extra
+            before.roots.managed shouldBe setOf(RootName.require("notes"))
+            ConfigBootInspector.rootsWarnings(before).any { it.startsWith("$backup is left over") } shouldBe true
+
+            var exit = -1
+            var stdout = ""
+            val stderr = captureStderr {
+                stdout = captureStdout { exit = w.root("remove", "notes") }
+            }
+            val liveExistsAfter = Files.exists(w.rootsConf)
+            val liveAfter = if (liveExistsAfter) Files.readAllBytes(w.rootsConf) else null
+            val nextLoad = runCatching { w.config() }
+            val nextLoadReceipt = nextLoad.fold(
+                onSuccess = { loaded ->
+                    "success:${loaded.roots.origin}:${loaded.roots.list.map { it.name.value }}"
+                },
+                onFailure = { failure -> "failure:${failure::class.simpleName}:${failure.message}" },
+            )
+            val expectedRefusal =
+                "root remove: cannot delete ${w.rootsConf} while backup entry $backup exists; " +
+                    "resolve the backup deliberately, then retry"
+            val receipt =
+                "RED receipt before the policy assertion: exit=$exit, stdout=$stdout, stderr=$stderr, " +
+                    "liveExistsAfter=$liveExistsAfter, liveBytesAfter=${liveAfter?.size ?: "absent"}, " +
+                    "nextLoad=$nextLoadReceipt"
+
+            withClue(receipt) { exit shouldBe 1 }
+            stdout shouldBe ""
+            val warningIndex = stderr.indexOf("root remove: WARNING: $backup is left over")
+            val refusalIndex = stderr.indexOf(expectedRefusal)
+            (warningIndex >= 0) shouldBe true
+            (warningIndex < refusalIndex) shouldBe true
+            stderr.lines().last { it.isNotEmpty() } shouldBe expectedRefusal
+            liveAfter?.contentEquals(liveBefore) shouldBe true
+            Files.readAllBytes(backup) shouldBe backupBefore
+
+            val loaded = nextLoad.getOrThrow()
+            loaded.roots.extras.single().localPath shouldBe extra
+            loaded.roots.managed shouldBe setOf(RootName.require("notes"))
         }
     }
 
@@ -343,10 +402,20 @@ class RootCommandTest : FunSpec({
             val b = Files.createDirectory(w.tmp("beta"))
             captureStdout { w.root("add", "alpha", a.toString()) shouldBe 0 }
             captureStdout { w.root("add", "beta", b.toString()) shouldBe 0 }
+            val before = w.config()
+            val backup = ManagedRootsFile.backupPath(w.rootsConf)
+            Files.copy(w.rootsConf, backup, StandardCopyOption.REPLACE_EXISTING)
+            val expectedCandidate = ConfigLoader.fromEnvAndCandidateRoots(
+                ManagedRootsFile.serialize(
+                    before.roots.list.filter { it.name in before.roots.managed && it.name.value != "alpha" },
+                ),
+                w.env,
+            )
             captureStdout { w.root("remove", "alpha") shouldBe 0 }
 
             Files.exists(w.rootsConf) shouldBe true
-            w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "beta")
+            w.config() shouldBe expectedCandidate
+            w.config().roots.managed shouldBe setOf(RootName.require("beta"))
         }
     }
 
@@ -388,10 +457,15 @@ class RootCommandTest : FunSpec({
             val extra = Files.createDirectory(w.tmp("notes"))
 
             val err = captureStderr { captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 } }
-            withClue("the residual failure is printed as a WARNING, naming it") {
-                err shouldContain "WARNING"
-                err shouldContain "did not cause it"
-                err shouldContain "nested inside"
+            val expectedWarning =
+                "root add: WARNING: this config already refuses to boot, and this command did not cause it: " +
+                    "roots.inner (${inner.toRealPath()}) is nested inside roots.outer (${outer.toRealPath()}): " +
+                    "roots must be disjoint directories${System.lineSeparator()}"
+            val expectedIgnoredContentWarning =
+                "root add: WARNING: roots {} is configured: the explicitly set CONTENT_DIR/contentDir (via env) is " +
+                    "ignored - primary's path comes from roots.docs.path${System.lineSeparator()}"
+            withClue("the residual failure is printed as one exact WARNING on the command error channel") {
+                err shouldBe expectedWarning + expectedIgnoredContentWarning
             }
             withClue("and the add SUCCEEDED - the CLI never made this config less bootable") {
             w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "outer", "inner", "notes")
@@ -443,8 +517,11 @@ class RootCommandTest : FunSpec({
             val nestedInMain = Files.createDirectories(w.content.resolve("deeper"))
 
             val err = captureStderr { w.root("add", "deeper", nestedInMain.toString()) shouldBe 1 }
-            withClue("the message names the NEW nesting (deeper inside main), not the pre-existing outer/inner one") {
-                err shouldContain "roots.deeper"
+            val expectedRefusal =
+                "root add: roots.deeper (${nestedInMain.toRealPath()}) is nested inside roots.docs (${w.content.toRealPath()}): " +
+                    "roots must be disjoint directories${System.lineSeparator()}"
+            withClue("the error channel contains only the NEW refusal, not the pre-existing outer/inner refusal") {
+                err shouldBe expectedRefusal
             }
             Files.exists(w.rootsConf) shouldBe false
         }
@@ -516,17 +593,17 @@ class RootCommandTest : FunSpec({
     test("T-CLI-14: dataDirFrom(env) equals config.dataDir - set, unset, and against a conf that tries to set it") {
         // If these two ever diverge, the CLI locks a different directory than the one it edits.
         world { w ->
-            PlainbaseConfig.dataDirFrom(w.env) shouldBe PlainbaseConfig.fromEnvAndFile(w.env).dataDir
+            ConfigLoader.dataDirFrom(w.env) shouldBe ConfigLoader.fromEnvAndFile(w.env).dataDir
         }
         withClue("unset: the ./data default, resolved identically on both sides") {
-            PlainbaseConfig.dataDirFrom(emptyMap()) shouldBe PlainbaseConfig.fromEnvAndFile(emptyMap()).dataDir
+            ConfigLoader.dataDirFrom(emptyMap()) shouldBe ConfigLoader.fromEnvAndFile(emptyMap()).dataDir
         }
         world { w ->
             // dataDir LOCATES the file, so it is the one field that can never come FROM it. A conf that declares
             // one must be ignored.
             Files.writeString(w.data.resolve("plainbase.conf"), """dataDir = "/somewhere/else"""")
-            PlainbaseConfig.dataDirFrom(w.env) shouldBe PlainbaseConfig.fromEnvAndFile(w.env).dataDir
-            PlainbaseConfig.fromEnvAndFile(w.env).dataDir shouldBe w.data
+            ConfigLoader.dataDirFrom(w.env) shouldBe ConfigLoader.fromEnvAndFile(w.env).dataDir
+            ConfigLoader.fromEnvAndFile(w.env).dataDir shouldBe w.data
         }
     }
 
@@ -614,7 +691,7 @@ private class World(private val base: Path, val data: Path, val content: Path) {
     fun root(vararg args: String, env: Map<String, String> = this.env): Int =
         RootCommand.run(args.toList(), env, CommandOutputCapture.current)
 
-    fun config(): PlainbaseConfig = PlainbaseConfig.fromEnvAndFile(env)
+    fun config(): PlainbaseConfig = ConfigLoader.fromEnvAndFile(env)
 
     /** A candidate root directory, a SIBLING of DATA_DIR and CONTENT_DIR so it nests inside neither. */
     fun tmp(name: String): Path = base.resolve(name)

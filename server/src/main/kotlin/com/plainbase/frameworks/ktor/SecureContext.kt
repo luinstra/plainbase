@@ -1,5 +1,7 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.frameworks.net.RemoteAddress
+
 /**
  * ADR-0008 per-request secure-context test. True when the request is over a transport trustworthy enough to
  * carry a credential: **loopback**, OR `X-Forwarded-Proto: https` from an **allowlisted proxy source**. The

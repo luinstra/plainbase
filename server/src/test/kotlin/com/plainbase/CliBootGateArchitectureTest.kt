@@ -5,6 +5,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import java.nio.file.Files
 import kotlin.io.path.readText
 
 /**
@@ -19,9 +20,8 @@ import kotlin.io.path.readText
  * MORE nobody had caught, a missing-binary check and a repo access probe. **A four-item list, reviewed by three
  * model seats, was missing half of what it was a list OF.** That is not a competence problem. It is what lists do.
  *
- * So the rule stops being prose. `RootCommand.kt` calls ONE function - `bootGateFor` - and may not NAME an
- * individual boot check, nor the WIRING those checks need (a CLI that builds its own stores and history
- * providers has reproduced `serve()`'s graph by hand, which is the same drift one layer down).
+ * So the rule stops being prose. `RootCommand.kt` calls ONE gate function - `bootGateFor` - and may not NAME an
+ * individual boot check or its wiring; after the gate diff it may consume only the shared warning projection.
  *
  * Matched over COMMENT-STRIPPED source, deliberately: the comments are FREE to name these, and they must. The
  * next reader learns why the CLI does not call them from the comment that says so.
@@ -35,7 +35,6 @@ class CliBootGateArchitectureTest : FunSpec({
     val banned = listOf(
         "nativeRootGuardFailure",
         "gitVersionFloorFailure",
-        "validateExplicitRoots",
         "explicitRootRefusals",
         "bootRefusals",
         "requireContentDir",
@@ -48,6 +47,8 @@ class CliBootGateArchitectureTest : FunSpec({
         "rootBootProbes(",
         "prepareRootBootInputs(",
         "RootStoreFactory",
+        "TransportSecurityPolicy.derive",
+        "bindRefusal",
         "koinApplication",
     )
     val detector: (String) -> List<String> = { source -> banned.filter(source::contains) }
@@ -69,7 +70,47 @@ class CliBootGateArchitectureTest : FunSpec({
         }
     }
 
+    test("the detector stays armed for direct transport-policy consumption") {
+        listOf("TransportSecurityPolicy.derive", "bindRefusal").forEach { prohibited ->
+            detector("private val leaked = $prohibited").contains(prohibited) shouldBe true
+        }
+    }
+
+    test("the transport policy producer is present and non-vacuous") {
+        val policy = mainSourceRoot().resolve("frameworks/config/TransportSecurityPolicy.kt")
+        Files.isRegularFile(policy) shouldBe true
+        val policyCode = stripComments(policy.readText())
+        policyCode shouldContain "internal object TransportSecurityPolicy"
+        policyCode shouldContain "fun derive(config: PlainbaseConfig): TransportSecurityValues"
+        policyCode shouldContain "bindRefusal"
+    }
+
+    test("the candidate loader and decoder are present at the CLI boundary") {
+        val config = mainSourceRoot().resolve("frameworks/config")
+        val loader = config.resolve("ConfigLoader.kt")
+        val decoder = config.resolve("ConfigDecoder.kt")
+        Files.isRegularFile(loader) shouldBe true
+        Files.isRegularFile(decoder) shouldBe true
+        val loaderCode = stripComments(loader.readText())
+        val decoderCode = stripComments(decoder.readText())
+        loaderCode shouldContain "internal object ConfigLoader"
+        loaderCode shouldContain "fun fromEnvAndCandidateRoots("
+        loaderCode shouldContain "ConfigDecoder.decode(env, ConfigSources(operator, managed))"
+        decoderCode shouldContain "internal object ConfigDecoder"
+        decoderCode shouldContain "fun decode("
+        decoderCode shouldContain "private object RootsConfigParser"
+        code shouldContain "ConfigLoader.fromEnvAndCandidateRoots(text, env)"
+    }
+
     test("RootCommand DOES call bootGateFor - the positive leg, or this only proves the CLI is quiet") {
         code shouldContain "bootGateFor"
+    }
+
+    test("RootCommand may consume only the inspector's warning projection") {
+        Regex("ConfigBootInspector\\.([A-Za-z0-9_]+)\\s*\\(")
+            .findAll(code)
+            .map { it.groupValues[1] }
+            .toList() shouldBe listOf("rootsWarnings")
+        code shouldContain "ConfigBootInspector.rootsWarnings(candidate)"
     }
 })

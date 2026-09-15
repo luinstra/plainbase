@@ -2,7 +2,10 @@ package com.plainbase
 
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.config.ConfigBootInspector
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.TransportSecurityPolicy
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -17,8 +20,8 @@ import java.nio.file.attribute.PosixFilePermissions
 /**
  * **The CONFIG + FILESYSTEM half of the shared boot gate (multi-root C5, D-C5-17): COMPLETE, and STRUCTURED.**
  *
- * `requireContentDir()` throws its FIRST failure - which is what an operator sees at boot, and what
- * `RootsValidationTest` has always pinned. `bootRefusals()` returns them ALL, as values. **One implementation,
+ * `ConfigBootInspector.requireContentDir()` throws its FIRST failure - which is what an operator sees at boot, and what
+ * `RootsValidationTest` has always pinned. `ConfigBootInspector.bootRefusals()` returns them ALL, as values. **One implementation,
  * two shapes**, and the completeness is not a nicety: `plainbase root` refuses iff the candidate config
  * INTRODUCES a refusal the current config does not already have, and a validator that stops at its first
  * failure cannot support that diff. A pre-existing fault would MASK a new one, the baseline and the candidate
@@ -45,12 +48,15 @@ class BootGateTest : FunSpec({
 
     test("T-GATE-1: a missing CONTENT_DIR is PRIMARY_UNUSABLE, with the message requireContentDir throws") {
         withDataDir { _, env ->
-            val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/nope/not/here"))
-            val refusal = config.bootRefusals().single()
+            val config = ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/nope/not/here"))
+            val refusal = ConfigBootInspector.bootRefusals(config).single()
             refusal.kind shouldBe BootRefusal.Kind.PRIMARY_UNUSABLE
             refusal.roots shouldBe setOf(RootName.PRIMARY)
+            refusal.key shouldBe (BootRefusal.Kind.PRIMARY_UNUSABLE to setOf(RootName.PRIMARY))
             // Message EQUALITY, not similarity: a paraphrase would mean somebody re-implemented something.
-            refusal.message shouldBe shouldThrow<IllegalArgumentException> { config.requireContentDir() }.message
+            refusal.message shouldBe shouldThrow<IllegalArgumentException> {
+                ConfigBootInspector.requireContentDir(config)
+            }.message
         }
     }
 
@@ -66,7 +72,7 @@ class BootGateTest : FunSpec({
                 }
                 """.trimIndent(),
             ) { _, env ->
-                val refusal = PlainbaseConfig.fromEnvAndFile(env).bootRefusals().single()
+                val refusal = ConfigBootInspector.bootRefusals(ConfigLoader.fromEnvAndFile(env)).single()
                 refusal.kind shouldBe BootRefusal.Kind.ROOT_PAIR
                 // Keyed by the PAIR, so a pre-existing violation between (a, b) cannot mask a new one on (a, c).
                 refusal.roots shouldBe setOf(RootName.PRIMARY, RootName.require("inner"))
@@ -90,7 +96,7 @@ class BootGateTest : FunSpec({
             ) { _, env ->
                 // A path trivially "nests" inside itself both ways, so a naive collector would emit three refusals
                 // for one fault. The matrix short-circuits, exactly as the require chain it replaces did.
-                val refusal = PlainbaseConfig.fromEnvAndFile(env).bootRefusals().single()
+                val refusal = ConfigBootInspector.bootRefusals(ConfigLoader.fromEnvAndFile(env)).single()
                 refusal.kind shouldBe BootRefusal.Kind.ROOT_PAIR
                 refusal.message shouldContain "resolve to the same directory"
             }
@@ -103,12 +109,12 @@ class BootGateTest : FunSpec({
         val content = tempDir("pb-gate-content")
         try {
             withDataDir { _, env ->
-                val config = PlainbaseConfig.fromEnvAndFile(
+                val config = ConfigLoader.fromEnvAndFile(
                     env + mapOf("CONTENT_DIR" to content.toString(), "PLAINBASE_HOST" to "0.0.0.0"),
                 )
-                val refusal = config.bootRefusals().single { it.kind == BootRefusal.Kind.BIND_GUARD }
+                val refusal = ConfigBootInspector.bootRefusals(config).single { it.kind == BootRefusal.Kind.BIND_GUARD }
                 refusal.roots shouldBe emptySet()
-                refusal.message shouldBe config.bindGuardRefusal()
+                refusal.message shouldBe TransportSecurityPolicy.derive(config).bindRefusal
             }
         } finally {
             content.toFile().deleteRecursively()
@@ -118,7 +124,7 @@ class BootGateTest : FunSpec({
     // --- T-GATE-3: EVERY stage is evaluated. The completeness the baseline diff rests on ----------------
 
     test("T-GATE-3(b): a config with TWO topology faults reports TWO - this is the one a throw-first validator CANNOT do") {
-        // WRITE THIS FIRST AND WATCH IT FAIL against a throw-first `validateExplicitRoots`. Without it a
+        // This guards the complete collector in `ConfigBootInspector.bootRefusals`. Without it a
         // pre-existing fault MASKS a new one, the baseline diff sees no delta, and `root add` writes a fresh
         // nesting violation while reporting success. That RED is the whole argument for the collector, in one line.
         val outer = tempDir("pb-gate-two-outer")
@@ -133,14 +139,23 @@ class BootGateTest : FunSpec({
                 }
                 """.trimIndent(),
             ) { _, env ->
-                val refusals = PlainbaseConfig.fromEnvAndFile(env).bootRefusals()
-                refusals.map { it.kind } shouldContainExactly listOf(
-                    BootRefusal.Kind.PRIMARY_UNUSABLE, // primary is not a directory
-                    BootRefusal.Kind.ROOT_PAIR, // AND outer/inner nest - a fault BEHIND the first one
+                val refusals = ConfigBootInspector.bootRefusals(ConfigLoader.fromEnvAndFile(env))
+                refusals shouldBe listOf(
+                    BootRefusal(
+                        BootRefusal.Kind.PRIMARY_UNUSABLE,
+                        setOf(RootName.PRIMARY),
+                        "roots.docs.path does not exist or is not a directory: /nope/not/a/directory",
+                    ),
+                    BootRefusal(
+                        BootRefusal.Kind.ROOT_PAIR,
+                        setOf(RootName.require("outer"), RootName.require("inner")),
+                        "roots.inner (${inner.toRealPath()}) is nested inside roots.outer (${outer.toRealPath()}): " +
+                            "roots must be disjoint directories",
+                    ),
                 )
                 withClue("boot must still refuse with the FIRST message, byte-identical to what it always printed") {
                     shouldThrow<IllegalArgumentException> {
-                        PlainbaseConfig.fromEnvAndFile(env).requireContentDir()
+                        ConfigBootInspector.requireContentDir(ConfigLoader.fromEnvAndFile(env))
                     }.message shouldBe refusals.first().message
                 }
             }
@@ -159,19 +174,19 @@ class BootGateTest : FunSpec({
         // policy exists to protect. Diff the KEY.
         val data = Files.createTempDirectory("pb-gate-armswitch")
         try {
-            val legacy = PlainbaseConfig.fromEnvAndFile(
+            val legacy = ConfigLoader.fromEnvAndFile(
                 mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to data.toString()),
             )
             Files.writeString(
                 data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE),
                 """roots { notes { path = "/roots/notes" } }""",
             )
-            val explicit = PlainbaseConfig.fromEnvAndFile(
+            val explicit = ConfigLoader.fromEnvAndFile(
                 mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to data.toString()),
             )
 
-            val legacyRefusal = legacy.bootRefusals().single { it.kind == BootRefusal.Kind.ROOT_VS_DATA_DIR }
-            val explicitRefusal = explicit.bootRefusals().single { it.kind == BootRefusal.Kind.ROOT_VS_DATA_DIR }
+            val legacyRefusal = ConfigBootInspector.bootRefusals(legacy).single { it.kind == BootRefusal.Kind.ROOT_VS_DATA_DIR }
+            val explicitRefusal = ConfigBootInspector.bootRefusals(explicit).single { it.kind == BootRefusal.Kind.ROOT_VS_DATA_DIR }
 
             withClue("equal KEYS: the diff must see one unchanged fault, not a new one") {
                 legacyRefusal.key shouldBe explicitRefusal.key
@@ -201,15 +216,15 @@ class BootGateTest : FunSpec({
         if (Files.isExecutable(content)) return@test // running as root: the permission drop is inert
         try {
             val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to content.toString())
-            val legacy = PlainbaseConfig.fromEnvAndFile(env)
+            val legacy = ConfigLoader.fromEnvAndFile(env)
             Files.writeString(
                 data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE),
                 """roots { notes { path = "/roots/notes" } }""",
             )
-            val explicit = PlainbaseConfig.fromEnvAndFile(env)
+            val explicit = ConfigLoader.fromEnvAndFile(env)
 
-            val legacyRefusal = legacy.bootRefusals().single { it.kind == BootRefusal.Kind.PRIMARY_UNUSABLE }
-            val explicitRefusal = explicit.bootRefusals().single { it.kind == BootRefusal.Kind.PRIMARY_UNUSABLE }
+            val legacyRefusal = ConfigBootInspector.bootRefusals(legacy).single { it.kind == BootRefusal.Kind.PRIMARY_UNUSABLE }
+            val explicitRefusal = ConfigBootInspector.bootRefusals(explicit).single { it.kind == BootRefusal.Kind.PRIMARY_UNUSABLE }
 
             withClue("equal KEYS: one unchanged fault, so `root add` warns and proceeds instead of taking a hostage") {
                 legacyRefusal.key shouldBe explicitRefusal.key
@@ -230,8 +245,9 @@ class BootGateTest : FunSpec({
         val content = tempDir("pb-gate-clean")
         try {
             withDataDir { _, env ->
-                PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to content.toString()))
-                    .bootRefusals()
+                ConfigBootInspector.bootRefusals(
+                    ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to content.toString())),
+                )
                     .shouldContainExactly(emptyList())
             }
         } finally {
