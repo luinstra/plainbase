@@ -29,6 +29,7 @@ import com.plainbase.frameworks.cli.RootCommand
 import com.plainbase.frameworks.cli.S3SmokeCommand
 import com.plainbase.frameworks.cli.systemCommandOutput
 import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.TransportSecurityPolicy
@@ -96,7 +97,7 @@ fun main(args: Array<String>) {
 
 private fun serve(output: CommandOutput) {
     // Resolve config BEFORE building the Koin graph so loader failures remain the CLI's expected status-1 path.
-    val status = PlainbaseConfig.loadForCommand("serve", output::error)?.let { config -> runServer(config, output) } ?: 1
+    val status = ConfigLoader.loadForCommand("serve", output::error)?.let { config -> runServer(config, output) } ?: 1
     if (status != 0) exitProcess(1)
 }
 

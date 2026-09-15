@@ -7,6 +7,7 @@ import com.plainbase.domain.root.ReservedSegments
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.ManagedRootsBackupPresentException
 import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
@@ -103,7 +104,7 @@ object RootCommand {
         // the one field that can never come from one - it is resolved from env/default, never file-derived. This
         // is therefore the same value config.dataDir will hold, by construction rather than by luck. It locates
         // the lock and is authoritative for nothing else.
-        val dataDir = PlainbaseConfig.dataDirFrom(env)
+        val dataDir = ConfigLoader.dataDirFrom(env)
         val lock = awaitRootsLock(dataDir)
         if (lock == null) {
             output.error(
@@ -128,7 +129,7 @@ object RootCommand {
 
     /** The config as it stands, through the loader's own error funnel (a clean `<command>: <msg>` line + null). */
     private fun load(command: String, env: Map<String, String>, output: CommandOutput): PlainbaseConfig? =
-        PlainbaseConfig.loadForCommand(command, output::error, resolve = { PlainbaseConfig.fromEnvAndFile(env) })
+        ConfigLoader.loadForCommand(command, output::error, resolve = { ConfigLoader.fromEnvAndFile(env) })
 
     /**
      * `root add <name> <path>`. A refusal writes NO CONFIG, and under this ordering that is structural rather
@@ -346,10 +347,10 @@ object RootCommand {
         output: CommandOutput,
     ): Artifact? {
         val text = if (candidateRoots.isEmpty()) null else ManagedRootsFile.serialize(candidateRoots)
-        val candidate = PlainbaseConfig.loadForCommand(
+        val candidate = ConfigLoader.loadForCommand(
             "root $verb",
             output::error,
-            resolve = { PlainbaseConfig.fromEnvAndCandidateRoots(text, env) },
+            resolve = { ConfigLoader.fromEnvAndCandidateRoots(text, env) },
         ) ?: return null
         val candidateRefusals = bootGateFor(candidate).refusals
         val baselineKeys = bootGateFor(config).refusals.map { it.key }.toSet()

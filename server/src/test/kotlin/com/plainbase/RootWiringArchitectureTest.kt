@@ -15,11 +15,11 @@ import kotlin.io.path.readText
 
 /**
  * **Primary is chosen by the ROOT MODEL and never re-derived by its consumers.** No source may ask whether a `Root` is
- * primary by comparing names, except in the three boundary files that DEFINE primary (`RootRegistry`), PARSE and VALIDATE it
- * (`PlainbaseConfig`) and PARSE OPERATOR ARGV (`RootCommand` - text from a command line cannot be made to fail typecheck,
- * so primary's protection there is a runtime refusal). `Application` is deliberately absent: the boot gate must not know
- * primary's name, so any comparison there fails this test. Per-root wiring takes primary from `registry.primary` and folds
- * `registry.extras`.
+ * primary by comparing names, except in the five boundary files that define or parse it: `RootRegistry` derives the model,
+ * `PlainbaseConfig` performs the filesystem inspection, `RootsConfig` owns the typed primary/extras partition,
+ * `ConfigDecoder` parses and validates file topology, and `RootCommand` parses operator argv (text cannot be made to fail
+ * typecheck, so primary's protection there is a runtime refusal). `Application` is deliberately absent: the boot gate must
+ * not know primary's name. Per-root wiring takes primary from `registry.primary` and folds `registry.extras`.
  *
  * The bug this is a regression guard for SHIPPED in C4: `HistoryModule`'s per-root provider map had a
  * `root.name == registry.primary.name -> get<HistoryProvider>()` arm that short-circuited the primary root back to a
@@ -32,8 +32,8 @@ import kotlin.io.path.readText
  *
  *  - **Tier 1** - asking a Root whether it is THE REGISTRY'S primary (`x.name == y.primary.name`). This is the bug shape
  *    itself and it has ZERO legitimate uses: it only ever appears inside a per-root fold. Zero exemptions, forever.
- *  - **Tier 2** - comparing against the `RootName.PRIMARY` CONSTANT. This is how the root model and the policy layer
- *    legitimately identify the primary root, so it is LEDGERED to the three boundary files at an exact COUNT rather than banned:
+ *  - **Tier 2** - comparing against the `RootName.PRIMARY` CONSTANT. This is how the root model and configuration layers
+ *    legitimately identify the primary root, so it is LEDGERED to the five boundary files at an exact COUNT rather than banned:
  *    a new comparison appearing inside a thousand-line policy file fails the build and forces someone to say why.
  *
  * **Honest limitation: this is a regression guard for a KNOWN BUG SHAPE, not a proof.** It does not catch a fold that
@@ -68,13 +68,11 @@ class RootWiringArchitectureTest : FunSpec({
         // and since `of` resolves primary ONCE over the snapshot, one comparison is all it takes: `extras` partitions
         // against the RESOLVED primary, and nothing else searches.
         "RootRegistry.kt" to 1,
-        // PARSES and VALIDATES: the primary root's path is fatal where an extra's degrades, the operator-facing required-primary
-        // refusal, and RootsConfig's own derivations - the config-side twin of the registry.
-        //
-        // 5 -> 6 in multi-root C5: the machine-managed roots.conf MUST NOT declare main (D-C5-2), and a new file with
-        // a new rule needs its own operator-facing refusal. That refusal is the structural guarantee behind "the CLI
-        // never manages main" - main's path keeps coming from CONTENT_DIR or from a block the operator wrote.
-        "PlainbaseConfig.kt" to 6,
+        // PlainbaseConfig retains one filesystem-matrix comparison; RootsConfig owns the primary accessor, extras
+        // partition and construction backstop; ConfigDecoder owns the two-file merge refusals and parser branches.
+        "PlainbaseConfig.kt" to 1,
+        "RootsConfig.kt" to 3,
+        "ConfigDecoder.kt" to 2,
         // Application.kt is DELIBERATELY ABSENT, and its absence is a fix rather than an omission. The boot gate used
         // to hold exactly one comparison - `root.name != RootName.PRIMARY` - which exempted the primary root from the availability
         // probe every other root took, so a late mount refused the whole boot for the primary root and degraded to 503 for an
@@ -88,7 +86,7 @@ class RootWiringArchitectureTest : FunSpec({
         "RootCommand.kt" to 1,
     )
 
-    test("the scan sees the whole main source tree, the four wiring files included (anti-vacuous floor)") {
+    test("the scan sees the whole main source tree and all config wiring files (anti-vacuous floor)") {
         files.size shouldBeGreaterThanOrEqual 100
         val names = files.map { it.name }.toSet()
         names.containsAll(
@@ -100,6 +98,14 @@ class RootWiringArchitectureTest : FunSpec({
                 "RootRegistry.kt",
                 "RemoteAddress.kt",
                 "TransportSecurityPolicy.kt",
+                "ConfigSource.kt",
+                "StorageConfig.kt",
+                "RootsConfig.kt",
+                "GitConfig.kt",
+                "AuthConfig.kt",
+                "ConfigValuePolicy.kt",
+                "ConfigLoader.kt",
+                "ConfigDecoder.kt",
             ),
         ).shouldBeTrue()
     }

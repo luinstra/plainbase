@@ -2,9 +2,10 @@
 
 Full reference for every environment variable Plainbase reads. The README keeps a five-row quick
 table for the everyday knobs (`CONTENT_DIR`, `DATA_DIR`, `PLAINBASE_HOST`, `PLAINBASE_PORT`,
-`PLAINBASE_LOG_LEVEL`); this is the complete surface. Every row below is read directly from
-`PlainbaseConfig.build()` (`server/src/main/kotlin/com/plainbase/frameworks/config/PlainbaseConfig.kt`),
-with one exception - `PLAINBASE_LOG_LEVEL`, a logback-level env var - noted below. The one
+`PLAINBASE_LOG_LEVEL`); this is the complete surface. `ConfigLoader` loads the configuration sources;
+`ConfigDecoder` and the pure `ConfigValuePolicy` decode them into `PlainbaseConfig`
+(`server/src/main/kotlin/com/plainbase/frameworks/config/`). The exception is
+`PLAINBASE_LOG_LEVEL`, a logback-level env var noted below. The one
 file-only key with no env twin is the `roots {}` block (its own section below).
 
 ## Logging and command channels
@@ -45,33 +46,33 @@ is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUS
 
 | Env var | Config path | Default | Source |
 |---|---|---|---|
-| `CONTENT_DIR` | `contentDir` | `./content` | PlainbaseConfig.kt |
-| `DATA_DIR` | (env/default only, never file) | `./data` | PlainbaseConfig.kt |
-| `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`) | PlainbaseConfig.kt |
-| `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`) | PlainbaseConfig.kt |
+| `CONTENT_DIR` | `contentDir` | `./content` | ConfigDecoder.kt |
+| `DATA_DIR` | (env/default only, never file) | `./data` | ConfigValuePolicy.kt |
+| `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`) | ConfigDecoder.kt |
+| `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`) | ConfigDecoder.kt |
 | `PLAINBASE_LOG_LEVEL` | - | `INFO` | `logback.xml:8-9` (`${PLAINBASE_LOG_LEVEL:-INFO}`; **not** a `PlainbaseConfig` field) |
-| `PLAINBASE_MAX_WRITE_BODY_BYTES` | `maxWriteBodyBytes` | 1 MiB | PlainbaseConfig.kt |
-| `PLAINBASE_MAX_ASSET_BYTES` | `maxAssetBytes` | 10 MiB | PlainbaseConfig.kt |
-| `PLAINBASE_AUTH_MODE` | `auth.mode` | `off` (blank parses to `OFF`) | PlainbaseConfig.kt |
-| `PLAINBASE_TRUSTED_PROXY` | `auth.trustedProxy` | `[]` | PlainbaseConfig.kt (comma-list, CIDR-validated at load) |
-| `PLAINBASE_PROXY_SECRET` | `auth.proxySecret` | none (required in `proxy` mode) | PlainbaseConfig.kt |
-| `PLAINBASE_PROXY_IDENTITY_HEADER` | `auth.proxyIdentityHeader` | `X-Forwarded-User` | PlainbaseConfig.kt |
-| `PLAINBASE_INSECURE_HTTP` | `auth.insecureHttp` | `false` | PlainbaseConfig.kt |
-| `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS` | `auth.agentDirectCommit.globs` | `[]` | PlainbaseConfig.kt |
-| `PLAINBASE_MCP_ALLOWED_HOSTS` | `auth.mcpAllowedHosts` | fail-closed bind-host default | PlainbaseConfig.kt |
-| `PLAINBASE_MCP_ALLOWED_ORIGINS` | `auth.mcpAllowedOrigins` | fail-closed bind-host default | PlainbaseConfig.kt |
-| `PLAINBASE_GIT_ENABLED` | `git.enabled` | auto-detect (`null`) | PlainbaseConfig.kt |
-| `PLAINBASE_GIT_AUTHOR_NAME` | `git.authorName` | `Plainbase` | PlainbaseConfig.kt |
-| `PLAINBASE_GIT_AUTHOR_EMAIL` | `git.authorEmail` | `plainbase@localhost` | PlainbaseConfig.kt |
-| `PLAINBASE_STORAGE_BACKEND` | `storage.backend` | `local` | PlainbaseConfig.kt (`local` \| `object`; `object` serves an S3-compatible bucket as the authority) |
-| `PLAINBASE_S3_ENDPOINT` | `storage.object.endpoint` | none (**required** in `object` mode) | PlainbaseConfig.kt (absolute https URL; `http` refused unless `PLAINBASE_INSECURE_HTTP`) |
-| `PLAINBASE_S3_BUCKET` | `storage.object.bucket` | none (**required** in `object` mode) | PlainbaseConfig.kt |
-| `PLAINBASE_S3_ACCESS_KEY_ID` | (env only, never file) | none (**required** in `object` mode) | PlainbaseConfig.kt (secret: env only, never `plainbase.conf`) |
-| `PLAINBASE_S3_SECRET_ACCESS_KEY` | (env only, never file) | none (**required** in `object` mode) | PlainbaseConfig.kt (secret: env only, never `plainbase.conf`) |
-| `PLAINBASE_S3_REGION` | `storage.object.region` | `auto` (R2) | PlainbaseConfig.kt |
-| `PLAINBASE_S3_PREFIX` | `storage.object.prefix` | `""` | PlainbaseConfig.kt (validated through the `TreePath` funnel when non-empty) |
-| `PLAINBASE_S3_PATH_STYLE` | `storage.object.pathStyle` | `true` (R2 account-endpoint) | PlainbaseConfig.kt |
-| `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | PlainbaseConfig.kt |
+| `PLAINBASE_MAX_WRITE_BODY_BYTES` | `maxWriteBodyBytes` | 1 MiB | ConfigDecoder.kt |
+| `PLAINBASE_MAX_ASSET_BYTES` | `maxAssetBytes` | 10 MiB | ConfigDecoder.kt |
+| `PLAINBASE_AUTH_MODE` | `auth.mode` | `off` (blank parses to `OFF`) | ConfigDecoder.kt |
+| `PLAINBASE_TRUSTED_PROXY` | `auth.trustedProxy` | `[]` | ConfigDecoder.kt (comma-list, CIDR-validated at load) |
+| `PLAINBASE_PROXY_SECRET` | `auth.proxySecret` | none (required in `proxy` mode) | ConfigDecoder.kt |
+| `PLAINBASE_PROXY_IDENTITY_HEADER` | `auth.proxyIdentityHeader` | `X-Forwarded-User` | ConfigDecoder.kt |
+| `PLAINBASE_INSECURE_HTTP` | `auth.insecureHttp` | `false` | ConfigDecoder.kt |
+| `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS` | `auth.agentDirectCommit.globs` | `[]` | ConfigDecoder.kt |
+| `PLAINBASE_MCP_ALLOWED_HOSTS` | `auth.mcpAllowedHosts` | fail-closed bind-host default | ConfigDecoder.kt |
+| `PLAINBASE_MCP_ALLOWED_ORIGINS` | `auth.mcpAllowedOrigins` | fail-closed bind-host default | ConfigDecoder.kt |
+| `PLAINBASE_GIT_ENABLED` | `git.enabled` | auto-detect (`null`) | ConfigDecoder.kt |
+| `PLAINBASE_GIT_AUTHOR_NAME` | `git.authorName` | `Plainbase` | ConfigDecoder.kt |
+| `PLAINBASE_GIT_AUTHOR_EMAIL` | `git.authorEmail` | `plainbase@localhost` | ConfigDecoder.kt |
+| `PLAINBASE_STORAGE_BACKEND` | `storage.backend` | `local` | ConfigDecoder.kt (`local` \| `object`; `object` serves an S3-compatible bucket as the authority) |
+| `PLAINBASE_S3_ENDPOINT` | `storage.object.endpoint` | none (**required** in `object` mode) | ConfigDecoder.kt (absolute https URL; `http` refused unless `PLAINBASE_INSECURE_HTTP`) |
+| `PLAINBASE_S3_BUCKET` | `storage.object.bucket` | none (**required** in `object` mode) | ConfigDecoder.kt |
+| `PLAINBASE_S3_ACCESS_KEY_ID` | (env only, never file) | none (**required** in `object` mode) | ConfigDecoder.kt (secret: env only, never `plainbase.conf`) |
+| `PLAINBASE_S3_SECRET_ACCESS_KEY` | (env only, never file) | none (**required** in `object` mode) | ConfigDecoder.kt (secret: env only, never `plainbase.conf`) |
+| `PLAINBASE_S3_REGION` | `storage.object.region` | `auto` (R2) | ConfigDecoder.kt |
+| `PLAINBASE_S3_PREFIX` | `storage.object.prefix` | `""` | ConfigDecoder.kt (validated through the `TreePath` funnel when non-empty) |
+| `PLAINBASE_S3_PATH_STYLE` | `storage.object.pathStyle` | `true` (R2 account-endpoint) | ConfigDecoder.kt |
+| `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | ConfigDecoder.kt |
 
 Any `storage.object.*` key set while `storage.backend=local` is ignored with a single startup warning
 that names the keys (a shared `plainbase.conf` across a local and an object deploy stays legal). In
@@ -424,7 +425,7 @@ then restart the server.
 ## `auth.mode` - the three modes
 
 - **`off`** - no login, no auth. Loopback-dev only, and despite being the "no auth" mode it is
-  still subject to the fail-closed bind guard (`bindGuardRefusal()` in `PlainbaseConfig.kt`): a
+  still subject to the fail-closed bind guard (`bindGuardRefusal()` in `TransportSecurityPolicy.kt`): a
   non-loopback `off` bind is refused unless a trusted proxy or `PLAINBASE_INSECURE_HTTP` override
   is present, because `off` is the **most dangerous** mode if it ever reached a public interface.
 - **`builtin`** - password login; Plainbase manages its own users and sessions.

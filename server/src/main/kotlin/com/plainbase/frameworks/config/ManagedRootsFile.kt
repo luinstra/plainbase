@@ -22,7 +22,7 @@ internal class ManagedRootsBackupPresentException(
 /**
  * The writer for `DATA_DIR/roots.conf` (C5 D-C5-1) - the file `plainbase root` owns end to end.
  *
- * **IT IS WRITE-ONLY, AND THERE IS NO `read`.** `PlainbaseConfig.fromEnvAndFile` is the ONLY code in the
+ * **IT IS WRITE-ONLY, AND THERE IS NO `read`.** `ConfigLoader.fromEnvAndFile` is the ONLY code in the
  * repository that parses `roots.conf`, and every consumer takes the managed roots off the ONE config snapshot
  * it produces (`config.roots.managed`). A reader here would be a SECOND parser of a file that `root add`
  * replaces atomically: a `list` racing an `add` would print a topology from read #1 annotated with a
@@ -90,7 +90,7 @@ object ManagedRootsFile {
      * ([FileAtomics.fsync]). Without them the promote can survive exactly the kill it was designed for and come
      * back as a zero-length file - and a zero-length `roots.conf` used to read as "this install has no extra
      * roots", which boots GREEN, main-only, with every extra root's pages 404ing. The loader now refuses that
-     * file rather than believing it ([PlainbaseConfig] `loadManagedRoots`), and this end makes it far less likely
+     * file rather than believing it ([ConfigLoader] `loadManagedRoots`), and this end makes it far less likely
      * to exist: two ends of one guarantee, because a fail-closed boot over an install that already lost its
      * topology is a good last resort and a bad only resort.
      *
@@ -144,7 +144,7 @@ object ManagedRootsFile {
      * the last one a promote can still answer for itself.
      *
      * A byte compare, NOT a re-parse, and that is not a shortcut: the candidate TEXT has already been through the
-     * real loader and the real boot gate before it ever reaches this file ([PlainbaseConfig.fromEnvAndCandidateRoots]),
+     * real loader and the real boot gate before it ever reaches this file ([ConfigLoader.fromEnvAndCandidateRoots]),
      * so its MEANING is settled and the only thing left to establish is that the file says what was validated.
      * Re-parsing here would also be the second parser of `roots.conf` this object exists not to have.
      */

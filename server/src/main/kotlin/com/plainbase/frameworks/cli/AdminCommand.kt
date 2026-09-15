@@ -17,6 +17,7 @@ import com.plainbase.domain.service.SessionService
 import com.plainbase.domain.service.SetupService
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.runtime.ContentRepositories
@@ -50,15 +51,15 @@ object AdminCommand {
 
     /**
      * Entry point for the `main` dispatch: env + `DATA_DIR/plainbase.conf` config, exit-code result. Resolves
-     * via [PlainbaseConfig.loadForCommand] (not `fromEnv`) so a FILE-configured `auth.mode=builtin` is visible
+     * via [ConfigLoader.loadForCommand] (not `fromEnv`) so a FILE-configured `auth.mode=builtin` is visible
      * to the setup-token bootstrap gate (A4a minor) - it only READS the conf file (no DB driver), so it runs
      * before the DataDirLock with no migration race. A bad config (IAE or HOCON) surfaces as `admin:` + exit 1.
      */
     fun runAsMain(args: List<String>, output: CommandOutput = systemCommandOutput()): Int {
-        val config = PlainbaseConfig.loadForCommand("admin", output::error) ?: return 1
+        val config = ConfigLoader.loadForCommand("admin", output::error) ?: return 1
         // force-retire re-reads the registry FRESH under `roots.lock` (see [forceRetire]); from `main` that is a
         // real reload of DATA_DIR's config, so a `root remove` that committed since startup is visible.
-        return run(args, config, output, reloadConfig = { PlainbaseConfig.loadForCommand("admin", output::error) })
+        return run(args, config, output, reloadConfig = { ConfigLoader.loadForCommand("admin", output::error) })
     }
 
     /**

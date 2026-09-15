@@ -17,6 +17,7 @@ import com.plainbase.domain.service.PlanStale
 import com.plainbase.domain.service.RootLossClassifier
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -71,13 +72,13 @@ object AdoptCommand {
 
     /**
      * Entry point for the `main` dispatch: env + `DATA_DIR/plainbase.conf`, exit-code result. Resolves via
-     * [PlainbaseConfig.loadForCommand] (NOT the env-only fast path) so the storage-backend decision matches
+     * [ConfigLoader.loadForCommand] (NOT the env-only fast path) so the storage-backend decision matches
      * `serve` for the same DATA_DIR: an operator who sets `storage.backend=object` only in `plainbase.conf`
      * must not get the LOCAL branch here and silently adopt over an ignored CONTENT_DIR while the bucket is
      * the real authority. A bad config (IAE or HOCON) surfaces as the actionable `adopt:` stderr + exit 1.
      */
     fun runAsMain(args: List<String>, output: CommandOutput = systemCommandOutput()): Int {
-        val config = PlainbaseConfig.loadForCommand("adopt", output::error) ?: return 1
+        val config = ConfigLoader.loadForCommand("adopt", output::error) ?: return 1
         return run(args, config, output)
     }
 

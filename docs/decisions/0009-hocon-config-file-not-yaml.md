@@ -38,10 +38,11 @@ config parsing, not wire serialization, and involves no reflection on app types.
 `com.typesafe:config`.** Precedence is **env-always-wins**: the file supplies values, environment variables
 override them (12-factor). `fromEnv()` remains the env-only fast path for the native spike only; every
 DATA_DIR-sharing CLI (`admin`, `reindex`, `adopt`) and `serve` read `plainbase.conf` through
-`PlainbaseConfig.loadForCommand` (which wraps `fromEnvAndFile` plus the ConfigException/IAE stderr+exit(1)
+`ConfigLoader.loadForCommand` (which wraps `fromEnvAndFile` plus the ConfigException/IAE stderr+exit(1)
 funnel) so their file-configured decisions (`auth.mode`, `storage.backend`) match for the same DATA_DIR -
 e.g. a file-only `storage.backend=object` is never read as `local`, and a file-configured
-`auth.mode=builtin` is visible to the setup-token path `admin` drives.
+`auth.mode=builtin` is visible to the setup-token path `admin` drives. `PlainbaseConfig.loadForCommand`
+temporarily forwards to the loader for compatibility during the configuration separation.
 **Secrets stay in the environment, never the committed file.** Values are read through Typesafe Config's typed
 getters (no reflection on app types). Because Ktor uses Typesafe Config programmatically today rather than
 loading a `.conf` from disk, A1 must **native-confirm the file-parse path** as part of its native-gate proof

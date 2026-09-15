@@ -5,12 +5,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/**
- * Native proof (§D) that the HOCON file-PARSE path works inside the closed-world image: typesafe-config is
- * allowlisted but its `ConfigFactory.parseFile` path was previously unexercised under native. Writes a
- * `plainbase.conf` in a temp DATA_DIR, reads it via [PlainbaseConfig.fromEnvAndFile], asserts the parsed
- * values. kotlin.test + @Tag("native") only (the native gate's source set).
- */
+/** Exercises real HOCON file parsing and substitution through [ConfigLoader] in the native image. */
 @Tag("native")
 class HoconParseNativeTest {
 
@@ -22,7 +17,7 @@ class HoconParseNativeTest {
                 data.resolve("plainbase.conf"),
                 """auth { mode = builtin, trustedProxy = ["10.0.0.0/8"] }""",
             )
-            val config = PlainbaseConfig.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
+            val config = ConfigLoader.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
             assertEquals(AuthMode.BUILTIN, config.auth.mode)
             assertEquals(listOf("10.0.0.0/8"), config.auth.trustedProxyCidrs)
         } finally {
@@ -51,7 +46,7 @@ class HoconParseNativeTest {
                 """.trimIndent(),
             )
             // No PLAINBASE_HOST_FROM_FILE in the env → the optional ref drops; the within-file ${proxyHost} resolves.
-            val config = PlainbaseConfig.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
+            val config = ConfigLoader.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
             assertEquals("10.10.10.10", config.host)
             assertEquals(listOf("192.168.0.0/24"), config.auth.trustedProxyCidrs)
         } finally {

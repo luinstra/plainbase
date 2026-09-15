@@ -86,6 +86,23 @@ class CliBootGateArchitectureTest : FunSpec({
         policyCode shouldContain "bindRefusal"
     }
 
+    test("the candidate loader and decoder are present at the CLI boundary") {
+        val config = mainSourceRoot().resolve("frameworks/config")
+        val loader = config.resolve("ConfigLoader.kt")
+        val decoder = config.resolve("ConfigDecoder.kt")
+        Files.isRegularFile(loader) shouldBe true
+        Files.isRegularFile(decoder) shouldBe true
+        val loaderCode = stripComments(loader.readText())
+        val decoderCode = stripComments(decoder.readText())
+        loaderCode shouldContain "internal object ConfigLoader"
+        loaderCode shouldContain "fun fromEnvAndCandidateRoots("
+        loaderCode shouldContain "ConfigDecoder.decode(env, ConfigSources(operator, managed))"
+        decoderCode shouldContain "internal object ConfigDecoder"
+        decoderCode shouldContain "fun decode("
+        decoderCode shouldContain "private object RootsConfigParser"
+        code shouldContain "ConfigLoader.fromEnvAndCandidateRoots(text, env)"
+    }
+
     test("RootCommand DOES call bootGateFor - the positive leg, or this only proves the CLI is quiet") {
         code shouldContain "bootGateFor"
     }

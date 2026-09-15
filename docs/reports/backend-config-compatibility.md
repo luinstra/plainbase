@@ -1,4 +1,4 @@
-# Backend configuration compatibility: Stage 0
+# Backend configuration compatibility: Stage 0 and Stage 2
 
 This report records Plan04's Stage 0 configuration compatibility work. The Stage 0 and Stage 0b sections retain their
 historical characterization scope; the Stage 0c section below records the narrow backup-entry deletion guard and its
@@ -11,12 +11,39 @@ Stage 0/0b baseline: `75853ba208bb14516cf56f97339fa8985df52202`. Stage 0c implem
 `ConfigException.Parse` before managed-root loading processes its input. Stage 0 preserves this order and makes no
 production change to it.
 
+## Plan04 Stage 2 landed ledger
+
+Stage 0/0b/0c tables below retain their accepted-baseline anchors and historical results. The combined Stage 2
+extraction was made from accepted source `101a64ed933258ec4ae410cc0972ac5249650ad8`; current ownership and receipts
+are recorded here and in `.crew/reports/backend-analysis-2026-09-04/plan-04-stage-2/`.
+
+| Landed owner | Declarations moved or retained | Production callers / compatibility boundary |
+| --- | --- | --- |
+| `ConfigSource.kt`, `StorageConfig.kt`, `RootsConfig.kt`, `GitConfig.kt`, `AuthConfig.kt` | Normalized source, storage, roots, Git, and auth values; enum parsers and `RootsConfig` snapshot/default/copy behavior. | `PlainbaseConfig` constructor keeps the same parameter order/defaults; existing value, root, transport, and CLI tests continue to construct the same types. |
+| `ConfigValuePolicy.kt` | Pure `dataDirFrom`, rooted direct-commit glob projection, absolute/HTTPS URL predicates. | `RootCommand`, `RestModule`, and `S3SmokeCommand` use the owner; `PlainbaseConfig.agentDirectCommitGlobs` and `dataDirFrom` remain temporary compatibility delegates. |
+| `ConfigLoader.kt` | `ConfigSources`, file/candidate parsing, managed-roots damage handling, and the exact `loadForCommand` IAE/HOCON funnel. | `Application`, `AdminCommand`, `AdoptCommand`, `ReindexCommand`, `RootCommand`, `ConfigModule`, and `NativeSpike` call `ConfigLoader`; candidate text is parsed before the live managed-file lane. |
+| `ConfigDecoder.kt` | Typed decode/build helpers and the file-private `RootsConfigParser`; one `decode` call path from `ConfigLoader`. | HOCON resolution, eager typed getters, source provenance, per-file origin ordering, merge order, primary/history rules, and managed-file distinctions are retained. |
+| `PlainbaseConfig.kt` | Constructor, filesystem/topology inspection, warnings, and temporary forwarders only. | `RootWiringArchitectureTest` records primary comparisons as `PlainbaseConfig=1`, `RootsConfig=3`, `ConfigDecoder=2`; Stage 3/4 inspection and forwarder obligations remain open. |
+
+Moved KDoc now points at `explicitRootRefusals`, `ConfigLoader.loadManagedRoots`, and the current policy owner. The
+source guard is intentionally non-vacuous: value/loader/decoder files must exist and be nonempty, `ConfigSources` is
+confined to loader/decoder, decoder calls are confined to loader, and the single parser owner is required.
+
 ## Source map
 
-- [PlainbaseConfig.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/PlainbaseConfig.kt) is the current
-  production loader, decoder, value policy, and compatibility seam.
+- [PlainbaseConfig.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/PlainbaseConfig.kt) retains the
+  constructor, filesystem/topology inspection, warnings, and temporary compatibility delegates.
+- [ConfigSource.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/ConfigSource.kt),
+  [StorageConfig.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/StorageConfig.kt),
+  [RootsConfig.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/RootsConfig.kt),
+  [GitConfig.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/GitConfig.kt), and
+  [AuthConfig.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/AuthConfig.kt) own the normalized values.
+- [ConfigValuePolicy.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/ConfigValuePolicy.kt) owns pure
+  value derivations; [ConfigLoader.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/ConfigLoader.kt)
+  owns file/candidate selection; [ConfigDecoder.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/ConfigDecoder.kt)
+  owns typed decoding and the private roots parser.
 - [ConfigLoadingCompatibilityNativeTest.kt](../../server/src/nativeTest/kotlin/com/plainbase/frameworks/config/ConfigLoadingCompatibilityNativeTest.kt)
-  contains the four new cases. The native source set is folded into the JVM `test` task and is also compiled into the
+  contains the compatibility cases. The native source set is folded into the JVM `test` task and is also compiled into the
   native test image.
 - [HoconParseNativeTest.kt](../../server/src/nativeTest/kotlin/com/plainbase/frameworks/config/HoconParseNativeTest.kt)
   and [ManagedRootsFileNativeTest.kt](../../server/src/nativeTest/kotlin/com/plainbase/frameworks/config/ManagedRootsFileNativeTest.kt)
@@ -65,7 +92,8 @@ not an automated completeness proof.
 | `fromEnv`, `dataDirFrom`, `fromSources`, `fromEnvAndFile`, `fromEnvAndCandidateRoots`, `loadForCommand` (637, 646, 658, 767, 783, 796) | `ConfigLoader.kt` | Application, CLI, native spike, config/root/CLI tests; preserve names, defaults, and exception boundaries until the closeout chunk. |
 | `loadManagedRoots`, `damagedRootsMessage`, `parseIfRegularFile`, `parseCandidate` (688, 723, 739, 754) | `ConfigLoader.kt` private | One real/candidate pipeline; null candidate remains empty config and does not observe the live backup. |
 | `build`, `contentDirSource`, `positiveSize`, `buildGit`, `buildAuth`, `buildStorage` (817–957) | `ConfigDecoder.kt` | Loader-only decoder path; preserve evaluation order, env-only storage credentials, and proxy-secret file fallback. |
-| `MISSING_S3_CREDENTIALS_MESSAGE`, `OBJECT_STORAGE_KEYS` (614, 623) | `ConfigDecoder.kt` private | Storage diagnostics; list only existing permitted key names. |
+| `MISSING_S3_CREDENTIALS_MESSAGE` (614) | `StorageConfig.kt` internal | One diagnostic shared by decoding and boot inspection. |
+| `OBJECT_STORAGE_KEYS` (623) | `ConfigDecoder.kt` private | Storage diagnostics; list only existing permitted key names. |
 | `buildRoots`, `parseRootBlock`, `parseRoot`, `requireCoherentMainHistory`, `parseHistoryMode` (983–1159) | File-private `RootsConfigParser` in `ConfigDecoder.kt` | Root/config/native tests; preserve per-file ordering and history coherence. |
 | `requireTreePathPrefix`, `requireParseableCidrs`, `requireParseableGlobs`, `mainDirectCommitGlobs`, `buildDirectCommitGlobsByRoot` (1245–1341) | `ConfigDecoder.kt` private | Decoder cross-field validation; preserve the bare-primary-name branch and avoid duplicate parsers. |
 | `Map.longStrict`, `Map.positiveLongStrict`, `Long.toIntInRange`, `Map.boolStrict` (1344–1373); `String.toCommaList`; `Config.stringOrNull`, `intOrNull`, `longOrNull`, `stringListOrNull`, `boolStrict` (1378–1402) | `ConfigDecoder.kt` private | One typed decode pipeline; do not lazily skip currently eager getters. |
@@ -133,6 +161,35 @@ compatibility result.
 | C04-10 diagnostics | `BootGateTest` exercises complete refusal collection at 120; application consumption stages topology, storage/root warnings, bind refusal, and insecure-bind warning at 418–436. | `BootGateTest` retains ordered kinds `[PRIMARY_UNUSABLE, ROOT_PAIR]` and requires `requireContentDir` failure message to equal the first refusal message. Native `BootGateOrderingTest` provides verdict rank/kind-partition assertions only; it does not assert emitted warning sequence. | Observed: `JVM-FULL` passed the named `BootGateTest` assertions; `NATIVE-S0` passed the named `BootGateOrderingTest` verdict rank/kind-partition methods. |
 | C04-11 security | `TransportSecurityPolicy.derive` now owns the five bind/cookie/MCP result fields; `PlainbaseConfig` retains temporary delegates. `RemoteAddress` and its private parser helpers live in `frameworks/net/RemoteAddress.kt`; Ktor request consumers import that helper directly. | `BindGuardTest` pins exact proxy-completeness ordering (including `insecureHttp=true`), absent/blank secret and CIDR cases, off/builtin/proxy behavior, and nonloopback insecure-cookie behavior. `PlainbaseConfigTest` pins exact ordered defaults and duplicate-preserving direct overrides. `TransportSettingsTest` pins all five projection fields. `AddressParsingTest` and `RemoteAddressNativeTest` retain the moved suites; `SecureContextTest` keeps the Ktor predicate and explicit insecure-config case. | Observed: Stage1 focused JVM suites passed all named assertions; native image execution remains parent-owned. |
 | C04-12 effects/error funnel | `loadForCommand` catches `IllegalArgumentException` and `ConfigException` around the real loader (796); Stage1 adds bounded source guards for policy/net effect patterns and net→config/Ktor direction. Application's bind-warning KDoc now links the policy owner; temporary accessor links remain until Stage4. | `PlainbaseConfigTest` expects a bad object-mode load to return `null` and emit exactly one error containing `serve:` and `storage.object.endpoint is required`, and a malformed operator load to return `null` and emit exactly one error containing `admin:`. Native `BootGatePurityTest` compares the owned tree before/after and checks no `.git` or git-home creation; this is not a general purity promise. | Observed: Stage1 `ConfigSeparationArchitectureTest` clean GREEN after five real compile-safe RED/GREEN source-guard mutations across four categories: Ktor import in config, config import and FQN reference in net, Java filesystem calls, and Kotlin path calls. The old guard passed the Kotlin-path mutation before the denylist extension; the corrected guard failed as intended. Earlier literal-only/setup-failure receipts remain historical and are not relabeled. |
+
+### Stage2 revision1 C04 reconciliation
+
+The rows below are the execution record for the revision1 follow-through. They supplement the historical rows above; the
+remaining Stage3/4 obligations are deliberately left open. `BASELINE-RETRO` means runs of the copied relevant
+fixtures against the isolated `/tmp/plainbase-stage2-baseline-9L5tcs` extraction of accepted source
+`101a64ed933258ec4ae410cc0972ac5249650ad8`. It was retrospective, not pre-extraction evidence. That run completed 91
+tests with one failure: the copied managed-file assertion omitted the unchanged source's full refusal/remedies suffix.
+The original source body was inspected, the exact suffix was restored to the current assertion, and the current test is
+GREEN. The parent then completed the paired storage/root and port/auth controls, checked both eager file-glob spellings,
+asserted root identity through copy, pinned all three semantic diagnostics, and migrated the focused loader calls.
+The final identical assertions passed all 91 tests on both accepted baseline and current source (zero failures/errors/skips);
+current lint and detekt passed. Only ConfigLoader's owner spelling was adapted in baseline test copies. No new production
+code was copied into the baseline. The preceding 341-test current union remains a separate, earlier run.
+
+| Row | Actual production trace | Exact test/assertion and observed result | Remaining obligation |
+| --- | --- | --- | --- |
+| C04-01 loading | `ConfigLoader.fromSources` derives `DATA_DIR`, reads operator `plainbase.conf`, then selects managed roots before `ConfigDecoder.decode`. | `env-only loading ignores malformed config files and backup evidence` asserts env paths, defaults, `ENV`/`SYNTHESIZED` provenance, primary `docs`, and unchanged bytes; `paired invalid fromEnv values preserve storage then data directory before port and auth` asserts the real NUL `InvalidPathException` after storage is made valid. `BASELINE-RETRO` passed these assertions; current union passed. | Stage4 can remove remaining `PlainbaseConfig` loader delegates after all callers migrate. |
+| C04-02 precedence/strictness | `ConfigDecoder.decode` eagerly reads typed `contentDir`, `insecure`, storage, roots/history, port, and auth; auth validates mode, CIDRs, then globs. | `loader preserves contentDir, insecure, storage, roots/history, port, then auth failure order` and `auth mode precedes CIDRs, which precede main direct-commit globs` assert exact classes/messages. `object mode file poll seconds zero and negative values use the exact default` asserts both exact default values. `BASELINE-RETRO` passed; current `PlainbaseConfigTest`/compatibility suites passed. | Stage3 owns the larger topology/warning matrix; no generic validation framework is introduced. |
+| C04-03 HOCON/process environment | `ConfigLoader.parseIfRegularFile` and `parseCandidate` resolve HOCON; `ConfigDecoder` performs eager getters after resolution. | `operator HOCON resolves a real process environment value before the injected map` asserts `${PATH}` uses the real process value; `an env main-glob override still eagerly reads a wrong-typed file glob spelling` asserts exact `WrongType` class/message. `BASELINE-RETRO` passed both; current union passed. | Keep process-global environment read characterization and exact HOCON exception distinctions through Stage4 caller closeout. |
+| C04-04 provenance/snapshot | File-private `RootsConfigParser` in ConfigDecoder.kt preserves per-file origin and `ConfigLoader` returns one decoded snapshot per load. | `a retained config snapshot does not observe a later managed roots replacement` asserts retained `EXPLICIT` roots versus a fresh load; `a path carrying a non-ASCII character, a quote and a backslash round-trips through the REAL loader` asserts normalized path/provenance. `BASELINE-RETRO` passed; current union passed. | Stage3 still owns the complete inspection freshness matrix. |
+| C04-05 root merge/order | `RootsConfigParser` parses operator and managed blocks independently, then merges file 1 before file 2 without hoisting primary. | `the in-memory candidate and the on-disk file parse to the SAME roots - the gate's load-bearing assumption` now writes an operator root plus managed Unicode/quoted content and asserts full `PlainbaseConfig` equality, ordered roots, and explicit origin; existing `ManagedRootsConfigTest`, `RootsConfigTest`, and `RootRankStabilityTest` retain ordering/rank assertions. `BASELINE-RETRO` passed the copied assertions; current union passed. | Stage3 owns the remaining cross-file refusal/topology matrix. |
+| C04-06 candidate/error parity | `ConfigLoader.fromEnvAndCandidateRoots` takes candidate text through the same decoder; live managed parsing wraps only managed-file HOCON failures. | `semantically invalid candidate bytes and the same managed file refuse identically` retains semantic exception parity. `malformed candidate syntax stays a parse error while malformed managed syntax is wrapped` asserts candidate `ConfigException.Parse`, exact `String: 1: expecting a close parentheses ')' here, not: end of file`, managed cause class, and the full origin-aware wrapped message. `BASELINE-RETRO` exposed the missing suffix in the copied expectation; current source preserves the baseline body and passes exact assertion. | Keep malformed-candidate versus wrapped-managed distinction; do not claim substring checks or suite totals prove message parity. |
+| C04-07 entry/backup matrix | `ConfigLoader.loadManagedRoots` uses regular-file follow semantics and checks backup evidence before synthesizing; `ManagedRootsFile` retains no-follow entry controls. | `operator and managed entries retain regular-file follow behavior across NIO entry kinds` independently checks directory, regular symlink, dangling symlink, and target preconditions; `loader treats a regular backup as damage beside missing and nonregular managed entries` checks regular backup bytes and live target/link preservation for missing, directory, and dangling-link live entries. `BASELINE-RETRO` passed these copied assertions; current union passed. Permission-denied read remains source-reviewed unsupported because no independent denied-read precondition was established. | Stage3 may close permission channels only with a real denied read and cleanup; never resurrect the invalid unlink-permission fixture. |
+| C04-08 topology | `PlainbaseConfig` still owns filesystem inspection; Stage2 only supplies normalized roots to it. | Current union passed the existing named root-parser/boot consumers; no new Stage2 test claims the full declared/canonical/permission matrix. `BASELINE-RETRO` did not run topology suites. | Stage3 owns declared, canonical, aliased, nonexistent, permission, and warning-channel coverage. |
+| C04-09 freshness | Loader snapshots parsed files; inspection remains on-demand in the retained owner. | `a retained config snapshot does not observe a later managed roots replacement` is the new loader-level snapshot assertion and passed in `BASELINE-RETRO` and current. | Stage3 owns same-config filesystem mutation, memoization RED controls, and inspector freshness. |
+| C04-10 diagnostics/order | Boot gate and warning consumers remain in their existing owners; Stage2 preserves loader/decoder error precedence. | Current union passed existing `BootGateTest`, `BootGateOrderingTest`, and `BootRefusalLedgerTest` assertions. These are not a new emitted-warning-order proof; native-tagged suites were JVM folds, not in-image runs. `BASELINE-RETRO` did not run the boot suites. | Stage3 owns complete warning channel/order characterization. |
+| C04-11 security/no-DNS | `ConfigValuePolicy` owns pure URL/glob derivations; `RemoteAddress` remains the strict literal parser; no resolver operation is in either pure-owner guard. | Current union passed the affected `BindGuardTest`, `SecureContextTest`, `TransportSettingsTest`, and architecture guards. Revision1 also made the common effect-token guard reject an uncalled `InetAddress.getByName` mutation, with immediate restoration. This is JVM evidence, not a native-image run. | Stage4 owns removal of temporary value delegates and final caller/KDoc closeout; native gate remains parent-owned. |
+| C04-12 effects/error funnel | `ConfigLoader.loadForCommand` retains the narrow IAE/HOCON funnel; `ConfigSources` and `ConfigDecoder` calls are guarded across all production Kotlin files. | Corrected architecture guard rejected uncalled external-package `ConfigSources` use and uncalled external `ConfigDecoder.decode` use, then restored GREEN; the common pure-owner guard rejected the uncalled DNS resolver mutation. Existing `loadForCommand` exact prefix/message tests passed in current and `BASELINE-RETRO` behavior fixtures. | Stage4 owns removed forwarders, final caller inventory, and unresolved KDoc links; guards remain operation/call-site checks, not a whole-program purity proof. |
 
 ### Exact test-name lookup
 

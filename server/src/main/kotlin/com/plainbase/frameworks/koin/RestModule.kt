@@ -16,6 +16,7 @@ import com.plainbase.domain.service.SessionService
 import com.plainbase.domain.service.SetupService
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.ConfigValuePolicy
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.ktor.AuthServices
 import com.plainbase.frameworks.ktor.GuardedAdminFacade
@@ -174,7 +175,7 @@ internal fun createRestModule(
                     absence = get(),
                     proposalService = get(),
                     proposalLabeler = get(),
-                    agentDirectCommitGlobs = config.agentDirectCommitGlobs(),
+                    agentDirectCommitGlobs = ConfigValuePolicy.agentDirectCommitGlobs(config),
                 )
                 onServingRuntimeCollected(serving)
                 val security = securityAssembly(
