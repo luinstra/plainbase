@@ -16,7 +16,7 @@ import kotlin.io.path.readText
 /**
  * **Primary is chosen by the ROOT MODEL and never re-derived by its consumers.** No source may ask whether a `Root` is
  * primary by comparing names, except in the five boundary files that define or parse it: `RootRegistry` derives the model,
- * `PlainbaseConfig` performs the filesystem inspection, `RootsConfig` owns the typed primary/extras partition,
+ * `ConfigBootInspector` performs the filesystem inspection, `RootsConfig` owns the typed primary/extras partition,
  * `ConfigDecoder` parses and validates file topology, and `RootCommand` parses operator argv (text cannot be made to fail
  * typecheck, so primary's protection there is a runtime refusal). `Application` is deliberately absent: the boot gate must
  * not know primary's name. Per-root wiring takes primary from `registry.primary` and folds `registry.extras`.
@@ -68,9 +68,9 @@ class RootWiringArchitectureTest : FunSpec({
         // and since `of` resolves primary ONCE over the snapshot, one comparison is all it takes: `extras` partitions
         // against the RESOLVED primary, and nothing else searches.
         "RootRegistry.kt" to 1,
-        // PlainbaseConfig retains one filesystem-matrix comparison; RootsConfig owns the primary accessor, extras
-        // partition and construction backstop; ConfigDecoder owns the two-file merge refusals and parser branches.
-        "PlainbaseConfig.kt" to 1,
+        // ConfigBootInspector owns the filesystem-matrix comparison; PlainbaseConfig is a value/delegate only. RootsConfig
+        // owns the primary accessor, extras partition and construction backstop; ConfigDecoder owns file merge/parser branches.
+        "ConfigBootInspector.kt" to 1,
         "RootsConfig.kt" to 3,
         "ConfigDecoder.kt" to 2,
         // Application.kt is DELIBERATELY ABSENT, and its absence is a fix rather than an omission. The boot gate used
@@ -98,6 +98,7 @@ class RootWiringArchitectureTest : FunSpec({
                 "RootRegistry.kt",
                 "RemoteAddress.kt",
                 "TransportSecurityPolicy.kt",
+                "ConfigBootInspector.kt",
                 "ConfigSource.kt",
                 "StorageConfig.kt",
                 "RootsConfig.kt",

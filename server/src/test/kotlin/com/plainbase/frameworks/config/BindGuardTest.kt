@@ -21,7 +21,7 @@ private const val INCOMPLETE_PROXY_REFUSAL =
 
 /**
  * The ADR-0008 fail-closed bind guard, driven as the pure [PlainbaseConfig.bindGuardRefusal] predicate (no
- * socket bound, mirroring how [PlainbaseConfig.requireContentDir] is unit-tested). A non-null return is a
+ * socket bound, mirroring how [ConfigBootInspector.requireContentDir] is unit-tested). A non-null return is a
  * start refusal; null permits start.
  */
 class BindGuardTest : FunSpec({

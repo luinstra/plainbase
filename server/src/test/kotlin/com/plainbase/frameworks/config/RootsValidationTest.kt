@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.config
 
+import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
@@ -137,13 +138,19 @@ class RootsValidationTest : FunSpec({
     test("explicit: a missing extra path boots, and rootsWarnings names it (D13)") {
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
+            val missing = base.resolve("gone")
             val cfg = config(
                 base.resolve("data"),
                 base.resolve("legacy"),
-                explicitRoots("docs" to main, "extra" to base.resolve("gone")),
+                explicitRoots("docs" to main, "extra" to missing),
             )
             cfg.requireContentDir() shouldBe main
-            cfg.rootsWarnings().any { it.contains("roots.extra.path") && it.contains(base.resolve("gone").toString()) } shouldBe true
+            cfg.bootRefusals() shouldBe emptyList()
+            cfg.rootsWarnings() shouldBe listOf(
+                "roots.extra.path does not exist or is not a readable/searchable directory: $missing - the root will " +
+                    "serve 503 for every request until the path is restored AND the server is restarted (its pages, " +
+                    "aliases and checkpoints are left untouched in the meantime)",
+            )
         }
     }
 
@@ -151,12 +158,11 @@ class RootsValidationTest : FunSpec({
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
             val link = Files.createSymbolicLink(base.resolve("docs-link"), main)
-            val failure = shouldThrow<IllegalArgumentException> {
-                config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "twin" to link))
-                    .requireContentDir()
-            }
-            failure.message shouldContain "resolve to the same directory"
-            failure.message shouldContain "twin"
+            val cfg = config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "twin" to link))
+            val refusal = cfg.bootRefusals().single()
+            refusal.key shouldBe (BootRefusal.Kind.ROOT_PAIR to setOf(RootName.PRIMARY, RootName.require("twin")))
+            refusal.message shouldBe "roots.docs and roots.twin resolve to the same directory: ${main.toRealPath()}"
+            shouldThrow<IllegalArgumentException> { cfg.requireContentDir() }.message shouldBe refusal.message
         }
     }
 
@@ -261,9 +267,14 @@ class RootsValidationTest : FunSpec({
             // DATA_DIR does not exist yet; a plain normalize() would keep the alias form, miss the
             // nesting, and DataDirLock would then CREATE the data dir physically inside the served
             // tree. The best-effort canonicalization resolves the existing symlinked ancestor.
-            shouldThrow<IllegalArgumentException> {
-                config(alias.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to docs)).requireContentDir()
-            }.message shouldContain "declare the root and DATA_DIR through consistent paths"
+            val declaredData = alias.resolve("data").toAbsolutePath().normalize()
+            val cfg = config(declaredData, base.resolve("legacy"), explicitRoots("docs" to docs))
+            val refusal = cfg.bootRefusals().single()
+            refusal.key shouldBe (BootRefusal.Kind.ROOT_VS_DATA_DIR to setOf(RootName.PRIMARY))
+            refusal.message shouldBe
+                "DATA_DIR ($declaredData) is inside roots.docs on disk but not by its declared path ($docs): " +
+                "declare the root and DATA_DIR through consistent paths so the app-state exclusion can apply"
+            shouldThrow<IllegalArgumentException> { cfg.requireContentDir() }.message shouldBe refusal.message
         }
     }
 
@@ -281,11 +292,19 @@ class RootsValidationTest : FunSpec({
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
             val gone = base.resolve("gone")
-            val failure = shouldThrow<IllegalArgumentException> {
-                config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "one" to gone, "two" to gone))
-                    .requireContentDir()
-            }
-            failure.message shouldContain "resolve to the same directory"
+            val cfg = config(base.resolve("data"), base.resolve("legacy"), explicitRoots("docs" to main, "one" to gone, "two" to gone))
+            val refusal = cfg.bootRefusals().single()
+            refusal.key shouldBe (BootRefusal.Kind.ROOT_PAIR to setOf(RootName.require("one"), RootName.require("two")))
+            refusal.message shouldBe "roots.one and roots.two resolve to the same directory: $gone"
+            shouldThrow<IllegalArgumentException> { cfg.requireContentDir() }.message shouldBe refusal.message
+            cfg.rootsWarnings() shouldBe listOf(
+                "roots.one.path does not exist or is not a readable/searchable directory: $gone - the root will serve " +
+                    "503 for every request until the path is restored AND the server is restarted (its pages, aliases " +
+                    "and checkpoints are left untouched in the meantime)",
+                "roots.two.path does not exist or is not a readable/searchable directory: $gone - the root will serve " +
+                    "503 for every request until the path is restored AND the server is restarted (its pages, aliases " +
+                    "and checkpoints are left untouched in the meantime)",
+            )
         }
     }
 
@@ -366,10 +385,9 @@ class RootsValidationTest : FunSpec({
             }
     }
 
-    // A main path under an UNSEARCHABLE parent cannot even be stat'ed, so it is the existence guard
-    // that fires (an actionable IAE, never a raw IOException). The toRealPath IOException rethrow in
-    // validateExplicitRoots stays untested here by design: with existence and read/execute permissions
-    // already guarded it is TOCTOU defense-in-depth, reachable only by a permission change racing validation.
+    // An unsearchable parent triggers the existence guard as an actionable IAE, not a raw IOException. If the path
+    // changes during canonicalization, the inspector catches that IOException and records PRIMARY_UNUSABLE; this
+    // TOCTOU branch remains untested by design.
     test("explicit: a main path under an unsearchable parent fails via the existence guard, never a raw IOException") {
         withBase { base ->
             if (!base.fileSystem.supportedFileAttributeViews().contains("posix")) return@withBase

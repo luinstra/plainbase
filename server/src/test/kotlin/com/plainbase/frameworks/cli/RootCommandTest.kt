@@ -286,7 +286,9 @@ class RootCommandTest : FunSpec({
             val before = Files.readAllBytes(w.rootsConf)
 
             val err = captureStderr { w.root("add", "inner", inner.toString()) shouldBe 1 }
-            err shouldContain "nested inside"
+            err shouldBe
+                "root add: roots.inner (${inner.toRealPath()}) is nested inside roots.outer (${outer.toRealPath()}): " +
+                "roots must be disjoint directories${System.lineSeparator()}"
 
             withClue("roots.conf is byte-identical - no candidate bytes reached disk") {
                 Files.readAllBytes(w.rootsConf) shouldBe before
@@ -309,9 +311,7 @@ class RootCommandTest : FunSpec({
     // --- the server's WARNINGS, not just its refusals ----------------------------------------------------
 
     test("a typo'd path is added (it may be an unmounted volume) but the boot WARNING is surfaced, not swallowed") {
-        // `serve` prints rootsWarnings(); the CLI read only the refusals, so `root add notes /srv/dosc` exited 0
-        // with nothing but cheerful news about a root that will 503 on every request. Same principle as the gate:
-        // call the server's own check, do not keep half a list of it.
+        // `serve` prints the same roots warning projection; keep the candidate warning visible on the CLI too.
         world { w ->
             val err = captureStderr { captureStdout { w.root("add", "notes", "/srv/dosc") shouldBe 0 } }
             err shouldContain "WARNING"
@@ -455,10 +455,15 @@ class RootCommandTest : FunSpec({
             val extra = Files.createDirectory(w.tmp("notes"))
 
             val err = captureStderr { captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 } }
-            withClue("the residual failure is printed as a WARNING, naming it") {
-                err shouldContain "WARNING"
-                err shouldContain "did not cause it"
-                err shouldContain "nested inside"
+            val expectedWarning =
+                "root add: WARNING: this config already refuses to boot, and this command did not cause it: " +
+                    "roots.inner (${inner.toRealPath()}) is nested inside roots.outer (${outer.toRealPath()}): " +
+                    "roots must be disjoint directories${System.lineSeparator()}"
+            val expectedIgnoredContentWarning =
+                "root add: WARNING: roots {} is configured: the explicitly set CONTENT_DIR/contentDir (via env) is " +
+                    "ignored - primary's path comes from roots.docs.path${System.lineSeparator()}"
+            withClue("the residual failure is printed as one exact WARNING on the command error channel") {
+                err shouldBe expectedWarning + expectedIgnoredContentWarning
             }
             withClue("and the add SUCCEEDED - the CLI never made this config less bootable") {
             w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "outer", "inner", "notes")
@@ -510,8 +515,11 @@ class RootCommandTest : FunSpec({
             val nestedInMain = Files.createDirectories(w.content.resolve("deeper"))
 
             val err = captureStderr { w.root("add", "deeper", nestedInMain.toString()) shouldBe 1 }
-            withClue("the message names the NEW nesting (deeper inside main), not the pre-existing outer/inner one") {
-                err shouldContain "roots.deeper"
+            val expectedRefusal =
+                "root add: roots.deeper (${nestedInMain.toRealPath()}) is nested inside roots.docs (${w.content.toRealPath()}): " +
+                    "roots must be disjoint directories${System.lineSeparator()}"
+            withClue("the error channel contains only the NEW refusal, not the pre-existing outer/inner refusal") {
+                err shouldBe expectedRefusal
             }
             Files.exists(w.rootsConf) shouldBe false
         }

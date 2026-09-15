@@ -165,7 +165,7 @@ class ManagedRootsConfigTest : FunSpec({
     test("T-CFG-6: one managed root flips a legacy install to EXPLICIT, and the strict matrix SUBSUMES the legacy guards") {
         // The single most surprising consequence in this chunk, so it is pinned rather than assumed: a legacy
         // CONTENT_DIR install that runs one `root add` stops taking requireContentDir's two legacy `require`s and
-        // starts taking validateExplicitRoots' full matrix. That is CORRECT - the matrix must run over the new
+        // starts taking ConfigBootInspector's full matrix. That is CORRECT - the matrix must run over the new
         // extras - and it must not LOSE anything: DATA_DIR == CONTENT_DIR is still refused, just with the
         // explicit arm's wording.
         val data = Files.createTempDirectory("pb-cfg6")

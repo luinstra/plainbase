@@ -1040,12 +1040,9 @@ class LocalContentStore(
 }
 
 /**
- * The ONE traversability predicate: a directory at this path exists and can be walked right now. Kept textually
- * PAIRED with `PlainbaseConfig.canonicalRootPathOrNull`'s one-probe rule, which defines a usable root as a
- * readable, SEARCHABLE directory - the runtime probe and the config probe must never fork, which is a second
- * reason not to add a write bit here (see [ContentStore.available]).
- *
- * It answers about the PATH, which is why it is only half of the runtime probe ([rootLivenessProbe]).
+ * Shares the readable, searchable directory requirement with `ConfigBootInspector.canonicalRootPathOrNull`;
+ * neither requires a write bit. Configuration additionally resolves canonical paths, while [rootLivenessProbe]
+ * separately tracks runtime replacement identity.
  */
 internal fun rootIsTraversable(root: Path): Boolean =
     Files.isDirectory(root) && Files.isReadable(root) && Files.isExecutable(root)

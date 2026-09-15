@@ -49,6 +49,7 @@ class BootGateTest : FunSpec({
             val refusal = config.bootRefusals().single()
             refusal.kind shouldBe BootRefusal.Kind.PRIMARY_UNUSABLE
             refusal.roots shouldBe setOf(RootName.PRIMARY)
+            refusal.key shouldBe (BootRefusal.Kind.PRIMARY_UNUSABLE to setOf(RootName.PRIMARY))
             // Message EQUALITY, not similarity: a paraphrase would mean somebody re-implemented something.
             refusal.message shouldBe shouldThrow<IllegalArgumentException> { config.requireContentDir() }.message
         }
@@ -118,7 +119,7 @@ class BootGateTest : FunSpec({
     // --- T-GATE-3: EVERY stage is evaluated. The completeness the baseline diff rests on ----------------
 
     test("T-GATE-3(b): a config with TWO topology faults reports TWO - this is the one a throw-first validator CANNOT do") {
-        // WRITE THIS FIRST AND WATCH IT FAIL against a throw-first `validateExplicitRoots`. Without it a
+        // This guards the complete collector in `ConfigBootInspector.bootRefusals`. Without it a
         // pre-existing fault MASKS a new one, the baseline diff sees no delta, and `root add` writes a fresh
         // nesting violation while reporting success. That RED is the whole argument for the collector, in one line.
         val outer = tempDir("pb-gate-two-outer")
@@ -134,9 +135,18 @@ class BootGateTest : FunSpec({
                 """.trimIndent(),
             ) { _, env ->
                 val refusals = PlainbaseConfig.fromEnvAndFile(env).bootRefusals()
-                refusals.map { it.kind } shouldContainExactly listOf(
-                    BootRefusal.Kind.PRIMARY_UNUSABLE, // primary is not a directory
-                    BootRefusal.Kind.ROOT_PAIR, // AND outer/inner nest - a fault BEHIND the first one
+                refusals shouldBe listOf(
+                    BootRefusal(
+                        BootRefusal.Kind.PRIMARY_UNUSABLE,
+                        setOf(RootName.PRIMARY),
+                        "roots.docs.path does not exist or is not a directory: /nope/not/a/directory",
+                    ),
+                    BootRefusal(
+                        BootRefusal.Kind.ROOT_PAIR,
+                        setOf(RootName.require("outer"), RootName.require("inner")),
+                        "roots.inner (${inner.toRealPath()}) is nested inside roots.outer (${outer.toRealPath()}): " +
+                            "roots must be disjoint directories",
+                    ),
                 )
                 withClue("boot must still refuse with the FIRST message, byte-identical to what it always printed") {
                     shouldThrow<IllegalArgumentException> {

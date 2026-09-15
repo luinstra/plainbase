@@ -1,4 +1,4 @@
-# Backend configuration compatibility: Stage 0 and Stage 2
+# Backend configuration compatibility: Stage 0, Stage 2, and Stage 3
 
 This report records Plan04's Stage 0 configuration compatibility work. The Stage 0 and Stage 0b sections retain their
 historical characterization scope; the Stage 0c section below records the narrow backup-entry deletion guard and its
@@ -15,24 +15,31 @@ production change to it.
 
 Stage 0/0b/0c tables below retain their accepted-baseline anchors and historical results. The combined Stage 2
 extraction was made from accepted source `101a64ed933258ec4ae410cc0972ac5249650ad8`; current ownership and receipts
-are recorded here and in `.crew/reports/backend-analysis-2026-09-04/plan-04-stage-2/`.
+are recorded here and in the local Stage 2 report directory. Stage 3 continues from accepted Stage 2 commit
+`f97a1576fefc6f93ea20d89638b7ad1cb2a1b496`; its focused implementation evidence is summarized in the Stage 3 ledger
+below, with detailed raw logs retained as local records.
 
 | Landed owner | Declarations moved or retained | Production callers / compatibility boundary |
 | --- | --- | --- |
 | `ConfigSource.kt`, `StorageConfig.kt`, `RootsConfig.kt`, `GitConfig.kt`, `AuthConfig.kt` | Normalized source, storage, roots, Git, and auth values; enum parsers and `RootsConfig` snapshot/default/copy behavior. | `PlainbaseConfig` constructor keeps the same parameter order/defaults; existing value, root, transport, and CLI tests continue to construct the same types. |
-| `ConfigValuePolicy.kt` | Pure `dataDirFrom`, rooted direct-commit glob projection, absolute/HTTPS URL predicates. | `RootCommand`, `RestModule`, and `S3SmokeCommand` use the owner; `PlainbaseConfig.agentDirectCommitGlobs` and `dataDirFrom` remain temporary compatibility delegates. |
+| `ConfigValuePolicy.kt` | Pure `dataDirFrom`, storage diagnostics, ignored-content warning, editable-glob warning, rooted direct-commit glob projection, and absolute/HTTPS URL predicates. | `Application` consumes storage warnings; `ConfigBootInspector` consumes pure warning text; `RootCommand`, `RestModule`, and `S3SmokeCommand` use the owner. `PlainbaseConfig` keeps temporary compatibility delegates. |
 | `ConfigLoader.kt` | `ConfigSources`, file/candidate parsing, managed-roots damage handling, and the exact `loadForCommand` IAE/HOCON funnel. | `Application`, `AdminCommand`, `AdoptCommand`, `ReindexCommand`, `RootCommand`, `ConfigModule`, and `NativeSpike` call `ConfigLoader`; candidate text is parsed before the live managed-file lane. |
 | `ConfigDecoder.kt` | Typed decode/build helpers and the file-private `RootsConfigParser`; one `decode` call path from `ConfigLoader`. | HOCON resolution, eager typed getters, source provenance, per-file origin ordering, merge order, primary/history rules, and managed-file distinctions are retained. |
-| `PlainbaseConfig.kt` | Constructor, filesystem/topology inspection, warnings, and temporary forwarders only. | `RootWiringArchitectureTest` records primary comparisons as `PlainbaseConfig=1`, `RootsConfig=3`, `ConfigDecoder=2`; Stage 3/4 inspection and forwarder obligations remain open. |
+| `PlainbaseConfig.kt` | Constructor, derived paths, and thin compatibility forwarders only; no topology or filesystem warning bodies remain. | Constructor/default/copy behavior is unchanged. `RootWiringArchitectureTest` records no primary comparison here; Stage 4 still owns removal of temporary forwarders. |
+| `ConfigBootInspector.kt` | Stateless config/filesystem `requireContentDir`, complete `bootRefusals`, and ordered `rootsWarnings`; canonical/declared probes and the shared storage credential diagnostic remain in their existing owners. | `Application` consumes fresh boot/refusal/warning projections; `ReindexCommand` consumes first-only content refusal; `RootCommand` consumes warning-only candidate inspection after candidate-before-baseline gating. |
 
-Moved KDoc now points at `explicitRootRefusals`, `ConfigLoader.loadManagedRoots`, and the current policy owner. The
-source guard is intentionally non-vacuous: value/loader/decoder files must exist and be nonempty, `ConfigSources` is
-confined to loader/decoder, decoder calls are confined to loader, and the single parser owner is required.
+Moved KDoc now points at `ConfigBootInspector.requireContentDir`, `ConfigBootInspector.bootRefusals`,
+`ConfigBootInspector.rootsWarnings`, `ConfigLoader.loadManagedRoots`, and the current policy owner. The source guards
+are intentionally non-vacuous: value/loader/decoder/inspector files must exist and be nonempty, pure owners reject
+filesystem effects, the inspector permits only read probes, `ConfigSources` is confined to loader/decoder, decoder calls
+are confined to loader, and the single parser owner is required.
 
 ## Source map
 
 - [PlainbaseConfig.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/PlainbaseConfig.kt) retains the
-  constructor, filesystem/topology inspection, warnings, and temporary compatibility delegates.
+  constructor, derived paths, and temporary compatibility delegates; it no longer owns inspection or warning bodies.
+- [ConfigBootInspector.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/ConfigBootInspector.kt) owns the
+  stateless first-only topology path, complete refusal projection, and ordered filesystem warning projection.
 - [ConfigSource.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/ConfigSource.kt),
   [StorageConfig.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/StorageConfig.kt),
   [RootsConfig.kt](../../server/src/main/kotlin/com/plainbase/frameworks/config/RootsConfig.kt),
@@ -55,6 +62,25 @@ confined to loader/decoder, decoder calls are confined to loader, and the single
   [RootsValidationTest.kt](../../server/src/test/kotlin/com/plainbase/frameworks/config/RootsValidationTest.kt), and
   [BootGateTest.kt](../../server/src/test/kotlin/com/plainbase/BootGateTest.kt) are the JVM characterization suites
   referenced below.
+- [ConfigBootInspectorFreshnessTest.kt](../../server/src/nativeTest/kotlin/com/plainbase/frameworks/config/ConfigBootInspectorFreshnessTest.kt)
+  has four filesystem-freshness/candidate-isolation cases and two ordered-warning cases; JVM execution alone is not native-image evidence.
+
+## Plan04 Stage 3 implementation ledger
+
+The Stage 3 continuation moved the two approved internal checkpoints without changing construction, `copy`, loader
+selection, refusal wording, warning order, or the candidate-before-baseline gate. `ConfigBootInspector` is deliberately
+stateless and read-only: no cache, write, logger, DI, history, lock, availability, or loader operation is present. The
+four cache mutations, one category swap, and four source-guard mutations below were temporary RED probes and were
+restored before the final GREEN checks. Checkpoint unions used `:server:test --rerun` with the affected boot, CLI,
+config, freshness, and server classes: 92 tests and 255 tests, each with zero failures/errors.
+The final affected union used `ServerRunTest`, `ServerBootCliContractTest`, `BootGateOrderingTest`,
+`ConfigBootInspectorFreshnessTest`, `ConfigSeparationArchitectureTest`, `RootWiringArchitectureTest`,
+`CliBootGateArchitectureTest`, and `BootRefusalLedgerTest`: 69 tests/8 suites, zero failures/errors, `BUILD SUCCESSFUL`.
+Each cache/category/source mutation compiled successfully, failed at its intended assertion, and passed after restoration;
+the detailed logs are local records only. All results are JVM evidence; native gates remain parent-owned.
+
+Those historical counts summarize local runs whose detailed logs are not published with this report; they cannot be
+independently audited from the report alone. The committed tests can be rerun through the Gradle commands above.
 
 ## Stage 0 cases
 
@@ -72,27 +98,26 @@ never reads any individual file.
 
 ## Declaration ownership inventory
 
-This is a hand-enumerated baseline inventory relevant to the later configuration split. Stage 0 records it but does not
-relocate any declaration. Line anchors are against the unchanged production baseline; this is a source-grounded ledger,
-not an automated completeness proof.
+This is a hand-enumerated inventory relevant to the configuration split. The earlier rows retain their baseline anchors;
+the Stage 3 owner rows below are updated against the landed source. It is a source-grounded ledger, not an automated
+completeness proof.
 
 | Current declarations | Intended owner after later chunks | Current callers / compatibility obligation |
 | --- | --- | --- |
 | `PlainbaseConfig` constructor: `contentDir`, `dataDir`, `host`, `port`, `maxWriteBodyBytes`, `maxAssetBytes`, `git`, `auth`, `storage`, `contentDirSource`, `roots` (38–76) | `PlainbaseConfig.kt` | Application, CLI, runtime root/history inputs, transport, gates, and direct constructor/copy tests; preserve defaults and copy semantics. |
 | `appDatabasePath`, `managedRootsPath`, `searchDatabasePath`, `mainContentRoot` (79, 87, 94, 565) | `PlainbaseConfig.kt` | Runtime and CLI path consumers; pure value helpers remain value helpers. |
 | `VERSION`, `DEFAULT_PORT`, `MANAGED_ROOTS_FILE`, `DEFAULT_HOST`, `DEFAULT_MAX_WRITE_BODY_BYTES`, `DEFAULT_MAX_ASSET_BYTES`, `DEFAULT_GIT_AUTHOR_NAME`, `DEFAULT_GIT_AUTHOR_EMAIL`, `DEFAULT_PROXY_IDENTITY_HEADER`, `DEFAULT_S3_REGION`, `DEFAULT_S3_POLL_SECONDS` (570–611) | `PlainbaseConfig` companion | Existing defaults and build-info consumers; preserve values and visibility. |
-| `requireContentDir`, `bootRefusals`, `topologyRefusals`, `objectKeyRefusals`, `legacyRefusals`, `explicitRootRefusals` (115–327) | `ConfigBootInspector.kt` | Application, reindex, config tests, boot-gate tests, and native tests; preserve complete-vs-first behavior. |
-| `DataDirFault`, `dataDirFault`, `dataDirComparable`, `dataDirDeclared`, `comparableRootPath` (328–354) | `ConfigBootInspector.kt` private | Topology and containment checks; retain declared/canonical distinctions and no cache. |
-| `PrimaryFault`, `primaryFault`, `canonicalRootPathOrNull`, `bestEffortCanonical` (1169–1215) | `ConfigBootInspector.kt` private | Topology and warning callers; preserve ancestor fallback and permission handling. |
-| `storageWarnings` (364–382) | `ConfigValuePolicy.kt` | Application and config tests; preserve warning timing and content. |
-| `rootsWarnings`, `dataDirContainmentWarnings`, `managedRootsBackupWarning` (389–472) | `ConfigBootInspector.kt` | Application, CLI, boot and native tests; preserve containment → backup → explicit guard → ignored-content → unavailable-extra → glob-trap ordering. |
-| `globbedRoots` (474–481), ignored-content warning body, editable-glob warning body | `ConfigValuePolicy.kt` private/internal | Inspector calls these at their existing positions; preserve direct-commit glob behavior. |
+| `ConfigBootInspector.requireContentDir`, `bootRefusals`, `topologyRefusals`, `objectKeyRefusals`, `legacyRefusals`, `explicitRootRefusals` | `ConfigBootInspector.kt` | Application, reindex, config tests, boot-gate tests, and native tests; preserve complete-vs-first behavior. |
+| `DataDirFault`, `dataDirFault`, `dataDirComparable`, `dataDirDeclared`, `comparableRootPath` | `ConfigBootInspector.kt` private | Topology and containment checks; retain declared/canonical distinctions and no cache. |
+| `PrimaryFault`, `primaryFault`, `canonicalRootPathOrNull`, `bestEffortCanonical` | `ConfigBootInspector.kt` private | Topology and warning callers; preserve ancestor fallback and permission handling. |
+| `ConfigValuePolicy.storageWarnings`, `ignoredContentDirWarning`, `editableGlobWarnings` | `ConfigValuePolicy.kt` | Application and inspector/config tests; preserve warning timing, exact text, and direct-commit glob behavior. |
+| `ConfigBootInspector.rootsWarnings`, `dataDirContainmentWarnings`, `managedRootsBackupWarning` | `ConfigBootInspector.kt` | Application, CLI, boot and native tests; preserve containment → backup → explicit guard → ignored-content → unavailable-extra → glob-trap ordering. |
 | `bindGuardRefusal`, `isNonLoopbackBind`, `secureCookie`, `mcpHostAllowlist`, `mcpOriginAllowlist`, `MCP_LOOPBACK_HOSTS` (490–549, 605) | `TransportSecurityPolicy.kt` / internal `TransportSecurityValues` | Transport, Ktor, REST, gate, bind, secure-context, and config tests; preserve exactly these five derived fields and no credential-bearing output. |
 | `agentDirectCommitGlobs` (556–558) | `ConfigValuePolicy.kt` | REST module, direct-commit tests, and config consumers; retain rooted glob derivation. |
 | `fromEnv`, `dataDirFrom`, `fromSources`, `fromEnvAndFile`, `fromEnvAndCandidateRoots`, `loadForCommand` (637, 646, 658, 767, 783, 796) | `ConfigLoader.kt` | Application, CLI, native spike, config/root/CLI tests; preserve names, defaults, and exception boundaries until the closeout chunk. |
 | `loadManagedRoots`, `damagedRootsMessage`, `parseIfRegularFile`, `parseCandidate` (688, 723, 739, 754) | `ConfigLoader.kt` private | One real/candidate pipeline; null candidate remains empty config and does not observe the live backup. |
 | `build`, `contentDirSource`, `positiveSize`, `buildGit`, `buildAuth`, `buildStorage` (817–957) | `ConfigDecoder.kt` | Loader-only decoder path; preserve evaluation order, env-only storage credentials, and proxy-secret file fallback. |
-| `MISSING_S3_CREDENTIALS_MESSAGE` (614) | `StorageConfig.kt` internal | One diagnostic shared by decoding and boot inspection. |
+| `MISSING_S3_CREDENTIALS_MESSAGE` | `StorageConfig.kt` internal | One diagnostic shared by decoding and `ConfigBootInspector` object-mode refusal inspection. |
 | `OBJECT_STORAGE_KEYS` (623) | `ConfigDecoder.kt` private | Storage diagnostics; list only existing permitted key names. |
 | `buildRoots`, `parseRootBlock`, `parseRoot`, `requireCoherentMainHistory`, `parseHistoryMode` (983–1159) | File-private `RootsConfigParser` in `ConfigDecoder.kt` | Root/config/native tests; preserve per-file ordering and history coherence. |
 | `requireTreePathPrefix`, `requireParseableCidrs`, `requireParseableGlobs`, `mainDirectCommitGlobs`, `buildDirectCommitGlobsByRoot` (1245–1341) | `ConfigDecoder.kt` private | Decoder cross-field validation; preserve the bare-primary-name branch and avoid duplicate parsers. |
@@ -106,33 +131,23 @@ not an automated completeness proof.
 | `RemoteAddress.isLoopbackAddress`, `isNonLoopbackBind`, `isInAnyCidr`, `forwardedProtoIsHttps`, `isParseableCidr`; private `isLoopbackBindLiteral`, `stripPort`, `parseNumericLiteral`, `isValidPort`, `isAsciiLiteralCharacter`, `isStrictIpv4`, `matchesCidr`, `parseCidr`, `sharesPrefix`; `ParsedCidr.network`, `ParsedCidr.prefix`; constants `BITS_PER_BYTE`, `IPV4_OCTET_COUNT`, `MAX_IPV4_OCTET_DIGITS`, `MAX_IPV4_OCTET` in `frameworks/net/RemoteAddress.kt` | `frameworks/net/RemoteAddress.kt` | Config policy, principal, secure-context, CSRF, and relocated address tests; Stage1 moves the complete no-DNS-corrected helper without changing its bodies or public methods. |
 | `ManagedRootsFile.BACKUP_SUFFIX`, `HEADER`, `serialize`, `writeAtomically`, `verifyLanded`, `copyPreservingPrevious`, `delete`, `hoconQuote`, and logger | Existing `ManagedRootsFile` adapter | Stage 0 does not add the no-follow backup deletion guard or alter I/O error channels. |
 
-## Future documentation and source guards
+## Documentation and source guards
 
-All items in this section are later-stage obligations, not Stage 0 implementation claims. The current source and guard
-tests establish these seams:
+Stage 3 closed the moved-owner and source-guard obligations for this checkpoint. `PlainbaseConfig` now has only
+compatibility delegates for the moved surfaces; `ConfigBootInspector` owns the filesystem/topology probes and
+`ConfigValuePolicy` owns pure warning derivations. `FileWatcher`, boot, CLI, and test KDoc/comments now name the landed
+owners rather than the removed `validateExplicitRoots` implementation. The remaining Stage 4 obligation is deliberate:
+remove temporary forwarders only after all compatibility callers and their KDoc links are closed.
 
-- Retarget the dangling `PlainbaseConfig.requireContentDir` KDoc reference `[validateExplicitRoots]` (111) to the
-  actual `explicitRootRefusals` producer (234). Move `RootsConfig.primaryDeclared`'s
-  `[PlainbaseConfig.rootsWarnings]` reference (1492) to the inspector owner, and move the `Application.kt` bind-warning
-  KDoc reference (746) to the future policy owner of `bindGuardRefusal`. Every moved body must carry its KDoc,
-  producer, caller, and owner links with it, including the loader, decoder, value-policy, inspector, transport-policy,
-  roots, storage, auth, and `RemoteAddress` moves.
-- [`RootWiringArchitectureTest.kt`](../../server/src/test/kotlin/com/plainbase/RootWiringArchitectureTest.kt) has six
-  primary-comparison matches in `PlainbaseConfig`: parser lines 997/1001 move as two to `ConfigDecoder`, inspector
-  line 249 moves as one to `ConfigBootInspector`, and values lines 1511/1514/1526 move as three to `RootsConfig`.
-  Keep the per-file whitelist and exact counts, retain the Tier-3 `isPrimary` ledger (`TreeJsonCache` has one call),
-  and allow no blank or zero-count exemption. The bare `RootName.PRIMARY` comparisons at 1097 and 1333 are decoder
-  ledger entries, not additional regex matches.
-- [`CliBootGateArchitectureTest.kt`](../../server/src/test/kotlin/com/plainbase/CliBootGateArchitectureTest.kt) must
-  remove the dead `validateExplicitRoots` token when its producer checks become nonvacuous, prohibit actual refusal
-  producers, and still permit the legitimate root-warning call after `bootGateFor`. [`BootRefusalLedgerTest.kt`](../../server/src/test/kotlin/com/plainbase/BootRefusalLedgerTest.kt)
-  keeps the owned and loader ceilings; native `BootGateOrderingTest` provides verdict rank/kind-partition coverage,
-  while emitted-warning order remains a later gap. No blanket
-  `ConfigBootInspector` ban is intended.
-- A future `ConfigSeparationArchitectureTest` is staged with incremental Stage 1 import/direction/effect guards,
-  Stage 2 `ConfigSources` confinement and deliberate external-reference RED coverage, Stage 3 inspector
-  boundary/effect guards, and Stage 4 unresolved-link and forwarding checks. No future-file assertions are added in
-  Stage 0.
+- [`RootWiringArchitectureTest.kt`](../../server/src/test/kotlin/com/plainbase/RootWiringArchitectureTest.kt) now
+  allows exactly one `RootName.PRIMARY` comparison in `ConfigBootInspector`, three in `RootsConfig`, two in
+  `ConfigDecoder`, and one in `RootCommand`; `PlainbaseConfig` has none. The Tier-3 `isPrimary` ledger remains exact.
+- [`CliBootGateArchitectureTest.kt`](../../server/src/test/kotlin/com/plainbase/CliBootGateArchitectureTest.kt) is
+  non-vacuous for the inspector and permits only `ConfigBootInspector.rootsWarnings(candidate)` in `RootCommand`.
+  `BootRefusalLedgerTest` retains the shared topology/bind/per-root and loader ceilings.
+- [`ConfigSeparationArchitectureTest.kt`](../../server/src/test/kotlin/com/plainbase/ConfigSeparationArchitectureTest.kt)
+  guards pure owners against filesystem effects, requires actual inspector read probes, and rejects loader, wiring,
+  logger, history, availability, lock, database, process, and mutation operations in the inspector.
 - The native relocation set remains [`HoconParseNativeTest.kt`](../../server/src/nativeTest/kotlin/com/plainbase/frameworks/config/HoconParseNativeTest.kt),
   `RootCommandNativeTest`, `RootCommandNativeHistoryTest`, `RootsLockNativeTest`, and the existing config and boot
   native seams. Stage 0 does not move or duplicate these tests.
@@ -156,11 +171,11 @@ compatibility result.
 | C04-05 root merge | `buildRoots` parses operator and managed blocks separately and concatenates them without hoisting primary (983–1034). | `RootsConfigTest` expects names `[zeta, docs, alpha]` (68). `RootRankStabilityTest` expects the same order with `docs` rank 1 and `zeta` rank 0, and its other case expects `[docs, zebra, notes]` with `zebra` ranked before `notes` (72–118). `ManagedRootsConfigTest` expects merged `[docs, hand, cli]`, `managed == [cli]`, and `primaryDeclared == true` (52–68). | Observed: `JVM-FULL` passed all named `RootsConfigTest`, `RootRankStabilityTest`, and `ManagedRootsConfigTest` assertions; no dedicated Stage 0 native method. |
 | C04-06 candidate artifact | `fromEnvAndCandidateRoots` uses the shared source pipeline (783); `RootCommand` serializes the candidate, validates it first, then compares baseline keys (335–369). | `ManagedRootsFileNativeTest` case `the in-memory candidate and the on-disk file parse to the SAME roots - the gate's load-bearing assumption` (68) asserts `candidate.roots.list == landed.roots.list` and managed-set equality only; it does not assert whole-config or diagnostics equivalence. The direct source trace records candidate-before-baseline validation separately. | Observed: `JVM-FULL` and `NATIVE-S0` passed the named candidate parity test. |
 | C04-07 interrupted promotion | `loadManagedRoots` checks backup evidence before synthesis, wraps malformed managed files, and refuses files without `roots {}` (688–711). | `ManagedRootsFileNativeTest` expects `ABSENT_CLEAN` to load managed-empty, `WHOLE_WITH_STALE_BACKUP` to load `{alpha}` with a warning containing `.bak`, and `ABSENT_WITH_BACKUP`, `ZERO_LENGTH`, `ZERO_LENGTH_WITH_BACKUP`, `HEADER_ONLY`, and `TRUNCATED_MID_BLOCK` to throw `IllegalArgumentException` with `roots.conf` and `delete` in the message, plus `mv` when backup is true. `ManagedRootsConfigTest` case `(d) an empty block in the MANAGED file IS absence - the asymmetry is the point` yields `SYNTHESIZED`. No byte-exact whole-message assertion is claimed. | Observed: `JVM-FULL` passed the named managed-root assertions; `NATIVE-S0` passed the named interrupted-promote method. |
-| C04-08 topology | `explicitRootRefusals` uses `comparableRootPath` and `bestEffortCanonical` to retain unavailable entries (234, 354, 1205). | `RootsValidationTest` expects the duplicate-symlink failure to contain `resolve to the same directory` and `twin`; the missing `DATA_DIR` through an ancestor link to contain `declare the root` and `DATA_DIR` through consistent paths; and the duplicate-nonexistent-extra failure to contain `resolve to the same directory`. These are the tested message fragments, not invented `BootRefusal` keys. | Observed: `JVM-FULL` passed the named `RootsValidationTest` assertions; no dedicated Stage 0 native method. |
-| C04-09 freshness | `rootsWarnings` probes on each call (389); `bootRefusals` recomputes topology (139); no cache field was found. | No dedicated freshness assertion exists in Stage 0. Existing warning/refusal methods are named source and suite context only; whole-suite success is not promoted to freshness proof. | Observed: `JVM-FULL` completed the relevant config/boot suites with no failures; no dedicated native or JVM freshness test was added. |
-| C04-10 diagnostics | `BootGateTest` exercises complete refusal collection at 120; application consumption stages topology, storage/root warnings, bind refusal, and insecure-bind warning at 418–436. | `BootGateTest` retains ordered kinds `[PRIMARY_UNUSABLE, ROOT_PAIR]` and requires `requireContentDir` failure message to equal the first refusal message. Native `BootGateOrderingTest` provides verdict rank/kind-partition assertions only; it does not assert emitted warning sequence. | Observed: `JVM-FULL` passed the named `BootGateTest` assertions; `NATIVE-S0` passed the named `BootGateOrderingTest` verdict rank/kind-partition methods. |
+| C04-08 topology | `ConfigBootInspector` owns `explicitRootRefusals`, `comparableRootPath`, `bestEffortCanonical`, and the shared `Files.isDirectory`/readable/executable/`toRealPath` probes. | `RootsValidationTest` retains duplicate-symlink, aliased `DATA_DIR`, nonexistent-extra, and permission-channel assertions; `ConfigBootInspectorFreshnessTest` adds same-config canonical retargeting and candidate/baseline refusal isolation. Direct calls preserve the exact refusal keys/messages and declared/canonical fallback distinctions. | Observed: checkpoint 2 passed all named topology/config suites and the six freshness cases in the JVM-folded `:server:test`; this is not native-image execution. |
+| C04-09 freshness | `ConfigBootInspector.rootsWarnings(config)` and `bootRefusals(config)` recompute from the retained config and live filesystem on every call; no cache or reload is involved. | `ConfigBootInspectorFreshnessTest` asserts absent/create/remove extra, backup add/remove, canonical retargeting, and candidate → baseline → candidate complete refusal/warning isolation. Four temporary real-cache mutations (identity/global warning and identity/global refusal) each produced assertion RED after successful compilation and restored GREEN. | Observed: six direct-inspector tests passed in checkpoint 1 and checkpoint 2; all four cache probes compiled, failed at intended assertions, and passed after restoration. JVM-folded native-tag execution is not native-image execution. |
+| C04-10 diagnostics | `Application` consumes `ConfigBootInspector` refusal/warning projections and `ConfigValuePolicy.storageWarnings` at the existing observation points; `RootCommand` checks candidate before baseline and emits warning-only inspector results afterward. | `ServerRunTest` has both synthesized and explicit layouts and asserts the exact storage warning → ordered roots warning list → bind error channel/order, plus context close; `BootGateTest`, `BootGateOrderingTest`, and `BootRefusalLedgerTest` retain refusal kind/rank/partition coverage. | Observed: checkpoint 2 passed the server/CLI/config union, including 20 `ServerRunTest` methods; the warning-category swap compiled, failed at its exact warning-list assertion, and passed after restoration. Native-tagged JVM execution is not native-image execution. |
 | C04-11 security | `TransportSecurityPolicy.derive` now owns the five bind/cookie/MCP result fields; `PlainbaseConfig` retains temporary delegates. `RemoteAddress` and its private parser helpers live in `frameworks/net/RemoteAddress.kt`; Ktor request consumers import that helper directly. | `BindGuardTest` pins exact proxy-completeness ordering (including `insecureHttp=true`), absent/blank secret and CIDR cases, off/builtin/proxy behavior, and nonloopback insecure-cookie behavior. `PlainbaseConfigTest` pins exact ordered defaults and duplicate-preserving direct overrides. `TransportSettingsTest` pins all five projection fields. `AddressParsingTest` and `RemoteAddressNativeTest` retain the moved suites; `SecureContextTest` keeps the Ktor predicate and explicit insecure-config case. | Observed: Stage1 focused JVM suites passed all named assertions; native image execution remains parent-owned. |
-| C04-12 effects/error funnel | `loadForCommand` catches `IllegalArgumentException` and `ConfigException` around the real loader (796); Stage1 adds bounded source guards for policy/net effect patterns and net→config/Ktor direction. Application's bind-warning KDoc now links the policy owner; temporary accessor links remain until Stage4. | `PlainbaseConfigTest` expects a bad object-mode load to return `null` and emit exactly one error containing `serve:` and `storage.object.endpoint is required`, and a malformed operator load to return `null` and emit exactly one error containing `admin:`. Native `BootGatePurityTest` compares the owned tree before/after and checks no `.git` or git-home creation; this is not a general purity promise. | Observed: Stage1 `ConfigSeparationArchitectureTest` clean GREEN after five real compile-safe RED/GREEN source-guard mutations across four categories: Ktor import in config, config import and FQN reference in net, Java filesystem calls, and Kotlin path calls. The old guard passed the Kotlin-path mutation before the denylist extension; the corrected guard failed as intended. Earlier literal-only/setup-failure receipts remain historical and are not relabeled. |
+| C04-12 effects/error funnel | `loadForCommand` retains the narrow IAE/HOCON funnel; Stage 3 adds bounded pure-owner and inspector read-only guards plus exact primary/CLI ownership ledgers. `PlainbaseConfig` remains a delegate boundary until Stage 4. | Existing `PlainbaseConfigTest` load-for-command and `BootGatePurityTest` assertions remain; the four Stage 3 source probes add a real filesystem operation to a pure owner, a real delete to the inspector, an unledgered primary comparison, and a direct refusal call in `RootCommand`. Each RED followed successful compilation and restored GREEN. | Observed: checkpoint 1 and checkpoint 2 architecture suites passed on final source; each guard mutation failed at its intended assertion after successful compilation and passed after restoration. All are JVM evidence, not native-image execution. |
 
 ### Stage2 revision1 C04 reconciliation
 

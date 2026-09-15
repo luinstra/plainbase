@@ -7,6 +7,7 @@ import com.plainbase.domain.root.ReservedSegments
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.config.ConfigBootInspector
 import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.ManagedRootsBackupPresentException
 import com.plainbase.frameworks.config.ManagedRootsFile
@@ -371,7 +372,7 @@ object RootCommand {
         // printed only refusals would exit 0 with nothing but cheerful news about a root that will 503. `serve`
         // prints these; a CLI that validated half the server's surface would be back to keeping its own list of
         // which half matters.
-        candidate.rootsWarnings().forEach { output.error("root $verb: WARNING: $it") }
+        ConfigBootInspector.rootsWarnings(candidate).forEach { output.error("root $verb: WARNING: $it") }
         return Artifact(text)
     }
 

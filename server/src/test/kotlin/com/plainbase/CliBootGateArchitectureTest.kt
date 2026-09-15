@@ -20,9 +20,8 @@ import kotlin.io.path.readText
  * MORE nobody had caught, a missing-binary check and a repo access probe. **A four-item list, reviewed by three
  * model seats, was missing half of what it was a list OF.** That is not a competence problem. It is what lists do.
  *
- * So the rule stops being prose. `RootCommand.kt` calls ONE function - `bootGateFor` - and may not NAME an
- * individual boot check, nor the WIRING those checks need (a CLI that builds its own stores and history
- * providers has reproduced `serve()`'s graph by hand, which is the same drift one layer down).
+ * So the rule stops being prose. `RootCommand.kt` calls ONE gate function - `bootGateFor` - and may not NAME an
+ * individual boot check or its wiring; after the gate diff it may consume only the shared warning projection.
  *
  * Matched over COMMENT-STRIPPED source, deliberately: the comments are FREE to name these, and they must. The
  * next reader learns why the CLI does not call them from the comment that says so.
@@ -105,5 +104,13 @@ class CliBootGateArchitectureTest : FunSpec({
 
     test("RootCommand DOES call bootGateFor - the positive leg, or this only proves the CLI is quiet") {
         code shouldContain "bootGateFor"
+    }
+
+    test("RootCommand may consume only the inspector's warning projection") {
+        Regex("ConfigBootInspector\\.([A-Za-z0-9_]+)\\s*\\(")
+            .findAll(code)
+            .map { it.groupValues[1] }
+            .toList() shouldBe listOf("rootsWarnings")
+        code shouldContain "ConfigBootInspector.rootsWarnings(candidate)"
     }
 })

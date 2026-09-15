@@ -29,7 +29,9 @@ import com.plainbase.frameworks.cli.RootCommand
 import com.plainbase.frameworks.cli.S3SmokeCommand
 import com.plainbase.frameworks.cli.systemCommandOutput
 import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.ConfigBootInspector
 import com.plainbase.frameworks.config.ConfigLoader
+import com.plainbase.frameworks.config.ConfigValuePolicy
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.TransportSecurityPolicy
@@ -418,13 +420,14 @@ private fun removeShutdownHook(hook: Thread) {
 }
 
 private fun consumeConfigBootGate(config: PlainbaseConfig, output: CommandOutput) {
-    val refusals = config.bootRefusals()
+    val refusals = ConfigBootInspector.bootRefusals(config)
     refuseFirst(refusals, TOPOLOGY_REFUSAL_KINDS, output)
-    config.storageWarnings().forEach { logger.warn { it } }
-    config.rootsWarnings().forEach { logger.warn { it } }
+    ConfigValuePolicy.storageWarnings(config).forEach { logger.warn { it } }
+    ConfigBootInspector.rootsWarnings(config).forEach { logger.warn { it } }
     refuseFirst(refusals, BIND_REFUSAL_KINDS, output)
+    val transport = TransportSecurityPolicy.derive(config)
     when {
-        config.auth.insecureHttp && config.isNonLoopbackBind() ->
+        config.auth.insecureHttp && transport.nonLoopbackBind ->
             logger.warn {
                 "PLAINBASE_INSECURE_HTTP set: serving credentials over PLAINTEXT on ${config.host} - anyone on the " +
                     "network can capture them (ADR-0008)"
@@ -566,8 +569,8 @@ val BIND_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.BIND_GUAR
  * pages - through [rootGateVerdicts], and this set is what says so out loud.
  *
  * It stays a [BootRefusal] for the two consumers that still need it, and both genuinely do: the OFFLINE commands
- * refuse on it through `requireContentDir()` (a `plainbase reindex` over a content tree that is not there is a
- * no-op pretending to be a rebuild), and `plainbase root`'s baseline diff is keyed on it - where it can only ever
+ * refuse on it through [ConfigBootInspector.requireContentDir] (reindexing a missing tree would only pretend to rebuild),
+ * and `plainbase root`'s baseline diff is keyed on it - where it can only ever
  * appear on BOTH sides, since no value `root` writes can move the primary.
  */
 val DEGRADED_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.PRIMARY_UNUSABLE)
@@ -617,7 +620,7 @@ internal fun evaluateBootGate(
     registry: RootRegistry,
     probes: Map<RootName, RootBootProbe>,
 ): BootGate {
-    val refusals = config.bootRefusals().toMutableList()
+    val refusals = ConfigBootInspector.bootRefusals(config).toMutableList()
     val verdicts = rootGateVerdicts(registry, probes)
     verdicts.filterIsInstance<RootGateVerdict.Refused>().forEach {
         refusals += BootRefusal(BootRefusal.Kind.GIT_GATE, setOf(it.root), it.message)

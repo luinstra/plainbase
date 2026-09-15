@@ -10,6 +10,7 @@ import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
+import com.plainbase.frameworks.config.ConfigBootInspector
 import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
@@ -100,7 +101,7 @@ object ReindexCommand {
             return 2
         }
         return runCatching {
-            config.requireContentDir() // inside try → a bad config exits 1, honoring the contract (not a stack trace)
+            ConfigBootInspector.requireContentDir(config) // inside try -> a bad config exits 1, not a stack trace
             reindex(config, decorate, output, operations)
             0
         }.getOrElse { failure ->

@@ -93,6 +93,16 @@ class ManagedRootsFileNativeTest {
             assertEquals(listOf("docs", "notes"), candidate.roots.list.map { it.name.value })
             assertEquals(RootsOrigin.EXPLICIT, candidate.roots.origin)
             assertEquals(setOf(RootName.require("notes")), candidate.roots.managed)
+            assertEquals(
+                ConfigBootInspector.bootRefusals(candidate),
+                ConfigBootInspector.bootRefusals(onDisk),
+                "candidate and file refusal observations must agree",
+            )
+            assertEquals(
+                ConfigBootInspector.rootsWarnings(candidate),
+                ConfigBootInspector.rootsWarnings(onDisk),
+                "candidate and file warning observations must agree in order",
+            )
         } finally {
             base.toFile().deleteRecursively()
         }

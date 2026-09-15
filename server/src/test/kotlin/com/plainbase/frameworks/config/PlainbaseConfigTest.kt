@@ -606,8 +606,9 @@ class PlainbaseConfigTest : FunSpec({
         config.storage.backend shouldBe StorageBackend.LOCAL
         config.storage.ignoredObjectKeys shouldBe listOf("PLAINBASE_S3_ENDPOINT", "PLAINBASE_S3_PATH_STYLE")
         val warning = config.storageWarnings().single()
-        warning shouldContain "PLAINBASE_S3_ENDPOINT"
-        warning shouldContain "PLAINBASE_S3_PATH_STYLE"
+        warning shouldBe
+            "storage.backend=local ignores the configured object-storage key(s): PLAINBASE_S3_ENDPOINT, " +
+            "PLAINBASE_S3_PATH_STYLE (set storage.backend=object to use them)"
     }
 
     test("valid local-mode object keys remain ignored and are recorded by their source") {
@@ -634,6 +635,11 @@ class PlainbaseConfigTest : FunSpec({
                 "storage.object.prefix",
                 "storage.object.pathStyle",
                 "storage.object.pollSeconds",
+            )
+            config.storageWarnings() shouldBe listOf(
+                "storage.backend=local ignores the configured object-storage key(s): " +
+                    "storage.object.endpoint, storage.object.bucket, storage.object.region, storage.object.prefix, " +
+                    "storage.object.pathStyle, storage.object.pollSeconds (set storage.backend=object to use them)",
             )
         }
     }

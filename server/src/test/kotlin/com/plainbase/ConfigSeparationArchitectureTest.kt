@@ -11,7 +11,7 @@ import kotlin.io.path.isRegularFile
 import kotlin.io.path.readText
 
 /**
- * Stage2 source guard for the config/net ownership seam. This is a known-pattern guard plus a reviewed call trace,
+ * Source guard for the config/net ownership seams. This is a known-pattern guard plus reviewed call traces,
  * not a whole-program purity proof.
  */
 class ConfigSeparationArchitectureTest : FunSpec({
@@ -22,6 +22,8 @@ class ConfigSeparationArchitectureTest : FunSpec({
     val productionFiles = kotlinFiles(mainRoot)
     val configFiles = kotlinFiles(configRoot)
     val netFiles = kotlinFiles(netRoot)
+    val plainbase = configRoot.resolve("PlainbaseConfig.kt")
+    val inspector = configRoot.resolve("ConfigBootInspector.kt")
     val remote = netRoot.resolve("RemoteAddress.kt")
     val oldRemote = mainRoot.resolve("frameworks/ktor/RemoteAddress.kt")
     val policy = configRoot.resolve("TransportSecurityPolicy.kt")
@@ -32,6 +34,7 @@ class ConfigSeparationArchitectureTest : FunSpec({
         configRoot.resolve("GitConfig.kt"),
         configRoot.resolve("AuthConfig.kt"),
         configRoot.resolve("ConfigValuePolicy.kt"),
+        plainbase,
     )
     val loader = configRoot.resolve("ConfigLoader.kt")
     val decoder = configRoot.resolve("ConfigDecoder.kt")
@@ -50,6 +53,10 @@ class ConfigSeparationArchitectureTest : FunSpec({
         "writeBytes",
         "readString",
         "writeString",
+        "toRealPath",
+        "isReadable",
+        "isExecutable",
+        "File",
         "createTempDirectory",
         "createDirectory",
         "createDirectories",
@@ -73,6 +80,60 @@ class ConfigSeparationArchitectureTest : FunSpec({
         "Koin",
         "println",
     )
+    val inspectorReadTokens = setOf(
+        "Files",
+        "exists",
+        "isRegularFile",
+        "isDirectory",
+        "isSymbolicLink",
+        "toRealPath",
+        "isReadable",
+        "isExecutable",
+    )
+    val inspectorForbiddenTokens = commonEffectTokens.filterNot { it in inspectorReadTokens } + listOf(
+        "ConfigLoader",
+        "ConfigDecoder",
+        "ConfigSources",
+        "ConfigFactory",
+        "parseFile",
+        "parseString",
+        "loadManagedRoots",
+        "fromEnv",
+        "fromEnvAndFile",
+        "fromEnvAndCandidateRoots",
+        "loadForCommand",
+        "DataDirLock",
+        "RootAvailability",
+        "History",
+        "prepareRootBootInputs",
+        "hydrate",
+        "write",
+        "createFile",
+        "newOutputStream",
+        "newBufferedWriter",
+        "copy",
+        "move",
+        "delete",
+        "FileChannel",
+        "OutputStream",
+        "PrintWriter",
+        "Process",
+        "Runtime",
+        "exec",
+        "start",
+        "waitFor",
+        "ServerSocket",
+        "DatagramSocket",
+        "InetAddress",
+        "InetSocketAddress",
+        "System",
+        "stdout",
+        "stderr",
+        "print",
+        "CommandOutput",
+        "error",
+        "warn",
+    )
 
     test("config and net scans are nonempty and the address/policy homes are unique") {
         configFiles.shouldNotBeEmpty()
@@ -87,7 +148,7 @@ class ConfigSeparationArchitectureTest : FunSpec({
             .findAll(stripComments(policy.readText())).count() shouldBe 1
     }
 
-    test("Stage2 has one nonempty home for each value, policy, loader, decoder and address owner") {
+    test("each value, policy, loader, decoder and address owner has one nonempty home") {
         valueFiles.forEach { it.isRegularFile() shouldBe true }
         loader.isRegularFile() shouldBe true
         decoder.isRegularFile() shouldBe true
@@ -102,6 +163,11 @@ class ConfigSeparationArchitectureTest : FunSpec({
         Regex("(?m)^enum class AuthMode\\b").findAll(stripComments(valueFiles[4].readText())).count() shouldBe 1
         Regex("(?m)^data class AuthConfig\\b").findAll(stripComments(valueFiles[4].readText())).count() shouldBe 1
         Regex("(?m)^internal object ConfigValuePolicy\\b").findAll(stripComments(valueFiles[5].readText())).count() shouldBe 1
+        Regex("(?m)^data class PlainbaseConfig\\b").findAll(stripComments(plainbase.readText())).count() shouldBe 1
+        val policyCode = stripComments(valueFiles[5].readText())
+        policyCode shouldContain "fun storageWarnings(config: PlainbaseConfig): List<String>"
+        policyCode shouldContain "fun ignoredContentDirWarning(config: PlainbaseConfig): String?"
+        policyCode shouldContain "fun editableGlobWarnings(config: PlainbaseConfig): List<String>"
         Regex("(?m)^internal object ConfigLoader\\b").findAll(stripComments(loader.readText())).count() shouldBe 1
         Regex("(?m)^internal object ConfigDecoder\\b").findAll(stripComments(decoder.readText())).count() shouldBe 1
         Regex("(?m)^private object RootsConfigParser\\b").findAll(stripComments(decoder.readText())).count() shouldBe 1
@@ -114,6 +180,41 @@ class ConfigSeparationArchitectureTest : FunSpec({
             forbiddenPackages.filter(code::contains).map { "${mainRoot.relativize(file)} references $it" }
         }
         violations shouldBe emptyList()
+    }
+
+    test("boot inspection has one nonempty stateless owner") {
+        inspector.isRegularFile() shouldBe true
+        val code = stripComments(inspector.readText())
+        Regex("(?m)^internal object ConfigBootInspector\\b").findAll(code).count() shouldBe 1
+        code shouldContain "fun requireContentDir(config: PlainbaseConfig): Path"
+        code shouldContain "fun bootRefusals(config: PlainbaseConfig): List<BootRefusal>"
+        code shouldContain "fun rootsWarnings(config: PlainbaseConfig): List<String>"
+        plainbase.readText() shouldContain "ConfigBootInspector.requireContentDir(this)"
+        plainbase.readText() shouldContain "ConfigBootInspector.bootRefusals(this)"
+        plainbase.readText() shouldContain "ConfigBootInspector.rootsWarnings(this)"
+    }
+
+    test("the boot inspector is read-only and does not load, wire, log, or mutate") {
+        val code = stripComments(inspector.readText())
+        inspectorForbiddenTokens.filter { referencesToken(code, it) }.shouldBeEmpty()
+        code shouldContain "Files.isDirectory"
+        code shouldContain "Files.isReadable"
+        code shouldContain "Files.isExecutable"
+        code shouldContain "toRealPath()"
+        code shouldContain "ManagedRootsFile.backupPath"
+        Regex("ManagedRootsFile\\.").findAll(code).count() shouldBe 1
+    }
+
+    test("the inspector guard catches spaced calls, callable references and compatibility routes") {
+        listOf(
+            "Files.writeString (path, \"probe\")" to "writeString",
+            "Files::deleteIfExists" to "deleteIfExists",
+            "Runtime.getRuntime()::exec" to "Runtime",
+            "PlainbaseConfig.fromEnvAndFile(env)" to "fromEnvAndFile",
+        ).forEach { (source, expectedToken) ->
+            referencesToken(source, expectedToken) shouldBe true
+            inspectorForbiddenTokens.any { it == expectedToken } shouldBe true
+        }
     }
 
     test("net production code does not depend on config") {
@@ -135,7 +236,7 @@ class ConfigSeparationArchitectureTest : FunSpec({
         violations shouldBe emptyList()
     }
 
-    test("Stage2 pure config owners stay free of parsing, filesystem, logging and wiring effects") {
+    test("pure config owners stay free of parsing, filesystem, logging and wiring effects") {
         val forbidden = commonEffectTokens + listOf(
             "ConfigFactory",
             "parseFile",
@@ -150,7 +251,6 @@ class ConfigSeparationArchitectureTest : FunSpec({
     }
 
     test("HOCON parsing and ConfigSources have one loader/decoder ownership path") {
-        val plainbase = mainRoot.resolve("frameworks/config/PlainbaseConfig.kt")
         val plainbaseCode = stripComments(plainbase.readText())
         val hoconReferences = Regex(
             "\\b(com\\.typesafe\\.config|ConfigFactory|ConfigException|ConfigObject|ConfigValue|ConfigResolveOptions)\\b",
