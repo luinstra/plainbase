@@ -347,6 +347,13 @@ rename - an NFS/SMB mount - the CLI falls back to a copy, warns that it did, and
 file to `roots.conf.bak` first. If you ever find that `.bak` sitting there, a write was interrupted
 mid-copy: it is the last config that booted, and `mv roots.conf.bak roots.conf` restores it.
 
+A last-root `remove` also refuses to unlink `roots.conf` when any `roots.conf.bak` entry is present, including a
+directory or symlink, and leaves both entries untouched. The command checks that sibling without following symlinks;
+the startup warning and damaged-file recovery path still recognize only a regular backup file, so a directory or
+dangling symlink may be silent at startup. Inspect such an entry deliberately: restore a known-good regular backup
+with `mv roots.conf.bak roots.conf`, or resolve/remove the entry intentionally before retrying the command. The
+refusal ends the command with exit `1` and no success or detached-row consequence output.
+
 ## When to upgrade to Meilisearch
 
 Plainbase's default search is embedded SQLite FTS5 - zero containers, ranked and section-granular

@@ -1,11 +1,11 @@
 # Backend configuration compatibility: Stage 0
 
-This report records the first characterization chunk for Plan04's configuration separation work. It is bounded to
-the current loader and decoder implementation: no production code, dependency, loader order, DNS behavior, backup
-deletion policy, or later-stage ownership has changed here. A source trace is not test execution; every status below
-distinguishes the two.
+This report records Plan04's Stage 0 configuration compatibility work. The Stage 0 and Stage 0b sections retain their
+historical characterization scope; the Stage 0c section below records the narrow backup-entry deletion guard and its
+real command/writer measurements. A source trace is not test execution; every status below distinguishes the two.
 
-Baseline: `75853ba208bb14516cf56f97339fa8985df52202` on `codex/backend-04-configuration-separation`.
+Stage 0/0b baseline: `75853ba208bb14516cf56f97339fa8985df52202`. Stage 0c implementation base:
+`7d0a76b84b1f18db88139ed57c8dc545215fad3e`, on `codex/backend-04-configuration-separation`.
 
 `fromSources` currently parses `plainbase.conf` before loading managed roots, so malformed operator syntax raises
 `ConfigException.Parse` before managed-root loading processes its input. Stage 0 preserves this order and makes no
@@ -172,9 +172,7 @@ These stable case IDs are planned additions, not implemented Stage 0 tests; each
 | C04-04-source-snapshot | Stage 2 loader | In `ManagedRootsConfigTest`, change `roots.conf` after load, require old-config provenance unchanged, and require a new load to reflect the change. |
 | C04-05-root-refusals | Stage 2 roots parser | Trace and execute duplicate cross-file, machine-primary, operator-empty/machine-empty, history-coherence, and rooted-glob assertions in the named root suites; add only missing affected cases and preserve existing per-file line/name order and primary-rank cases. |
 | C04-06-candidate-parity | Stage 2 loader/decoder | Add normalized-config and provenance equality for valid candidate versus written bytes, plus exact exception-class/message parity for invalid candidates. |
-| C04-06-last-root-delete | Stage 0c | Exercise real removal of the last managed root with backup (RED) and without backup (GREEN), then reload and verify the remaining-root promotion control. |
 | C04-07-entry-matrix | Stage 2 loader | Characterize nonregular operator/managed entries and readable/unreadable preconditions; record unsupported permission fixtures. |
-| C04-07-backup-delete | Stage 0c | Require no-follow refusal for regular, directory, and dangling-symlink backups; fail closed on inspection errors; permit delete only after confirmed absence, keeping loader and warning semantics distinct. |
 | C04-08-topology-matrix | Stage 3 inspection | Trace and execute declared, canonical, aliased, nonexistent, and permission cases in `RootsValidationTest`, `BootGateTest`, and `RootsParseNativeTest`; close live-channel distinctions without collapsing existing differences. |
 | C04-09-freshness | Stage 3 inspection | Add `ConfigBootInspectorFreshnessTest` coverage for same-config absent/create/remove extra, backup add/remove, candidate/baseline independence, canonical-topology mutation, and memoized-same-config/global RED controls. |
 | C04-10-warning-order | Stage 3 warnings | Assert ordered legacy/explicit multi-signal containment, backup, ignored-content, unavailable-extra, and glob warnings; verify actual server channel/order and `RootCommand` introduced/preexisting keyed faults and candidate-first checks. Existing `BootGateTest` remains partial proof. |
@@ -217,8 +215,9 @@ characterization evidence. No additional checks were run for these report-only c
 - The macOS native run did not reach image launch. The Linux native abort is the expected non-PID1 topology case above,
   not a new failure. No PID1/container campaign was run.
 
-This chunk does not claim that Plan04 is complete. Later chunks still own conservative backup deletion, policy/net
-separation, values/loader/decoder relocation, inspection/freshness and warning order, and caller/documentation closeout.
+This historical Stage 0 record does not claim that Plan04 is complete. Conservative backup deletion is shipped in
+Stage 0c below; later chunks still own policy/net separation, values/loader/decoder relocation, inspection/freshness
+and warning order, and caller/documentation closeout.
 
 ## C04-11 Stage0b measured address correction
 
@@ -243,3 +242,56 @@ The complete measured matrix is retained in the local Stage0b evidence with comp
 suites passed, including the folded native-test class and named downstream consumers. The source guard
 rejects `getByName` in the temporary mutation and passes on final source. These observations come from
 JVM runs; native classification is checked separately by the native gate.
+
+## C04-06-last-root-delete / C04-07-backup-delete: Stage0c backup-entry preservation
+
+Stage0c was implemented on the accepted predecessor `7d0a76b84b1f18db88139ed57c8dc545215fad3e` on
+`codex/backend-04-configuration-separation`. The working tree remained unstaged and uncommitted. The production
+change is limited to [`ManagedRootsFile.kt`](../../server/src/main/kotlin/com/plainbase/frameworks/config/ManagedRootsFile.kt),
+[`PlainbaseConfig.kt`](../../server/src/main/kotlin/com/plainbase/frameworks/config/PlainbaseConfig.kt), and
+[`RootCommand.kt`](../../server/src/main/kotlin/com/plainbase/frameworks/cli/RootCommand.kt): one shared backup-path
+spelling, a no-follow entry guard that catches only inspection `NoSuchFileException`, and a typed last-root CLI error.
+
+The real last-root command RED was captured before the production change. Compilation completed, then the two new
+command assertions failed (`37 tests completed, 2 failed`), so this was not a compile-error RED. The captured old
+behavior was:
+
+- `RootCommandTest`: exit `0`; stdout contained the existing removed-root, restart and detached-row consequence
+  lines; stderr contained the existing backup warning; `liveExistsAfter=false`; and the next real-file load failed
+  with the existing `IllegalArgumentException` for missing `roots.conf` beside a regular `.bak`.
+- `RootCommandNativeTest`: the same exit/output/deletion/next-load outcome under the JVM-folded native source set.
+
+The final focused command/writer run used the official macOS host toolchain: `openjdk 25.0.4.1` and GraalVM CE
+`25.3.4.1+1.1`. Exact environment-prefixed commands and their outputs remain in the local Stage0c receipts; the
+tracked table uses portable Gradle command spelling:
+
+The earlier Stage0c focused receipt measured 50 tests (`34 + 3 + 13`) before the native entry matrix was split into
+independent regular, directory, symlink-to-regular and dangling-symlink methods. That 50-test result is historical;
+the revision-1 run below is the post-split measurement.
+
+| Gate | Portable Gradle command | Observed result |
+| --- | --- | --- |
+| Focused command and writer tests (revision 1) | `./gradlew :server:test --tests 'com.plainbase.frameworks.cli.RootCommandTest' --tests 'com.plainbase.frameworks.cli.RootCommandNativeTest' --tests 'com.plainbase.frameworks.config.ManagedRootsFileNativeTest' --rerun-tasks --max-workers=2 --console=plain` | `BUILD SUCCESSFUL in 25s`; 34 + 3 + 16 tests, with 0 skipped, failures, or errors. |
+| Listed regression controls | `./gradlew :server:test --tests 'com.plainbase.frameworks.config.ManagedRootsFileNativeTest' --tests 'com.plainbase.frameworks.cli.RootCommandNativeHistoryTest' --tests 'com.plainbase.frameworks.cli.RootsLockNativeTest' --tests 'com.plainbase.frameworks.config.ManagedRootsConfigTest' --tests 'com.plainbase.frameworks.config.RootRankStabilityTest' --tests 'com.plainbase.CliBootGateArchitectureTest' --tests 'com.plainbase.BootRefusalLedgerTest' --rerun-tasks --max-workers=2 --console=plain` | `BUILD SUCCESSFUL in 31s`; every requested test method reported `PASSED`. |
+| Root lintKotlin (revision 1) | `./gradlew lintKotlin --max-workers=2 --console=plain` | `BUILD SUCCESSFUL in 12s`; root `lintKotlin` passed. |
+
+The command GREEN assertions retain the candidate warning before the exact final refusal line, empty stdout, unchanged
+live and backup bytes, and the loaded notes root/path/managed provenance. The no-backup control compares the typed
+`PlainbaseConfig.fromEnvAndCandidateRoots(null, env)` result with the next real-file load. The remaining-managed JVM
+control compares the serialized survivor candidate with the real loader and retains the backup warning; the native
+operator-file control has a second managed survivor and still compares the operator configuration bytes exactly.
+
+The native writer matrix covers regular, directory, symlink-to-regular and dangling-symlink backup entries with
+`BasicFileAttributes`/`NOFOLLOW_LINKS` preconditions. It preserves symlink target spelling and target bytes, directory
+contents, and the live file. Loader/warning asymmetry is intentional and measured: regular and symlink-to-regular
+entries warn because the existing classification follows regular-file semantics; directories and dangling symlinks do
+not warn. Each still refuses deletion. An absent live file with a backup refuses, while a missing live file with no
+backup remains idempotent. A nonempty live directory still raises `DirectoryNotEmptyException`.
+
+Non-`NoSuchFileException` inspection-error propagation is source-reviewed at
+[`ManagedRootsFile.kt`](../../server/src/main/kotlin/com/plainbase/frameworks/config/ManagedRootsFile.kt#L202), not
+runtime-proven with a permission fixture: denied parent traversal would also prevent an unguarded unlink, and no
+filesystem mock/provider framework was introduced. `RootCommand.run` retains its unrelated-failure logger/exit path,
+and the remove branch catches only `ManagedRootsBackupPresentException`. The parent-owned native image,
+`nativeCompile`, and spike gates were not duplicated here; no unsupported capability was encountered in the focused
+JVM-folded run, including both symlink fixtures.

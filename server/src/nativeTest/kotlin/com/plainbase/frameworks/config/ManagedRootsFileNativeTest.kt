@@ -5,11 +5,15 @@ import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.filesystem.FileAtomics
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Tag
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.DirectoryNotEmptyException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -356,6 +360,122 @@ class ManagedRootsFileNativeTest {
     }
 
     @Test
+    fun `delete refuses a regular backup entry while loader keeps its regular-file warning predicate`() {
+        assertBackupRefusal(
+            name = "regular",
+            warningExpected = true,
+            create = { target, backup ->
+                Files.copy(target, backup)
+                assertTrue(
+                    Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isRegularFile,
+                )
+            },
+            verify = { _, backup -> assertTrue(Files.isRegularFile(backup)) },
+        )
+    }
+
+    @Test
+    fun `delete refuses a directory backup entry while loader keeps its regular-file warning predicate`() {
+        assertBackupRefusal(
+            name = "directory",
+            warningExpected = false,
+            create = { _, backup ->
+                val child = Files.createDirectory(backup).resolve("recovery.txt")
+                Files.writeString(child, "keep")
+                assertTrue(
+                    Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isDirectory,
+                )
+            },
+            verify = { _, backup -> assertEquals("keep", Files.readString(backup.resolve("recovery.txt"))) },
+        )
+    }
+
+    @Test
+    fun `delete refuses a symlink-to-regular backup while loader keeps its regular-file warning predicate`() {
+        assertBackupRefusal(
+            name = "symlink-regular",
+            warningExpected = true,
+            create = { _, backup ->
+                val targetSpelling = Path.of("recovery-target.conf")
+                val target = backup.parent.resolve(targetSpelling)
+                val targetBytes = "recovery bytes".toByteArray()
+                Files.write(target, targetBytes)
+                createSymbolicLinkOrSkip(backup, targetSpelling)
+                assertTrue(
+                    Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isSymbolicLink,
+                )
+                assertEquals(targetSpelling, Files.readSymbolicLink(backup))
+                assertContentEquals(targetBytes, Files.readAllBytes(target))
+            },
+            verify = { _, backup ->
+                assertEquals(Path.of("recovery-target.conf"), Files.readSymbolicLink(backup))
+                assertContentEquals("recovery bytes".toByteArray(), Files.readAllBytes(backup.parent.resolve("recovery-target.conf")))
+            },
+        )
+    }
+
+    @Test
+    fun `delete refuses a dangling symlink backup while loader keeps its regular-file warning predicate`() {
+        assertBackupRefusal(
+            name = "symlink-dangling",
+            warningExpected = false,
+            create = { _, backup ->
+                val targetSpelling = Path.of("missing-recovery.conf")
+                createSymbolicLinkOrSkip(backup, targetSpelling)
+                assertTrue(
+                    Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isSymbolicLink,
+                )
+                assertEquals(targetSpelling, Files.readSymbolicLink(backup))
+                assertTrue(!Files.exists(backup))
+            },
+            verify = { _, backup ->
+                assertEquals(Path.of("missing-recovery.conf"), Files.readSymbolicLink(backup))
+                assertTrue(!Files.exists(backup))
+            },
+        )
+    }
+
+    @Test
+    fun `delete refuses an absent live file when a backup entry exists`() {
+        val base = Files.createTempDirectory("pb-managed-native-delete-absent")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val target = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+            val backup = ManagedRootsFile.backupPath(target)
+            Files.writeString(backup, "recovery")
+            assertTrue(
+                Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isRegularFile,
+            )
+
+            val failure = assertFailsWith<ManagedRootsBackupPresentException> { ManagedRootsFile.delete(target) }
+            assertEquals(
+                "cannot delete $target while backup entry $backup exists; resolve the backup deliberately, then retry",
+                failure.message,
+            )
+            assertTrue(!Files.exists(target))
+            assertEquals("recovery", Files.readString(backup))
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `delete preserves an unrelated nonempty-directory unlink failure`() {
+        val base = Files.createTempDirectory("pb-managed-native-delete-failure")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val target = Files.createDirectory(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE))
+            Files.writeString(target.resolve("still-here"), "content")
+            assertTrue(!Files.exists(ManagedRootsFile.backupPath(target)))
+
+            assertFailsWith<DirectoryNotEmptyException> { ManagedRootsFile.delete(target) }
+            assertEquals("content", Files.readString(target.resolve("still-here")))
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `delete unlinks the file, which is what remove of the LAST managed root promotes`() {
         val base = Files.createTempDirectory("pb-managed-native-delete")
         try {
@@ -371,5 +491,46 @@ class ManagedRootsFileNativeTest {
         } finally {
             base.toFile().deleteRecursively()
         }
+    }
+
+    private fun assertBackupRefusal(
+        name: String,
+        warningExpected: Boolean,
+        create: (Path, Path) -> Unit,
+        verify: (Path, Path) -> Unit,
+    ) {
+        val base = Files.createTempDirectory("pb-managed-native-delete-$name")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val content = Files.createDirectory(base.resolve("content"))
+            val rootPath = Files.createDirectory(base.resolve("root"))
+            val target = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+            val backup = ManagedRootsFile.backupPath(target)
+            val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to content.toString())
+            Files.writeString(target, ManagedRootsFile.serialize(listOf(root("notes", rootPath.toString()))))
+            val liveBefore = Files.readAllBytes(target)
+            create(target, backup)
+
+            val loaded = PlainbaseConfig.fromEnvAndFile(env)
+            assertEquals(warningExpected, loaded.rootsWarnings().any { it.startsWith("$backup is left over") })
+
+            val failure = assertFailsWith<ManagedRootsBackupPresentException> { ManagedRootsFile.delete(target) }
+            assertEquals(
+                "cannot delete $target while backup entry $backup exists; resolve the backup deliberately, then retry",
+                failure.message,
+            )
+            assertContentEquals(liveBefore, Files.readAllBytes(target))
+            verify(target, backup)
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+}
+
+private fun createSymbolicLinkOrSkip(link: Path, target: Path) {
+    try {
+        Files.createSymbolicLink(link, target)
+    } catch (failure: UnsupportedOperationException) {
+        assumeTrue(false, "the native filesystem does not support symbolic links: ${failure.message}")
     }
 }

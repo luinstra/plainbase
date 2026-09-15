@@ -7,6 +7,7 @@ import com.plainbase.domain.root.ReservedSegments
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.config.ManagedRootsBackupPresentException
 import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -214,7 +215,12 @@ object RootCommand {
         // produces - "there is no roots.conf" - so the artifact validated IS the artifact promoted, even when
         // promoting it means unlinking a file.
         if (hocon.text == null) {
-            ManagedRootsFile.delete(config.managedRootsPath)
+            try {
+                ManagedRootsFile.delete(config.managedRootsPath)
+            } catch (failure: ManagedRootsBackupPresentException) {
+                output.error("root remove: ${failure.message}")
+                return 1
+            }
             output.result("removed root '${request.name.value}' (the last CLI-managed root; ${config.managedRootsPath} deleted)")
         } else {
             ManagedRootsFile.writeAtomically(config.managedRootsPath, hocon.text)

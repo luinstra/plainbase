@@ -290,8 +290,8 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error (the same conventi
 - `plainbase.conf`'s `roots {}` block is yours, by hand. `plainbase root` never opens it for
   writing - not a best-effort round-trip, an absence of code. Comments, formatting, key order and
   every hand-written value survive by construction.
-- `DATA_DIR/roots.conf` is the CLI's. Every `add` or `remove` **rewrites it in full**. Do not
-  hand-edit it - a hand edit is lost on the next `add`/`remove`.
+- `DATA_DIR/roots.conf` is the CLI's. Every successful `add`, and every `remove` that leaves a managed survivor,
+  **rewrites it in full**. Do not hand-edit it - a hand edit is lost on the next `add`/`remove`.
 - At boot the two files **merge**. A root name declared in both is a **boot error** naming the
   file - never a silent winner, never a merge of the two declarations.
 - **`docs` is never CLI-managed.** `plainbase root add docs` and `plainbase root remove docs` are
@@ -324,11 +324,20 @@ visible, not silent.
 
 `--editable` defaults to `false` for an extra root; `--history` defaults to `off`.
 
-`root remove` of the **last** managed root deletes `roots.conf` outright, so the topology is then
+`root remove` of the **last** managed root normally deletes `roots.conf` outright, so the topology is then
 whatever `plainbase.conf` alone says: docs from its `roots {}` block or from `CONTENT_DIR`, plus any
 **other** roots you declared there by hand. `plainbase root` never writes that file, so it cannot
 remove those - deleting `roots.conf` returns the install to single-root behavior only if
 `plainbase.conf` declares no extra roots of its own.
+
+If `roots.conf.bak` (or any other entry with that backup name, including a directory or symlink) exists beside the
+live file, a last-root remove exits `1` before unlinking and leaves both entries in place. Its stderr ends with
+`root remove: cannot delete <live-path> while backup entry <backup-path> exists; resolve the backup deliberately, then retry`;
+no success or detached-row consequence lines are printed. This delete guard checks the backup entry without following
+symlinks. Startup's warning and damaged-file recovery classification remains narrower: only a regular backup file is
+classified as backup evidence, so inspect a directory or dangling symlink manually too. If the regular backup is the
+topology you intend to keep, restore it deliberately with `mv roots.conf.bak roots.conf`; otherwise resolve the entry
+deliberately before retrying the remove.
 
 `root list` prints, per root: name, path, `editable`, `history`, **provenance**
 (`plainbase.conf` / `roots.conf` / `CONTENT_DIR`), and whether the path is a readable directory

@@ -6,8 +6,18 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
+
+internal class ManagedRootsBackupPresentException(
+    path: Path,
+    backup: Path,
+) : IOException(
+    "cannot delete $path while backup entry $backup exists; resolve the backup deliberately, then retry",
+)
 
 /**
  * The writer for `DATA_DIR/roots.conf` (C5 D-C5-1) - the file `plainbase root` owns end to end.
@@ -29,6 +39,9 @@ object ManagedRootsFile {
 
     /** The last-known-good sibling the no-atomic-rename fallback leaves behind when it cannot restore one itself. */
     const val BACKUP_SUFFIX: String = ".bak"
+
+    /** The sibling path used for the last-known-good managed-roots backup. */
+    internal fun backupPath(path: Path): Path = path.resolveSibling("${path.fileName}$BACKUP_SUFFIX")
 
     private val HEADER = """
         # Managed by `plainbase root` - do not edit by hand.
@@ -162,7 +175,7 @@ object ManagedRootsFile {
      * verification that can do nothing but print.
      */
     private fun copyPreservingPrevious(temp: Path, path: Path, hocon: String, atomics: FileAtomics) {
-        val backup = if (Files.isRegularFile(path)) path.resolveSibling("${path.fileName}$BACKUP_SUFFIX") else null
+        val backup = if (Files.isRegularFile(path)) backupPath(path) else null
         backup?.let { Files.copy(path, it, StandardCopyOption.REPLACE_EXISTING) }
         runCatching {
             atomics.copyReplace(temp, path)
@@ -182,13 +195,19 @@ object ManagedRootsFile {
     }
 
     /**
-     * Unlinks the file. `root remove` of the LAST managed root does this rather than leaving an empty
-     * `roots {}` husk: for the MANAGED file emptiness IS absence (no refusal hangs off its presence), so the
-     * unlink returns the install to `SYNTHESIZED` and byte-identical legacy behavior instead of stranding it in
-     * the strict EXPLICIT matrix over a file with nothing in it.
+     * Unlinks the file after confirming there is no backup entry beside it. `root remove` of the LAST managed root
+     * does this rather than leaving an empty `roots {}` husk; an existing backup refuses the unlink so the live
+     * topology and its recovery evidence remain available. A missing live file without a backup stays idempotent.
      */
     fun delete(path: Path) {
-        Files.deleteIfExists(path)
+        val backup = backupPath(path)
+        try {
+            Files.readAttributes(backup, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        } catch (_: NoSuchFileException) {
+            Files.deleteIfExists(path)
+            return
+        }
+        throw ManagedRootsBackupPresentException(path, backup)
     }
 
     /**

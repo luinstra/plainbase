@@ -1,5 +1,7 @@
 package com.plainbase.frameworks.cli
 
+import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -11,6 +13,7 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermissions
 
 /**
@@ -330,10 +333,64 @@ class RootCommandTest : FunSpec({
             val extra = Files.createDirectory(w.tmp("notes"))
             captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 }
             w.config().roots.origin shouldBe RootsOrigin.EXPLICIT
+            val expectedCandidate = PlainbaseConfig.fromEnvAndCandidateRoots(null, w.env)
 
             captureStdout { w.root("remove", "notes") shouldBe 0 }
             Files.exists(w.rootsConf) shouldBe false
-            w.config().roots.origin shouldBe RootsOrigin.SYNTHESIZED
+            w.config() shouldBe expectedCandidate
+        }
+    }
+
+    test("C04-06: removing the last managed root refuses while a regular backup preserves the live file") {
+        world { w ->
+            val extra = Files.createDirectory(w.tmp("notes"))
+            Files.writeString(extra.resolve("note.md"), "---\ntitle = note\n---\n")
+            captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 }
+
+            val backup = ManagedRootsFile.backupPath(w.rootsConf)
+            Files.copy(w.rootsConf, backup, StandardCopyOption.REPLACE_EXISTING)
+            val liveBefore = Files.readAllBytes(w.rootsConf)
+            val backupBefore = Files.readAllBytes(backup)
+            val before = w.config()
+            before.roots.extras.single().localPath shouldBe extra
+            before.roots.managed shouldBe setOf(RootName.require("notes"))
+            before.rootsWarnings().any { it.startsWith("$backup is left over") } shouldBe true
+
+            var exit = -1
+            var stdout = ""
+            val stderr = captureStderr {
+                stdout = captureStdout { exit = w.root("remove", "notes") }
+            }
+            val liveExistsAfter = Files.exists(w.rootsConf)
+            val liveAfter = if (liveExistsAfter) Files.readAllBytes(w.rootsConf) else null
+            val nextLoad = runCatching { w.config() }
+            val nextLoadReceipt = nextLoad.fold(
+                onSuccess = { loaded ->
+                    "success:${loaded.roots.origin}:${loaded.roots.list.map { it.name.value }}"
+                },
+                onFailure = { failure -> "failure:${failure::class.simpleName}:${failure.message}" },
+            )
+            val expectedRefusal =
+                "root remove: cannot delete ${w.rootsConf} while backup entry $backup exists; " +
+                    "resolve the backup deliberately, then retry"
+            val receipt =
+                "RED receipt before the policy assertion: exit=$exit, stdout=$stdout, stderr=$stderr, " +
+                    "liveExistsAfter=$liveExistsAfter, liveBytesAfter=${liveAfter?.size ?: "absent"}, " +
+                    "nextLoad=$nextLoadReceipt"
+
+            withClue(receipt) { exit shouldBe 1 }
+            stdout shouldBe ""
+            val warningIndex = stderr.indexOf("root remove: WARNING: $backup is left over")
+            val refusalIndex = stderr.indexOf(expectedRefusal)
+            (warningIndex >= 0) shouldBe true
+            (warningIndex < refusalIndex) shouldBe true
+            stderr.lines().last { it.isNotEmpty() } shouldBe expectedRefusal
+            liveAfter?.contentEquals(liveBefore) shouldBe true
+            Files.readAllBytes(backup) shouldBe backupBefore
+
+            val loaded = nextLoad.getOrThrow()
+            loaded.roots.extras.single().localPath shouldBe extra
+            loaded.roots.managed shouldBe setOf(RootName.require("notes"))
         }
     }
 
@@ -343,10 +400,20 @@ class RootCommandTest : FunSpec({
             val b = Files.createDirectory(w.tmp("beta"))
             captureStdout { w.root("add", "alpha", a.toString()) shouldBe 0 }
             captureStdout { w.root("add", "beta", b.toString()) shouldBe 0 }
+            val before = w.config()
+            val backup = ManagedRootsFile.backupPath(w.rootsConf)
+            Files.copy(w.rootsConf, backup, StandardCopyOption.REPLACE_EXISTING)
+            val expectedCandidate = PlainbaseConfig.fromEnvAndCandidateRoots(
+                ManagedRootsFile.serialize(
+                    before.roots.list.filter { it.name in before.roots.managed && it.name.value != "alpha" },
+                ),
+                w.env,
+            )
             captureStdout { w.root("remove", "alpha") shouldBe 0 }
 
             Files.exists(w.rootsConf) shouldBe true
-            w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "beta")
+            w.config() shouldBe expectedCandidate
+            w.config().roots.managed shouldBe setOf(RootName.require("beta"))
         }
     }
 

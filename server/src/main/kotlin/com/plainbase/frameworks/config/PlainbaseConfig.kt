@@ -464,7 +464,7 @@ data class PlainbaseConfig(
      * boot outright - see `loadManagedRoots`.)
      */
     private fun managedRootsBackupWarning(): String? {
-        val backup = managedRootsPath.resolveSibling("${managedRootsPath.fileName}${ManagedRootsFile.BACKUP_SUFFIX}")
+        val backup = ManagedRootsFile.backupPath(managedRootsPath)
         if (!Files.isRegularFile(backup)) return null
         return "$backup is left over from an interrupted `plainbase root` promote. $managedRootsPath itself is intact and is " +
             "the topology being served; remove the backup once you have satisfied yourself that is the topology you want."
@@ -686,7 +686,7 @@ data class PlainbaseConfig(
          * for the machine file, emptiness IS absence) - it is a file we could have written, and it says nothing.
          */
         private fun loadManagedRoots(path: Path): Config {
-            val backup = path.resolveSibling("${path.fileName}${ManagedRootsFile.BACKUP_SUFFIX}")
+            val backup = ManagedRootsFile.backupPath(path)
             val hasBackup = Files.isRegularFile(backup)
             if (!Files.isRegularFile(path)) {
                 if (hasBackup) throw IllegalArgumentException(damagedRootsMessage(path, backup, "it is MISSING"))
