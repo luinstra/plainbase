@@ -163,7 +163,7 @@ fun IndexHarness.testRouteContext(
     mcpAllowedHosts: List<String> = listOf("127.0.0.1", "localhost"),
     mcpAllowedOrigins: List<String> = listOf("http://127.0.0.1", "http://localhost"),
     // P5: a defaulted glob list the enforced-mode tests set non-empty (the production wiring threads
-    // config.agentDirectCommitGlobs()); forwarded into buildGuardedApplication so the harness can exercise the gate.
+    // ConfigValuePolicy.agentDirectCommitGlobs(config); forwarded into buildGuardedApplication so the harness can exercise the gate.
     agentDirectCommitGlobs: List<com.plainbase.domain.service.CommitGlob> = emptyList(),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
     /** The watch-coverage holder `/healthz` reads. Defaults to all-whole: a harness with no watcher degrades nothing. */

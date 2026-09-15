@@ -30,7 +30,8 @@ import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
+import com.plainbase.frameworks.config.ConfigValuePolicy
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.runtime.HistoryProviders
@@ -53,7 +54,7 @@ import kotlin.time.Instant
 class IndexModuleWiringTest : FunSpec({
 
     test("the production module set resolves IndexBuilder (indexModule is installed)") {
-        val config = PlainbaseConfig.fromEnv(emptyMap())
+        val config = ConfigLoader.fromEnv(emptyMap())
         val openers = ServerOpeners()
         val inputs = prepareRootBootInputs(config, openers.openLocal)
         val owner = ServerResourceOwner()
@@ -79,7 +80,7 @@ class IndexModuleWiringTest : FunSpec({
     test("the serving projection keeps the observed graph shared and defers request-time root status") {
         withTempTree(seed = { root -> writePage(root, "docs/runtime.md", "# Runtime\n\nserving graph\n") }) { root ->
             withTempTree(seed = {}) { dataDir ->
-                val config = PlainbaseConfig.fromEnv(
+                val config = ConfigLoader.fromEnv(
                     mapOf("CONTENT_DIR" to root.toString(), "DATA_DIR" to dataDir.toString()),
                 )
                 val openers = ServerOpeners()
@@ -128,7 +129,7 @@ class IndexModuleWiringTest : FunSpec({
                     app.koin.get<IdProvider>() shouldBeSameInstanceAs deterministicIds
                     serving.index.identity shouldBeSameInstanceAs app.koin.get<PageIdentityService>()
                     serving.absence shouldBeSameInstanceAs app.koin.get<AbsenceClassifier>()
-                    serving.agentDirectCommitGlobs shouldBe config.agentDirectCommitGlobs()
+                    serving.agentDirectCommitGlobs shouldBe ConfigValuePolicy.agentDirectCommitGlobs(config)
                     serving.index.builder shouldBeSameInstanceAs app.koin.get<IndexBuilder>()
                     serving.index.registry shouldBeSameInstanceAs app.koin.get<RootRegistry>()
                     serving.index.stores shouldBeSameInstanceAs app.koin.get<RootStores>()

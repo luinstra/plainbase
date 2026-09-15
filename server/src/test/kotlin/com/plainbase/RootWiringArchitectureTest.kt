@@ -68,7 +68,7 @@ class RootWiringArchitectureTest : FunSpec({
         // and since `of` resolves primary ONCE over the snapshot, one comparison is all it takes: `extras` partitions
         // against the RESOLVED primary, and nothing else searches.
         "RootRegistry.kt" to 1,
-        // ConfigBootInspector owns the filesystem-matrix comparison; PlainbaseConfig is a value/delegate only. RootsConfig
+        // ConfigBootInspector owns the filesystem-matrix comparison; PlainbaseConfig holds values only. RootsConfig
         // owns the primary accessor, extras partition and construction backstop; ConfigDecoder owns file merge/parser branches.
         "ConfigBootInspector.kt" to 1,
         "RootsConfig.kt" to 3,
@@ -237,7 +237,7 @@ class RootWiringArchitectureTest : FunSpec({
     // one that should be read first - would have zeta demoted by a change that never touched zeta.
     //
     // ZERO exemptions: `primary` is a typed ACCESSOR, never a promotion. Matched over COMMENT-STRIPPED code, because the
-    // only correct place for this literal is a comment WARNING against it - which the merge in `PlainbaseConfig` and
+    // only correct place for this literal is a comment WARNING against it - which the merge in `ConfigDecoder` and
     // the candidate build in `RootCommand` both carry. A plain grep for the pattern would eat its own teaching.
     // The two receiver spellings share ONE `,?`, deliberately. Written as two separate alternatives each
     // carrying its own, the row below would pin the trailing comma for whichever alternative it happened to

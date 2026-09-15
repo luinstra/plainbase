@@ -8,7 +8,7 @@ import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.domain.service.commit
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.RootsConfig
 import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.git.GitCliHistoryProvider
@@ -123,7 +123,7 @@ private fun commitCount(content: Path, dataDir: Path): Int {
  * whole point being that the selection under test is the WIRING's, not a hand-built provider's.
  */
 private fun withKoin(content: Path, dataDir: Path, history: HistoryMode, block: (Koin) -> Unit) {
-    val configValue = PlainbaseConfig.fromEnv(emptyMap()).copy(
+    val configValue = ConfigLoader.fromEnv(emptyMap()).copy(
         contentDir = content,
         dataDir = dataDir,
         roots = RootsConfig.of(

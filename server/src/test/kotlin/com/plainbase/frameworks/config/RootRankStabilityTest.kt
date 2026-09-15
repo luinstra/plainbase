@@ -64,10 +64,10 @@ class RootRankStabilityTest : FunSpec({
     )
 
     fun namesOf(env: Map<String, String>): List<String> =
-        PlainbaseConfig.fromEnvAndFile(env).roots.list.map { it.name.value }
+        ConfigLoader.fromEnvAndFile(env).roots.list.map { it.name.value }
 
     fun rankOf(env: Map<String, String>, name: String): Int =
-        RootRegistry.of(PlainbaseConfig.fromEnvAndFile(env).roots.list).rank(RootName.require(name))
+        RootRegistry.of(ConfigLoader.fromEnvAndFile(env).roots.list).rank(RootName.require(name))
 
     test("(a) main keeps its DECLARED rank when roots.conf extras merge - it is NEVER hoisted to 0") {
         // The assertion this whole decision exists for. It goes RED under `listOf(primary) + declaredExtras +

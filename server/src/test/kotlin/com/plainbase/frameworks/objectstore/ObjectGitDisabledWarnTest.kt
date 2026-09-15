@@ -8,7 +8,7 @@ import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.FileDiff
 import com.plainbase.domain.history.HistoryProvider
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -36,7 +36,7 @@ import kotlin.io.path.readText
  */
 class ObjectGitDisabledWarnTest : FunSpec({
 
-    val objectConfig = PlainbaseConfig.fromEnv(emptyMap()).copy(
+    val objectConfig = ConfigLoader.fromEnv(emptyMap()).copy(
         storage = StorageConfig(
             backend = StorageBackend.OBJECT,
             endpoint = "https://acct.example.com",
@@ -45,7 +45,7 @@ class ObjectGitDisabledWarnTest : FunSpec({
             secretAccessKey = "s",
         ),
     )
-    val localConfig = PlainbaseConfig.fromEnv(emptyMap())
+    val localConfig = ConfigLoader.fromEnv(emptyMap())
 
     test("object mode + NoOp history (every C4-era object boot) => the WARN fires, naming the exposure") {
         val warning = objectModeGitDisabledWarning(objectConfig, NoOpHistoryProvider)

@@ -21,7 +21,7 @@ import com.plainbase.domain.repository.UserRepository
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.runtime.ContentRepositories
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class RepositoryModuleWiringTest : FunSpec({
 
     test("content repository aliases share one lazy group and real database") {
-        val config = PlainbaseConfig.fromEnv(emptyMap())
+        val config = ConfigLoader.fromEnv(emptyMap())
         val owner = ServerResourceOwner()
         val opened = AtomicInteger()
         val closed = AtomicInteger()
@@ -95,7 +95,7 @@ class RepositoryModuleWiringTest : FunSpec({
     }
 
     test("non-content repositories do not create the content group") {
-        val config = PlainbaseConfig.fromEnv(emptyMap())
+        val config = ConfigLoader.fromEnv(emptyMap())
         val owner = ServerResourceOwner()
         val opened = AtomicInteger()
         val closed = AtomicInteger()

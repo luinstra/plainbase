@@ -2,7 +2,7 @@ package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -35,7 +35,7 @@ class LocalBootNoObjectConstructionTest : FunSpec({
         val objectBefore = ObjectContentStore.constructions.get()
         val s3Before = S3ObjectClient.constructions.get()
 
-        val config = PlainbaseConfig.fromEnv(emptyMap())
+        val config = ConfigLoader.fromEnv(emptyMap())
         val openers = ServerOpeners()
         val inputs = prepareRootBootInputs(config, openers.openLocal)
         val owner = ServerResourceOwner()
@@ -64,7 +64,7 @@ class LocalBootNoObjectConstructionTest : FunSpec({
         val before = contentDirStoreConstructions.get()
 
         withTempDataDir { dataDir ->
-            val objectConfig = PlainbaseConfig.fromEnv(emptyMap()).copy(
+            val objectConfig = ConfigLoader.fromEnv(emptyMap()).copy(
                 dataDir = dataDir,
                 storage = StorageConfig(
                     backend = StorageBackend.OBJECT,

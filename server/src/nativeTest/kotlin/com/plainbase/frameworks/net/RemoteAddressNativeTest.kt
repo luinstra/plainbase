@@ -1,6 +1,6 @@
 package com.plainbase.frameworks.net
 
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
 import kotlin.test.Test
@@ -112,15 +112,15 @@ class RemoteAddressNativeTest {
                 "CONTENT_DIR" to content.toString(),
                 "PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/8",
             )
-            assertEquals(listOf("10.0.0.0/8"), PlainbaseConfig.fromEnv(env).auth.trustedProxyCidrs)
+            assertEquals(listOf("10.0.0.0/8"), ConfigLoader.fromEnv(env).auth.trustedProxyCidrs)
 
             val failure = assertFailsWith<IllegalArgumentException> {
-                PlainbaseConfig.fromEnv(env + ("PLAINBASE_TRUSTED_PROXY" to "١٢٧.0.0.0/8"))
+                ConfigLoader.fromEnv(env + ("PLAINBASE_TRUSTED_PROXY" to "١٢٧.0.0.0/8"))
             }
             assertTrue(requireNotNull(failure.message).contains("PLAINBASE_TRUSTED_PROXY"))
 
             val zoneFailure = assertFailsWith<IllegalArgumentException> {
-                PlainbaseConfig.fromEnv(env + ("PLAINBASE_TRUSTED_PROXY" to "127.0.0.0%lo0/8"))
+                ConfigLoader.fromEnv(env + ("PLAINBASE_TRUSTED_PROXY" to "127.0.0.0%lo0/8"))
             }
             assertTrue(requireNotNull(zoneFailure.message).contains("PLAINBASE_TRUSTED_PROXY"))
         } finally {

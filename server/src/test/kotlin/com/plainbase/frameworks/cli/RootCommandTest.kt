@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.config.ConfigBootInspector
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsOrigin
@@ -333,7 +335,7 @@ class RootCommandTest : FunSpec({
             val extra = Files.createDirectory(w.tmp("notes"))
             captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 }
             w.config().roots.origin shouldBe RootsOrigin.EXPLICIT
-            val expectedCandidate = PlainbaseConfig.fromEnvAndCandidateRoots(null, w.env)
+            val expectedCandidate = ConfigLoader.fromEnvAndCandidateRoots(null, w.env)
 
             captureStdout { w.root("remove", "notes") shouldBe 0 }
             Files.exists(w.rootsConf) shouldBe false
@@ -354,7 +356,7 @@ class RootCommandTest : FunSpec({
             val before = w.config()
             before.roots.extras.single().localPath shouldBe extra
             before.roots.managed shouldBe setOf(RootName.require("notes"))
-            before.rootsWarnings().any { it.startsWith("$backup is left over") } shouldBe true
+            ConfigBootInspector.rootsWarnings(before).any { it.startsWith("$backup is left over") } shouldBe true
 
             var exit = -1
             var stdout = ""
@@ -403,7 +405,7 @@ class RootCommandTest : FunSpec({
             val before = w.config()
             val backup = ManagedRootsFile.backupPath(w.rootsConf)
             Files.copy(w.rootsConf, backup, StandardCopyOption.REPLACE_EXISTING)
-            val expectedCandidate = PlainbaseConfig.fromEnvAndCandidateRoots(
+            val expectedCandidate = ConfigLoader.fromEnvAndCandidateRoots(
                 ManagedRootsFile.serialize(
                     before.roots.list.filter { it.name in before.roots.managed && it.name.value != "alpha" },
                 ),
@@ -591,17 +593,17 @@ class RootCommandTest : FunSpec({
     test("T-CLI-14: dataDirFrom(env) equals config.dataDir - set, unset, and against a conf that tries to set it") {
         // If these two ever diverge, the CLI locks a different directory than the one it edits.
         world { w ->
-            PlainbaseConfig.dataDirFrom(w.env) shouldBe PlainbaseConfig.fromEnvAndFile(w.env).dataDir
+            ConfigLoader.dataDirFrom(w.env) shouldBe ConfigLoader.fromEnvAndFile(w.env).dataDir
         }
         withClue("unset: the ./data default, resolved identically on both sides") {
-            PlainbaseConfig.dataDirFrom(emptyMap()) shouldBe PlainbaseConfig.fromEnvAndFile(emptyMap()).dataDir
+            ConfigLoader.dataDirFrom(emptyMap()) shouldBe ConfigLoader.fromEnvAndFile(emptyMap()).dataDir
         }
         world { w ->
             // dataDir LOCATES the file, so it is the one field that can never come FROM it. A conf that declares
             // one must be ignored.
             Files.writeString(w.data.resolve("plainbase.conf"), """dataDir = "/somewhere/else"""")
-            PlainbaseConfig.dataDirFrom(w.env) shouldBe PlainbaseConfig.fromEnvAndFile(w.env).dataDir
-            PlainbaseConfig.fromEnvAndFile(w.env).dataDir shouldBe w.data
+            ConfigLoader.dataDirFrom(w.env) shouldBe ConfigLoader.fromEnvAndFile(w.env).dataDir
+            ConfigLoader.fromEnvAndFile(w.env).dataDir shouldBe w.data
         }
     }
 
@@ -689,7 +691,7 @@ private class World(private val base: Path, val data: Path, val content: Path) {
     fun root(vararg args: String, env: Map<String, String> = this.env): Int =
         RootCommand.run(args.toList(), env, CommandOutputCapture.current)
 
-    fun config(): PlainbaseConfig = PlainbaseConfig.fromEnvAndFile(env)
+    fun config(): PlainbaseConfig = ConfigLoader.fromEnvAndFile(env)
 
     /** A candidate root directory, a SIBLING of DATA_DIR and CONTENT_DIR so it nests inside neither. */
     fun tmp(name: String): Path = base.resolve(name)

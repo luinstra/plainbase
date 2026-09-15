@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.bootGateFor
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
@@ -127,7 +128,7 @@ class RootCommandNativeHistoryTest {
         val standalone = repo(w.base.resolve("standalone"))
         assertEquals(0, w.add("standalone", standalone, "--history", "native"))
         assertTrue(Files.exists(w.rootsConf))
-        val extra = PlainbaseConfig.fromEnvAndFile(w.env).roots.extras.single()
+        val extra = ConfigLoader.fromEnvAndFile(w.env).roots.extras.single()
         assertEquals("native", extra.history.name.lowercase())
     }
 
@@ -187,7 +188,7 @@ class RootCommandNativeHistoryTest {
             )
             assertContentEquals(
                 listOf("docs", "broken", "unrelated"),
-                PlainbaseConfig.fromEnvAndFile(w.env).roots.list.map { it.name.value },
+                ConfigLoader.fromEnvAndFile(w.env).roots.list.map { it.name.value },
             )
         }
 
@@ -232,7 +233,7 @@ class RootCommandNativeHistoryTest {
 
             // `serve` refuses this config today.
             assertTrue(
-                bootGateFor(PlainbaseConfig.fromEnvAndFile(w.env)).refusals.isNotEmpty(),
+                bootGateFor(ConfigLoader.fromEnvAndFile(w.env)).refusals.isNotEmpty(),
                 "precondition: this install must currently REFUSE to boot, or the test proves nothing",
             )
 
@@ -243,7 +244,7 @@ class RootCommandNativeHistoryTest {
             // And the resulting config BOOTS. Removing the offender cleared the refusal.
             assertFalse(Files.exists(w.rootsConf))
             assertTrue(
-                bootGateFor(PlainbaseConfig.fromEnvAndFile(w.env)).refusals.isEmpty(),
+                bootGateFor(ConfigLoader.fromEnvAndFile(w.env)).refusals.isEmpty(),
                 "removing the offending root must have made the config bootable again",
             )
         }

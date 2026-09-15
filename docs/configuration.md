@@ -425,7 +425,8 @@ then restart the server.
 ## `auth.mode` - the three modes
 
 - **`off`** - no login, no auth. Loopback-dev only, and despite being the "no auth" mode it is
-  still subject to the fail-closed bind guard (`bindGuardRefusal()` in `TransportSecurityPolicy.kt`): a
+  still subject to the fail-closed bind guard (`TransportSecurityPolicy.derive(config).bindRefusal` in
+  `TransportSecurityPolicy.kt`): a
   non-loopback `off` bind is refused unless a trusted proxy or `PLAINBASE_INSECURE_HTTP` override
   is present, because `off` is the **most dangerous** mode if it ever reached a public interface.
 - **`builtin`** - password login; Plainbase manages its own users and sessions.

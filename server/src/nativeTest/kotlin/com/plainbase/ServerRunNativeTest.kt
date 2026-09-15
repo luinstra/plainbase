@@ -3,6 +3,7 @@ package com.plainbase
 import com.plainbase.frameworks.cli.CommandOutput
 import com.plainbase.frameworks.cli.WriteIntent
 import com.plainbase.frameworks.config.AuthConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.GitConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -165,7 +166,7 @@ private fun config(content: Path, data: Path) = PlainbaseConfig(
 )
 
 private fun objectConfigFromEnv(content: Path, data: Path, endpointPort: Int): PlainbaseConfig =
-    PlainbaseConfig.fromEnv(
+    ConfigLoader.fromEnv(
         mapOf(
             "CONTENT_DIR" to content.toString(),
             "DATA_DIR" to data.toString(),

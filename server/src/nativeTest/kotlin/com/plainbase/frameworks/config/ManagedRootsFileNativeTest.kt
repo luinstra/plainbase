@@ -369,7 +369,7 @@ class ManagedRootsFileNativeTest {
                     assertEquals(expected, config.roots.managed, "$residue must boot with exactly the topology on disk")
                     if (residue.backup) {
                         assertTrue(
-                            config.rootsWarnings().any { it.contains(ManagedRootsFile.BACKUP_SUFFIX) },
+                            ConfigBootInspector.rootsWarnings(config).any { it.contains(ManagedRootsFile.BACKUP_SUFFIX) },
                             "$residue boots, but the leftover backup is the only evidence a promote died - it must be named",
                         )
                     }
@@ -664,7 +664,7 @@ class ManagedRootsFileNativeTest {
             create(target, backup)
 
             val loaded = ConfigLoader.fromEnvAndFile(env)
-            assertEquals(warningExpected, loaded.rootsWarnings().any { it.startsWith("$backup is left over") })
+            assertEquals(warningExpected, ConfigBootInspector.rootsWarnings(loaded).any { it.startsWith("$backup is left over") })
 
             val failure = assertFailsWith<ManagedRootsBackupPresentException> { ManagedRootsFile.delete(target) }
             assertEquals(

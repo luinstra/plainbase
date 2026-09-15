@@ -31,7 +31,7 @@ class ManagedRootsConfigTest : FunSpec({
 
     test("roots.conf alone yields a SYNTHESIZED main from CONTENT_DIR plus the managed extras, origin EXPLICIT") {
         withFiles(rootsConf = """roots { notes { path = "/roots/notes", editable = true, history = off } }""") { env ->
-            val roots = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots
+            val roots = ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots
             roots.origin shouldBe RootsOrigin.EXPLICIT
             roots.list.map { it.name.value } shouldBe listOf("docs", "notes")
             roots.primary.localPath shouldBe Path.of("/roots/docs")
@@ -45,7 +45,7 @@ class ManagedRootsConfigTest : FunSpec({
 
     test("an absent roots.conf and an absent block stay SYNTHESIZED - byte-identical legacy behavior") {
         withFiles { env ->
-            PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots.origin shouldBe RootsOrigin.SYNTHESIZED
+            ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots.origin shouldBe RootsOrigin.SYNTHESIZED
         }
     }
 
@@ -61,7 +61,7 @@ class ManagedRootsConfigTest : FunSpec({
             """.trimIndent(),
             rootsConf = """roots { cli { path = "/roots/c" } }""",
         ) { env ->
-            val roots = PlainbaseConfig.fromEnvAndFile(env).roots
+            val roots = ConfigLoader.fromEnvAndFile(env).roots
             roots.list.map { it.name.value } shouldBe listOf("docs", "hand", "cli")
             roots.managed.map { it.value } shouldBe listOf("cli")
             roots.primaryDeclared shouldBe true
@@ -75,7 +75,7 @@ class ManagedRootsConfigTest : FunSpec({
             plainbaseConf = """roots { docs { path = "/roots/m" }, notes { path = "/roots/hand-notes" } }""",
             rootsConf = """roots { notes { path = "/roots/cli-notes" } }""",
         ) { env ->
-            val failure = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            val failure = shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
             failure.message shouldContain "notes"
             failure.message shouldContain "plainbase.conf"
             failure.message shouldContain "roots.conf"
@@ -87,7 +87,7 @@ class ManagedRootsConfigTest : FunSpec({
 
     test("T-CFG-3: roots.conf declaring docs is a boot error naming the file") {
         withFiles(rootsConf = """roots { docs { path = "/roots/m" } }""") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                 .message shouldContain "roots.conf must not declare 'docs'"
         }
     }
@@ -101,7 +101,7 @@ class ManagedRootsConfigTest : FunSpec({
             // would route this into the synthesize arm and SILENTLY REVERT the install to legacy CONTENT_DIR
             // mode - dropping a refusal that fires today.
             withFiles(plainbaseConf = "roots {}") { env ->
-                shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+                shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
                     .message shouldContain "must declare a root named 'docs'"
             }
         }
@@ -116,14 +116,14 @@ class ManagedRootsConfigTest : FunSpec({
                     "PLAINBASE_S3_ACCESS_KEY_ID" to "k",
                     "PLAINBASE_S3_SECRET_ACCESS_KEY" to "s",
                 )
-                shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(objectEnv) }
+                shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(objectEnv) }
                     .message shouldContain "roots {} cannot be combined with storage.backend=object"
             }
         }
 
         test("(c) no roots key at all stays SYNTHESIZED") {
             withFiles(plainbaseConf = """contentDir = "/roots/docs"""") { env ->
-                PlainbaseConfig.fromEnvAndFile(env).roots.origin shouldBe RootsOrigin.SYNTHESIZED
+                ConfigLoader.fromEnvAndFile(env).roots.origin shouldBe RootsOrigin.SYNTHESIZED
             }
         }
 
@@ -133,7 +133,7 @@ class ManagedRootsConfigTest : FunSpec({
             // the strict EXPLICIT matrix for nothing. (`root remove` of the last root DELETES the file, so this
             // state is only reachable by hand-editing a file whose header says not to.)
             withFiles(rootsConf = "roots {}") { env ->
-                PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots.origin shouldBe RootsOrigin.SYNTHESIZED
+                ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots.origin shouldBe RootsOrigin.SYNTHESIZED
             }
         }
     }
@@ -145,7 +145,7 @@ class ManagedRootsConfigTest : FunSpec({
             plainbaseConf = """auth { agentDirectCommit { roots { notes = ["drafts/**"] } } }""",
             rootsConf = """roots { notes { path = "/roots/notes", editable = true } }""",
         ) { env ->
-            val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs"))
+            val config = ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs"))
             config.auth.agentDirectCommitGlobsByRoot.mapKeys { it.key.value } shouldBe mapOf("notes" to listOf("drafts/**"))
         }
     }
@@ -155,7 +155,7 @@ class ManagedRootsConfigTest : FunSpec({
             plainbaseConf = """auth { agentDirectCommit { roots { ghost = ["drafts/**"] } } }""",
             rootsConf = """roots { notes { path = "/roots/notes" } }""",
         ) { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")) }
                 .message shouldContain "names no configured root"
         }
     }
@@ -172,9 +172,9 @@ class ManagedRootsConfigTest : FunSpec({
         try {
             Files.writeString(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE), """roots { notes { path = "/roots/notes" } }""")
             val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to data.toString()) // DATA_DIR == CONTENT_DIR
-            val config = PlainbaseConfig.fromEnvAndFile(env)
+            val config = ConfigLoader.fromEnvAndFile(env)
             config.roots.origin shouldBe RootsOrigin.EXPLICIT
-            shouldThrow<IllegalArgumentException> { config.requireContentDir() }
+            shouldThrow<IllegalArgumentException> { ConfigBootInspector.requireContentDir(config) }
                 .message shouldContain "must be different directories"
         } finally {
             Files.walk(data).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
@@ -190,8 +190,8 @@ class ManagedRootsConfigTest : FunSpec({
             // CONTENT_DIR is ignored while it is still authoritative - and the natural remedy (delete the
             // "ignored" env var) silently repoints main at ./content.
             withFiles(rootsConf = """roots { notes { path = "/roots/notes" } }""") { env ->
-                val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs"))
-                config.rootsWarnings().any { it.contains("CONTENT_DIR") && it.contains("ignored") } shouldBe false
+                val config = ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs"))
+                ConfigBootInspector.rootsWarnings(config).any { it.contains("CONTENT_DIR") && it.contains("ignored") } shouldBe false
                 config.mainContentRoot() shouldBe Path.of("/roots/docs")
             }
         }
@@ -201,8 +201,8 @@ class ManagedRootsConfigTest : FunSpec({
                 plainbaseConf = """roots { docs { path = "/roots/m" } }""",
                 rootsConf = """roots { notes { path = "/roots/notes" } }""",
             ) { env ->
-                val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/legacy"))
-                config.rootsWarnings().any { it.contains("CONTENT_DIR") && it.contains("ignored") } shouldBe true
+                val config = ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/legacy"))
+                ConfigBootInspector.rootsWarnings(config).any { it.contains("CONTENT_DIR") && it.contains("ignored") } shouldBe true
                 config.mainContentRoot() shouldBe Path.of("/roots/m")
             }
         }
@@ -212,7 +212,7 @@ class ManagedRootsConfigTest : FunSpec({
 
     test("the managed file's knobs parse exactly like the operator's: history native, editable false by default") {
         withFiles(rootsConf = """roots { repo { path = "/roots/repo", history = native } }""") { env ->
-            val extra = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots.extras.single()
+            val extra = ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots.extras.single()
             extra.history shouldBe HistoryMode.NATIVE
             extra.editable shouldBe false
         }
@@ -222,7 +222,7 @@ class ManagedRootsConfigTest : FunSpec({
         // The CLI's `--history off|native` grammar means IT cannot construct an AUTO extra. This is the other half:
         // a hand-edited managed file still meets the boot rule, because the rule lives in the loader.
         withFiles(rootsConf = """roots { repo { path = "/roots/repo", history = auto } }""") { env ->
-            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")) }
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")) }
                 .message shouldContain "history = auto is not allowed on an extra root"
         }
     }

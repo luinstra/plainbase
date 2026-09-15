@@ -55,7 +55,7 @@ class RootsParseNativeTest {
                 """.trimIndent(),
             )
             val config = ConfigLoader.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
-            val failure = assertFailsWith<IllegalArgumentException> { config.requireContentDir() }
+            val failure = assertFailsWith<IllegalArgumentException> { ConfigBootInspector.requireContentDir(config) }
             assertTrue(failure.message.orEmpty().contains("resolve to the same directory"), "unexpected message: ${failure.message}")
         } finally {
             Files.walk(base).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }

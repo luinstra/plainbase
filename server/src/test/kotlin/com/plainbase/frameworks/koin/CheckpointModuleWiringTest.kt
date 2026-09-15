@@ -5,7 +5,7 @@ import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
@@ -31,7 +31,7 @@ class CheckpointModuleWiringTest : FunSpec({
         }) { root ->
             withTempTree(seed = {}) { dataDir ->
                 val env = mapOf("CONTENT_DIR" to root.toString(), "DATA_DIR" to dataDir.toString())
-                val config = PlainbaseConfig.fromEnv(env)
+                val config = ConfigLoader.fromEnv(env)
                 val openers = ServerOpeners()
                 val inputs = prepareRootBootInputs(config, openers.openLocal)
                 val owner = ServerResourceOwner()

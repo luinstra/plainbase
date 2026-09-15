@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.config.ConfigBootInspector
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsOrigin
@@ -49,11 +51,11 @@ class RootCommandNativeTest {
             assertTrue(added.contains(notes.toString()), "the ABSOLUTE path must be printed: $added")
             assertTrue(added.contains("restart the server to apply"))
 
-            val afterAdd = PlainbaseConfig.fromEnvAndFile(env).roots
+            val afterAdd = ConfigLoader.fromEnvAndFile(env).roots
             assertContentEquals(listOf("docs", "notes"), afterAdd.list.map { it.name.value })
             assertTrue(afterAdd.extras.single().editable)
             assertEquals(RootsOrigin.EXPLICIT, afterAdd.origin)
-            val expectedCandidate = PlainbaseConfig.fromEnvAndCandidateRoots(null, env)
+            val expectedCandidate = ConfigLoader.fromEnvAndCandidateRoots(null, env)
 
             // LIST
             val listed = captureStdout { assertEquals(0, RootCommand.run(listOf("list"), env, NativeCommandOutputCapture.current)) }
@@ -65,7 +67,7 @@ class RootCommandNativeTest {
             // REMOVE - and the file goes with it, returning the install to byte-identical legacy behavior.
             captureStdout { assertEquals(0, RootCommand.run(listOf("remove", "notes"), env, NativeCommandOutputCapture.current)) }
             assertFalse(Files.exists(rootsConf))
-            assertEquals(expectedCandidate, PlainbaseConfig.fromEnvAndFile(env))
+            assertEquals(expectedCandidate, ConfigLoader.fromEnvAndFile(env))
         } finally {
             base.toFile().deleteRecursively()
         }
@@ -93,10 +95,10 @@ class RootCommandNativeTest {
             Files.copy(rootsConf, backup, StandardCopyOption.REPLACE_EXISTING)
             val liveBefore = Files.readAllBytes(rootsConf)
             val backupBefore = Files.readAllBytes(backup)
-            val before = PlainbaseConfig.fromEnvAndFile(env)
+            val before = ConfigLoader.fromEnvAndFile(env)
             assertEquals(listOf("docs", "notes"), before.roots.list.map { it.name.value })
             assertEquals(setOf(RootName.require("notes")), before.roots.managed)
-            assertTrue(before.rootsWarnings().any { it.startsWith("$backup is left over") })
+            assertTrue(ConfigBootInspector.rootsWarnings(before).any { it.startsWith("$backup is left over") })
 
             var exit = -1
             var stdout = ""
@@ -107,7 +109,7 @@ class RootCommandNativeTest {
             }
             val liveExistsAfter = Files.exists(rootsConf)
             val liveAfter = if (liveExistsAfter) Files.readAllBytes(rootsConf) else null
-            val nextLoad = runCatching { PlainbaseConfig.fromEnvAndFile(env) }
+            val nextLoad = runCatching { ConfigLoader.fromEnvAndFile(env) }
             val nextLoadReceipt = nextLoad.fold(
                 onSuccess = { loaded ->
                     "success:${loaded.roots.origin}:${loaded.roots.list.map { it.name.value }}"
@@ -171,11 +173,11 @@ class RootCommandNativeTest {
             captureStdout {
                 assertEquals(0, RootCommand.run(listOf("add", "archive", archive.toString()), env, NativeCommandOutputCapture.current))
             }
-            val before = PlainbaseConfig.fromEnvAndFile(env)
+            val before = ConfigLoader.fromEnvAndFile(env)
             val managedRootsPath = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
             val backup = ManagedRootsFile.backupPath(managedRootsPath)
             Files.copy(managedRootsPath, backup, StandardCopyOption.REPLACE_EXISTING)
-            val expectedCandidate = PlainbaseConfig.fromEnvAndCandidateRoots(
+            val expectedCandidate = ConfigLoader.fromEnvAndCandidateRoots(
                 ManagedRootsFile.serialize(
                     before.roots.list.filter { it.name in before.roots.managed && it.name.value != "notes" },
                 ),
@@ -184,9 +186,9 @@ class RootCommandNativeTest {
             captureStdout { assertEquals(0, RootCommand.run(listOf("remove", "notes"), env, NativeCommandOutputCapture.current)) }
 
             assertContentEquals(operatorConfBefore, Files.readAllBytes(conf), "`plainbase root` opened plainbase.conf for writing")
-            assertEquals(expectedCandidate, PlainbaseConfig.fromEnvAndFile(env))
+            assertEquals(expectedCandidate, ConfigLoader.fromEnvAndFile(env))
             assertTrue(Files.exists(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)))
-            assertEquals(setOf(RootName.require("archive")), PlainbaseConfig.fromEnvAndFile(env).roots.managed)
+            assertEquals(setOf(RootName.require("archive")), ConfigLoader.fromEnvAndFile(env).roots.managed)
         } finally {
             base.toFile().deleteRecursively()
         }

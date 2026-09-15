@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.bootGateFor
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -46,7 +47,7 @@ class RootsLockNativeTest {
     private class World(val base: Path, val data: Path, val content: Path) {
         val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to content.toString())
         val rootsConf: Path get() = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
-        fun config(): PlainbaseConfig = PlainbaseConfig.fromEnvAndFile(env)
+        fun config(): PlainbaseConfig = ConfigLoader.fromEnvAndFile(env)
     }
 
     private fun <T> world(block: (World) -> T): T {

@@ -5,7 +5,7 @@ import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlPreparedStatement
 import com.plainbase.IdentitySafeFailureAccumulator
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.search.SearchDb
@@ -46,7 +46,7 @@ class KoinResourceInstallerTest : FunSpec({
         val searchClosed = AtomicBoolean(false)
         val searchCloseCount = AtomicInteger()
         try {
-            val config = PlainbaseConfig.fromEnv(
+            val config = ConfigLoader.fromEnv(
                 mapOf(
                     "CONTENT_DIR" to contentDir.toString(),
                     "DATA_DIR" to dataDir.toString(),
@@ -110,7 +110,7 @@ class KoinResourceInstallerTest : FunSpec({
         var driver: SqlDriver? = null
         var search: SearchDb? = null
         try {
-            val config = PlainbaseConfig.fromEnv(
+            val config = ConfigLoader.fromEnv(
                 mapOf("CONTENT_DIR" to contentDir.toString(), "DATA_DIR" to dataDir.toString()),
             )
             val app = createOwnedTestKoinApplication(
@@ -178,7 +178,7 @@ class KoinResourceInstallerTest : FunSpec({
         var primary: Throwable? = null
         var interrupted = false
         try {
-            val config = PlainbaseConfig.fromEnv(
+            val config = ConfigLoader.fromEnv(
                 mapOf("CONTENT_DIR" to contentDir.toString(), "DATA_DIR" to dataDir.toString()),
             )
             val app = createOwnedTestKoinApplication(
@@ -365,7 +365,7 @@ class KoinResourceInstallerTest : FunSpec({
         var primary: Throwable? = null
         var interrupted = false
         try {
-            val config = PlainbaseConfig.fromEnv(
+            val config = ConfigLoader.fromEnv(
                 mapOf("CONTENT_DIR" to contentDir.toString(), "DATA_DIR" to dataDir.toString()),
             )
             val app = createOwnedTestKoinApplication(

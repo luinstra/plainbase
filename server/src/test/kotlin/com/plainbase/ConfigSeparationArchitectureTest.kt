@@ -189,9 +189,41 @@ class ConfigSeparationArchitectureTest : FunSpec({
         code shouldContain "fun requireContentDir(config: PlainbaseConfig): Path"
         code shouldContain "fun bootRefusals(config: PlainbaseConfig): List<BootRefusal>"
         code shouldContain "fun rootsWarnings(config: PlainbaseConfig): List<String>"
-        plainbase.readText() shouldContain "ConfigBootInspector.requireContentDir(this)"
-        plainbase.readText() shouldContain "ConfigBootInspector.bootRefusals(this)"
-        plainbase.readText() shouldContain "ConfigBootInspector.rootsWarnings(this)"
+        val plainbaseCode = stripComments(plainbase.readText())
+        val removedApis = listOf(
+            "fromEnv",
+            "dataDirFrom",
+            "fromEnvAndFile",
+            "fromEnvAndCandidateRoots",
+            "loadForCommand",
+            "requireContentDir",
+            "bootRefusals",
+            "storageWarnings",
+            "rootsWarnings",
+            "bindGuardRefusal",
+            "isNonLoopbackBind",
+            "secureCookie",
+            "mcpHostAllowlist",
+            "mcpOriginAllowlist",
+            "agentDirectCommitGlobs",
+            "isAbsoluteHttpUrl",
+            "isHttpsUrl",
+        )
+        removedApis.forEach { api ->
+            Regex("(?m)^\\s*(?:internal\\s+)?fun\\s+$api\\b").findAll(plainbaseCode).count() shouldBe 0
+            referencesToken(plainbaseCode, api) shouldBe false
+        }
+        listOf(
+            "ConfigLoader",
+            "ConfigDecoder",
+            "ConfigSources",
+            "ConfigValuePolicy",
+            "ConfigBootInspector",
+            "TransportSecurityPolicy",
+            "getenv",
+        ).forEach { forbidden ->
+            referencesToken(plainbaseCode, forbidden) shouldBe false
+        }
     }
 
     test("the boot inspector is read-only and does not load, wire, log, or mutate") {
@@ -210,6 +242,7 @@ class ConfigSeparationArchitectureTest : FunSpec({
             "Files.writeString (path, \"probe\")" to "writeString",
             "Files::deleteIfExists" to "deleteIfExists",
             "Runtime.getRuntime()::exec" to "Runtime",
+            "ConfigLoader.fromEnvAndFile(env)" to "fromEnvAndFile",
             "PlainbaseConfig.fromEnvAndFile(env)" to "fromEnvAndFile",
         ).forEach { (source, expectedToken) ->
             referencesToken(source, expectedToken) shouldBe true

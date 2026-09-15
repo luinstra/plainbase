@@ -1,16 +1,15 @@
 package com.plainbase.frameworks.config
 
 import com.plainbase.BuildInfo
-import com.plainbase.domain.root.BootRefusal
-import com.plainbase.domain.service.CommitGlob
 import java.nio.file.Path
 
 /**
  * Application configuration.
  *
- * Environment variables override defaults; `DATA_DIR/plainbase.conf` is layered in by [fromEnvAndFile]. Secrets
- * stay in env, never the file. [fromEnv] is the env-only fast path used by the credential-free `spike`; the server
- * and DATA_DIR-sharing CLIs use [fromEnvAndFile] so file-configured decisions match `serve`.
+ * Environment variables override defaults; `DATA_DIR/plainbase.conf` is layered in by [ConfigLoader.fromEnvAndFile].
+ * Secrets stay in env, never the file. [ConfigLoader.fromEnv] is the env-only fast path used by the credential-free
+ * `spike`; the server and DATA_DIR-sharing CLIs use [ConfigLoader.fromEnvAndFile] so file-configured decisions match
+ * `serve`.
  */
 data class PlainbaseConfig(
     val contentDir: Path,
@@ -50,32 +49,6 @@ data class PlainbaseConfig(
     /** Path of the rebuildable derived-state search database. */
     val searchDatabasePath: Path get() = dataDir.resolve("search.db")
 
-    /** Compatibility entry point; [ConfigBootInspector] owns first-only topology inspection. */
-    fun requireContentDir(): Path = ConfigBootInspector.requireContentDir(this)
-
-    /** Compatibility entry point; [ConfigBootInspector] owns complete config/filesystem refusals. */
-    internal fun bootRefusals(): List<BootRefusal> = ConfigBootInspector.bootRefusals(this)
-
-    /** Compatibility entry point; [ConfigValuePolicy] owns pure storage diagnostics. */
-    fun storageWarnings(): List<String> = ConfigValuePolicy.storageWarnings(this)
-
-    /** Compatibility entry point; [ConfigBootInspector] owns filesystem warning observations. */
-    fun rootsWarnings(): List<String> = ConfigBootInspector.rootsWarnings(this)
-
-    /** Temporary compatibility delegate; [TransportSecurityPolicy] owns these derivations. */
-    fun bindGuardRefusal(): String? = TransportSecurityPolicy.derive(this).bindRefusal
-
-    fun isNonLoopbackBind(): Boolean = TransportSecurityPolicy.derive(this).nonLoopbackBind
-
-    fun secureCookie(): Boolean = TransportSecurityPolicy.derive(this).secureCookie
-
-    fun mcpHostAllowlist(): List<String> = TransportSecurityPolicy.derive(this).effectiveMcpHosts
-
-    fun mcpOriginAllowlist(): List<String> = TransportSecurityPolicy.derive(this).effectiveMcpOrigins
-
-    /** Compatibility delegate; [ConfigValuePolicy] owns the pure parsing projection. */
-    fun agentDirectCommitGlobs(): List<CommitGlob> = ConfigValuePolicy.agentDirectCommitGlobs(this)
-
     /** The local primary root, or the legacy path needed by object-mode mirror and CLI seams. */
     fun mainContentRoot(): Path = roots.primary.localPath ?: contentDir
 
@@ -109,27 +82,5 @@ data class PlainbaseConfig(
 
         /** Q9 default watch/reconcile poll interval in seconds. */
         const val DEFAULT_S3_POLL_SECONDS: Long = 60
-
-        /** Env-only compatibility delegate; [ConfigLoader] owns loading. */
-        fun fromEnv(env: Map<String, String> = System.getenv()): PlainbaseConfig = ConfigLoader.fromEnv(env)
-
-        /** Compatibility delegate; [ConfigValuePolicy] owns data-directory derivation. */
-        internal fun dataDirFrom(env: Map<String, String> = System.getenv()): Path = ConfigValuePolicy.dataDirFrom(env)
-
-        /** Layered-loading compatibility delegate; [ConfigLoader] owns the implementation. */
-        fun fromEnvAndFile(env: Map<String, String> = System.getenv()): PlainbaseConfig = ConfigLoader.fromEnvAndFile(env)
-
-        /** Candidate-loading compatibility delegate; [ConfigLoader] owns the implementation. */
-        fun fromEnvAndCandidateRoots(
-            managedRootsText: String?,
-            env: Map<String, String> = System.getenv(),
-        ): PlainbaseConfig = ConfigLoader.fromEnvAndCandidateRoots(managedRootsText, env)
-
-        /** Command-loading compatibility delegate; [ConfigLoader] owns the error funnel. */
-        fun loadForCommand(
-            command: String,
-            err: (String) -> Unit,
-            resolve: () -> PlainbaseConfig = { fromEnvAndFile() },
-        ): PlainbaseConfig? = ConfigLoader.loadForCommand(command, err, resolve)
     }
 }

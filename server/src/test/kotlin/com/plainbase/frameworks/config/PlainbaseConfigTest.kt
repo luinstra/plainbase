@@ -29,7 +29,9 @@ class PlainbaseConfigTest : FunSpec({
         val parent = Files.createTempDirectory("pb-config")
         try {
             val missing = parent.resolve("does-not-exist")
-            val failure = shouldThrow<IllegalArgumentException> { configWith(missing).requireContentDir() }
+            val failure = shouldThrow<IllegalArgumentException> {
+                ConfigBootInspector.requireContentDir(configWith(missing))
+            }
             failure.message shouldContain "CONTENT_DIR does not exist or is not a directory"
             failure.message shouldContain missing.toString()
         } finally {
@@ -40,7 +42,9 @@ class PlainbaseConfigTest : FunSpec({
     test("a CONTENT_DIR that is a regular file fails fast with the same actionable message") {
         val file = Files.createTempFile("pb-config", ".txt")
         try {
-            val failure = shouldThrow<IllegalArgumentException> { configWith(file).requireContentDir() }
+            val failure = shouldThrow<IllegalArgumentException> {
+                ConfigBootInspector.requireContentDir(configWith(file))
+            }
             failure.message shouldContain "CONTENT_DIR does not exist or is not a directory"
             failure.message shouldContain file.toString()
         } finally {
@@ -51,7 +55,7 @@ class PlainbaseConfigTest : FunSpec({
     test("an existing directory passes the guard and is returned") {
         val dir = Files.createTempDirectory("pb-config-content")
         try {
-            configWith(dir).requireContentDir() shouldBe dir
+            ConfigBootInspector.requireContentDir(configWith(dir)) shouldBe dir
         } finally {
             Files.deleteIfExists(dir)
         }
@@ -61,7 +65,7 @@ class PlainbaseConfigTest : FunSpec({
         val dir = Files.createTempDirectory("pb-config-shared")
         try {
             val config = PlainbaseConfig(contentDir = dir, dataDir = dir, host = "127.0.0.1", port = PlainbaseConfig.DEFAULT_PORT)
-            val failure = shouldThrow<IllegalArgumentException> { config.requireContentDir() }
+            val failure = shouldThrow<IllegalArgumentException> { ConfigBootInspector.requireContentDir(config) }
             failure.message shouldContain "DATA_DIR and CONTENT_DIR must be different directories"
             failure.message shouldContain dir.toString()
         } finally {
@@ -346,8 +350,9 @@ class PlainbaseConfigTest : FunSpec({
     test("valid agentDirectCommit.globs survive load and parse to CommitGlobs via the accessor") {
         val config = ConfigLoader.fromEnv(mapOf("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "docs/**, guides/*.md"))
         config.auth.agentDirectCommitGlobs shouldBe listOf("docs/**", "guides/*.md")
-        config.agentDirectCommitGlobs().size shouldBe 2
-        config.agentDirectCommitGlobs().first().matches(com.plainbase.domain.content.TreePath.require("docs/a/b.md")) shouldBe true
+        val globs = ConfigValuePolicy.agentDirectCommitGlobs(config)
+        globs.size shouldBe 2
+        globs.first().matches(com.plainbase.domain.content.TreePath.require("docs/a/b.md")) shouldBe true
     }
 
     // --- B3: HOCON substitutions resolve (ADR-0009). ConfigResolveOptions.defaults() resolves within-file refs and
@@ -605,7 +610,7 @@ class PlainbaseConfigTest : FunSpec({
         )
         config.storage.backend shouldBe StorageBackend.LOCAL
         config.storage.ignoredObjectKeys shouldBe listOf("PLAINBASE_S3_ENDPOINT", "PLAINBASE_S3_PATH_STYLE")
-        val warning = config.storageWarnings().single()
+        val warning = ConfigValuePolicy.storageWarnings(config).single()
         warning shouldBe
             "storage.backend=local ignores the configured object-storage key(s): PLAINBASE_S3_ENDPOINT, " +
             "PLAINBASE_S3_PATH_STYLE (set storage.backend=object to use them)"
@@ -636,7 +641,7 @@ class PlainbaseConfigTest : FunSpec({
                 "storage.object.pathStyle",
                 "storage.object.pollSeconds",
             )
-            config.storageWarnings() shouldBe listOf(
+            ConfigValuePolicy.storageWarnings(config) shouldBe listOf(
                 "storage.backend=local ignores the configured object-storage key(s): " +
                     "storage.object.endpoint, storage.object.bucket, storage.object.region, storage.object.prefix, " +
                     "storage.object.pathStyle, storage.object.pollSeconds (set storage.backend=object to use them)",
@@ -647,7 +652,7 @@ class PlainbaseConfigTest : FunSpec({
     test("credentials present in local mode are ignored SILENTLY (never named, no warning)") {
         val config = ConfigLoader.fromEnv(mapOf("PLAINBASE_S3_ACCESS_KEY_ID" to "k", "PLAINBASE_S3_SECRET_ACCESS_KEY" to "s"))
         config.storage.ignoredObjectKeys shouldBe emptyList<String>()
-        config.storageWarnings() shouldBe emptyList<String>()
+        ConfigValuePolicy.storageWarnings(config) shouldBe emptyList<String>()
     }
 
     test("file-side storage.object.* keys in local mode are tracked by their HOCON path") {
@@ -666,8 +671,10 @@ class PlainbaseConfigTest : FunSpec({
     }
 
     test("object mode warns when CONTENT_DIR was explicitly set; stays silent on the default") {
-        ConfigLoader.fromEnv(objectEnv("CONTENT_DIR" to "/tmp/pb-tree")).storageWarnings().single() shouldContain "CONTENT_DIR"
-        ConfigLoader.fromEnv(objectEnv()).storageWarnings() shouldBe emptyList<String>()
+        ConfigValuePolicy.storageWarnings(
+            ConfigLoader.fromEnv(objectEnv("CONTENT_DIR" to "/tmp/pb-tree")),
+        ).single() shouldContain "CONTENT_DIR"
+        ConfigValuePolicy.storageWarnings(ConfigLoader.fromEnv(objectEnv())) shouldBe emptyList<String>()
     }
 
     test("default roots are constructed once; copy contentDir retains them without validation") {
@@ -705,7 +712,7 @@ class PlainbaseConfigTest : FunSpec({
 
     test("requireContentDir in object mode ignores the directory and validates the Q9 matrix instead") {
         // A CONTENT_DIR that does not exist must NOT fail in object mode (it is ignored, Q10)...
-        ConfigLoader.fromEnv(objectEnv("CONTENT_DIR" to "/definitely/not/here")).requireContentDir()
+        ConfigBootInspector.requireContentDir(ConfigLoader.fromEnv(objectEnv("CONTENT_DIR" to "/definitely/not/here")))
         // ...while a directly-constructed object config missing its required keys is re-asserted here.
         val bare = PlainbaseConfig(
             contentDir = Path.of("/tmp"),
@@ -714,20 +721,26 @@ class PlainbaseConfigTest : FunSpec({
             port = PlainbaseConfig.DEFAULT_PORT,
             storage = StorageConfig(backend = StorageBackend.OBJECT),
         )
-        shouldThrow<IllegalArgumentException> { bare.requireContentDir() }.message shouldContain "storage.object.endpoint"
+        shouldThrow<IllegalArgumentException> {
+            ConfigBootInspector.requireContentDir(bare)
+        }.message shouldContain "storage.object.endpoint"
     }
 
     // --- P3 MCP DNS-rebinding allowlist (WI-5): fail-closed to the bind host, never empty, never a wildcard ---
 
     test("no MCP keys → mcpHostAllowlist defaults to the bind host (not empty, not a wildcard)") {
-        val allowlist = ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "127.0.0.1")).mcpHostAllowlist()
+        val allowlist = TransportSecurityPolicy.derive(
+            ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "127.0.0.1")),
+        ).effectiveMcpHosts
         allowlist.shouldNotBeEmpty()
         allowlist shouldContain "127.0.0.1"
         allowlist.none { it == "*" || it == "0.0.0.0" } shouldBe true // fail-closed: never a wildcard
     }
 
     test("a non-loopback bind defaults the MCP host allowlist to that bind host (+ loopback), still no wildcard") {
-        val allowlist = ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "docs.example.com")).mcpHostAllowlist()
+        val allowlist = TransportSecurityPolicy.derive(
+            ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "docs.example.com")),
+        ).effectiveMcpHosts
         allowlist shouldContain "docs.example.com"
         allowlist.none { it == "*" || it == "0.0.0.0" } shouldBe true
     }
@@ -735,11 +748,13 @@ class PlainbaseConfigTest : FunSpec({
     test("an explicit PLAINBASE_MCP_ALLOWED_HOSTS overrides the default") {
         val config = ConfigLoader.fromEnv(mapOf("PLAINBASE_MCP_ALLOWED_HOSTS" to "docs.example.com, proxy.example.com"))
         config.auth.mcpAllowedHosts shouldBe listOf("docs.example.com", "proxy.example.com")
-        config.mcpHostAllowlist() shouldContain "docs.example.com"
+        TransportSecurityPolicy.derive(config).effectiveMcpHosts shouldContain "docs.example.com"
     }
 
     test("no MCP keys → mcpOriginAllowlist defaults to the bind-host origins (not empty, not a wildcard)") {
-        val allowlist = ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "127.0.0.1")).mcpOriginAllowlist()
+        val allowlist = TransportSecurityPolicy.derive(
+            ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "127.0.0.1")),
+        ).effectiveMcpOrigins
         allowlist.shouldNotBeEmpty()
         allowlist.none { it == "*" } shouldBe true // fail-closed: never a wildcard
     }
@@ -749,7 +764,7 @@ class PlainbaseConfigTest : FunSpec({
             mapOf("PLAINBASE_MCP_ALLOWED_ORIGINS" to "https://docs.example.com, https://proxy.example.com"),
         )
         config.auth.mcpAllowedOrigins shouldBe listOf("https://docs.example.com", "https://proxy.example.com")
-        config.mcpOriginAllowlist() shouldContain "https://docs.example.com"
+        TransportSecurityPolicy.derive(config).effectiveMcpOrigins shouldContain "https://docs.example.com"
     }
 
     test("MCP defaults preserve host and origin order for loopback and routable binds") {
@@ -759,16 +774,18 @@ class PlainbaseConfigTest : FunSpec({
             host = "127.0.0.1",
             port = 8080,
         )
-        loopback.mcpHostAllowlist() shouldBe listOf("127.0.0.1", "localhost")
-        loopback.mcpOriginAllowlist() shouldBe listOf(
+        val loopbackSecurity = TransportSecurityPolicy.derive(loopback)
+        loopbackSecurity.effectiveMcpHosts shouldBe listOf("127.0.0.1", "localhost")
+        loopbackSecurity.effectiveMcpOrigins shouldBe listOf(
             "http://127.0.0.1:8080",
             "https://127.0.0.1:8080",
             "http://localhost:8080",
         )
 
         val routable = loopback.copy(host = "docs.example.com")
-        routable.mcpHostAllowlist() shouldBe listOf("docs.example.com", "127.0.0.1", "localhost")
-        routable.mcpOriginAllowlist() shouldBe listOf(
+        val routableSecurity = TransportSecurityPolicy.derive(routable)
+        routableSecurity.effectiveMcpHosts shouldBe listOf("docs.example.com", "127.0.0.1", "localhost")
+        routableSecurity.effectiveMcpOrigins shouldBe listOf(
             "http://docs.example.com:8080",
             "https://docs.example.com:8080",
             "http://127.0.0.1:8080",
@@ -776,8 +793,9 @@ class PlainbaseConfigTest : FunSpec({
         )
 
         val localhost = loopback.copy(host = "localhost")
-        localhost.mcpHostAllowlist() shouldBe listOf("localhost", "127.0.0.1")
-        localhost.mcpOriginAllowlist() shouldBe listOf(
+        val localhostSecurity = TransportSecurityPolicy.derive(localhost)
+        localhostSecurity.effectiveMcpHosts shouldBe listOf("localhost", "127.0.0.1")
+        localhostSecurity.effectiveMcpOrigins shouldBe listOf(
             "http://localhost:8080",
             "https://localhost:8080",
             "http://127.0.0.1:8080",
@@ -795,8 +813,9 @@ class PlainbaseConfigTest : FunSpec({
                 mcpAllowedOrigins = listOf("https://proxy.example.com", "https://proxy.example.com", "https://docs.example.com"),
             ),
         )
-        config.mcpHostAllowlist() shouldBe listOf("proxy.example.com", "proxy.example.com", "docs.example.com")
-        config.mcpOriginAllowlist() shouldBe listOf(
+        val security = TransportSecurityPolicy.derive(config)
+        security.effectiveMcpHosts shouldBe listOf("proxy.example.com", "proxy.example.com", "docs.example.com")
+        security.effectiveMcpOrigins shouldBe listOf(
             "https://proxy.example.com",
             "https://proxy.example.com",
             "https://docs.example.com",

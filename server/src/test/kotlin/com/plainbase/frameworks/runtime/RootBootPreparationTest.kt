@@ -9,7 +9,7 @@ import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.rootGateVerdicts
@@ -148,7 +148,7 @@ class RootBootPreparationTest : FunSpec({
         val primaryDir = Files.createTempDirectory("plainbase-prepared-primary")
         val dataDir = Files.createTempDirectory("plainbase-prepared-data")
         try {
-            val config = PlainbaseConfig.fromEnv(
+            val config = ConfigLoader.fromEnv(
                 mapOf(
                     "CONTENT_DIR" to primaryDir.toString(),
                     "DATA_DIR" to dataDir.toString(),
@@ -180,7 +180,7 @@ class RootBootPreparationTest : FunSpec({
         val dataDir = Files.createTempDirectory("plainbase-prepared-object")
         val before = contentDirStoreConstructions.get()
         try {
-            val config = PlainbaseConfig.fromEnv(
+            val config = ConfigLoader.fromEnv(
                 mapOf(
                     "DATA_DIR" to dataDir.toString(),
                     "PLAINBASE_STORAGE_BACKEND" to "object",
@@ -202,7 +202,7 @@ class RootBootPreparationTest : FunSpec({
     test("OBJECT gate evaluation does not call deferred history callbacks") {
         val dataDir = Files.createTempDirectory("plainbase-object-gate-deferred")
         try {
-            val config = PlainbaseConfig.fromEnv(
+            val config = ConfigLoader.fromEnv(
                 mapOf(
                     "DATA_DIR" to dataDir.toString(),
                     "PLAINBASE_STORAGE_BACKEND" to "object",
@@ -245,7 +245,7 @@ class RootBootPreparationTest : FunSpec({
         listOf(false, true).forEach { mirrorPresent ->
             val dataDir = Files.createTempDirectory("plainbase-object-probe-$mirrorPresent")
             try {
-                val config = PlainbaseConfig.fromEnv(
+                val config = ConfigLoader.fromEnv(
                     mapOf(
                         "DATA_DIR" to dataDir.toString(),
                         "PLAINBASE_STORAGE_BACKEND" to "object",

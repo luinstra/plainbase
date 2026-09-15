@@ -11,6 +11,7 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.frameworks.cli.CommandOutput
 import com.plainbase.frameworks.cli.WriteIntent
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.GitConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsConfig
@@ -1386,7 +1387,7 @@ internal fun objectConfigForOwnership(
     data: Path,
     endpoint: String = "https://127.0.0.1:1",
     gitEnabled: Boolean = true,
-): PlainbaseConfig = PlainbaseConfig.fromEnv(
+): PlainbaseConfig = ConfigLoader.fromEnv(
     mapOf(
         "CONTENT_DIR" to content.toString(),
         "DATA_DIR" to data.toString(),

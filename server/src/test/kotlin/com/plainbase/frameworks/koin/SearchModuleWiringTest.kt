@@ -14,7 +14,7 @@ import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
@@ -46,7 +46,7 @@ class SearchModuleWiringTest : FunSpec({
         }) { root ->
             withTempTree(seed = {}) { dataDir ->
                 val env = mapOf("CONTENT_DIR" to root.toString(), "DATA_DIR" to dataDir.toString())
-                val config = PlainbaseConfig.fromEnv(env)
+                val config = ConfigLoader.fromEnv(env)
                 val openers = ServerOpeners()
                 val inputs = prepareRootBootInputs(config, openers.openLocal)
                 val owner = ServerResourceOwner()
@@ -84,7 +84,7 @@ class SearchModuleWiringTest : FunSpec({
         }) { root ->
             withTempTree(seed = {}) { dataDir ->
                 val env = mapOf("CONTENT_DIR" to root.toString(), "DATA_DIR" to dataDir.toString())
-                val config = PlainbaseConfig.fromEnv(env)
+                val config = ConfigLoader.fromEnv(env)
                 val openers = ServerOpeners()
                 val inputs = prepareRootBootInputs(config, openers.openLocal)
                 val owner = ServerResourceOwner()
@@ -148,7 +148,7 @@ class SearchModuleWiringTest : FunSpec({
         writePage(original, "docs/widget.md", "# Original\n\nrebind source\n")
         writePage(replacement, "docs/widget.md", "# Replacement\n\nrebind target\n")
         try {
-            val config = PlainbaseConfig.fromEnv(
+            val config = ConfigLoader.fromEnv(
                 mapOf("CONTENT_DIR" to original.toString(), "DATA_DIR" to dataDir.toString()),
             )
             val openers = ServerOpeners()

@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.TransportSecurityPolicy
 import com.plainbase.frameworks.net.RemoteAddress
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -65,7 +66,7 @@ class SecureContextTest : FunSpec({
             port = PlainbaseConfig.DEFAULT_PORT,
             auth = AuthConfig(insecureHttp = true),
         )
-        config.bindGuardRefusal() shouldBe null
+        TransportSecurityPolicy.derive(config).bindRefusal shouldBe null
         isSecureContext(config.host, listOf("http"), config.auth.trustedProxyCidrs) shouldBe false
     }
 })

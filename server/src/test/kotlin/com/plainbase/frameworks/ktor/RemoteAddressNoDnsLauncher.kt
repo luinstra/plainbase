@@ -1,6 +1,6 @@
 package com.plainbase.frameworks.ktor
 
-import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.net.RemoteAddress
 import java.net.InetAddress
 import java.nio.file.Files
@@ -69,7 +69,7 @@ private fun runConfigLane(): List<RemoteAddressNoDnsRow> {
         RemoteAddressNoDnsCases.cases("config").map { testCase ->
             measure(testCase) {
                 try {
-                    PlainbaseConfig.fromEnv(
+                    ConfigLoader.fromEnv(
                         mapOf(
                             "DATA_DIR" to data.toString(),
                             "CONTENT_DIR" to content.toString(),

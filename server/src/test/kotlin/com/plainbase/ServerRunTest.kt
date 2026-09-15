@@ -2750,7 +2750,7 @@ private fun objectConfigFromEnv(
     port: Int = freePort(),
     gitEnabled: Boolean = false,
 ): PlainbaseConfig =
-    PlainbaseConfig.fromEnv(
+    ConfigLoader.fromEnv(
         mapOf(
             "CONTENT_DIR" to content.toString(),
             "DATA_DIR" to data.toString(),
