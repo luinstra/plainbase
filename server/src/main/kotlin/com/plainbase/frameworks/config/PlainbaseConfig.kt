@@ -10,7 +10,7 @@ import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.CommitGlob
-import com.plainbase.frameworks.ktor.RemoteAddress
+import com.plainbase.frameworks.net.RemoteAddress
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigException
 import com.typesafe.config.ConfigFactory
@@ -477,72 +477,16 @@ data class PlainbaseConfig(
             auth.agentDirectCommitGlobsByRoot.forEach { (root, globs) -> if (globs.isNotEmpty()) add(root) }
         }
 
-    /**
-     * ADR-0008 fail-closed bind guard. Returns an operator-actionable refusal MESSAGE when the bind is
-     * non-loopback AND there is no trusted-proxy config AND no explicit insecure override - else null (start
-     * permitted). Pure (no socket, no exit) so it unit-tests like [requireContentDir]; `serve()` prints the
-     * message + `exitProcess(1)`.
-     *
-     * Loopback HTTP is always allowed (dev). The guard runs for EVERY mode, `off` included: `off` is the MOST
-     * dangerous mode (fully unauthenticated), so a non-loopback `off` bind without an override is the open
-     * internet serving an open surface - exactly what must be refused, never exempted.
-     */
-    fun bindGuardRefusal(): String? {
-        // A4b: a PROXY-mode misconfig is refused even on a LOOPBACK bind - a loopback PROXY with no CIDR/secret still
-        // trusts any loopback sibling. So this completeness check runs BEFORE the loopback early-return below. The
-        // secret is the real trust anchor (CIDR alone trusts a whole subnet), so BOTH are required; the message
-        // names both remedies.
-        if (auth.mode == AuthMode.PROXY && (auth.trustedProxyCidrs.isEmpty() || auth.proxySecret.isNullOrBlank())) {
-            return "auth.mode=proxy requires both a trusted-proxy allowlist and a shared secret. " +
-                "Remedies: set PLAINBASE_TRUSTED_PROXY to the proxy's /32; set PLAINBASE_PROXY_SECRET to a shared value the proxy stamps."
-        }
-        if (!isNonLoopbackBind()) return null // loopback HTTP always allowed (dev)
-        if (auth.trustedProxyCidrs.isNotEmpty()) return null // proxy mode declared (A4b terminates TLS)
-        if (auth.insecureHttp) return null // explicit, knowing override (logs loudly)
-        return "binds $host with auth.mode=${auth.mode.name.lowercase()} but no TLS/trusted-proxy and no insecure override. " +
-            "Remedies: (1) front with a TLS proxy and set PLAINBASE_TRUSTED_PROXY CIDRs; " +
-            "(2) bind loopback (PLAINBASE_HOST=127.0.0.1) behind the proxy; " +
-            "(3) set PLAINBASE_INSECURE_HTTP=1 to knowingly serve plaintext."
-    }
+    /** Temporary compatibility delegates; [TransportSecurityPolicy] owns these derivations. */
+    fun bindGuardRefusal(): String? = TransportSecurityPolicy.derive(this).bindRefusal
 
-    /** True when [host] is a non-loopback / wildcard bind interface (the bind guard's exposure test, WI 3). */
-    fun isNonLoopbackBind(): Boolean = RemoteAddress.isNonLoopbackBind(host)
+    fun isNonLoopbackBind(): Boolean = TransportSecurityPolicy.derive(this).nonLoopbackBind
 
-    /**
-     * The `Secure` attribute for the `pb_session` cookie (ADR-0008). True whenever the transport is TLS-fronted
-     * - MIRRORING the bind guard's "proxy declared ⇒ TLS upstream" logic: a non-loopback bind is fronted by TLS, AND
-     * the canonical production deployment (LOOPBACK bind behind a TLS-terminating proxy, [bindGuardRefusal]) declares
-     * [AuthConfig.trustedProxyCidrs] - that too is TLS-fronted, so the cookie must carry `Secure`. ONLY pure
-     * loopback-dev with NO trusted proxy stays false (a `Secure` cookie would never be sent back over plain
-     * http://localhost, breaking dev login).
-     *
-     * Deliberately NOT relaxed by [AuthConfig.insecureHttp] (`PLAINBASE_INSECURE_HTTP`, review I): that flag is only
-     * the bind-guard escape for loopback-dev / agent-bearer scenarios - it lets the server bind plaintext, it does NOT
-     * make credentialed builtin HUMAN auth work over a plaintext network. A non-loopback insecure-http bind still
-     * marks the cookie `Secure` (so a browser won't send it over the plaintext), AND [isSecureContext] refuses the
-     * credential per-request regardless - so credentialed human login over insecure-http simply does not function by
-     * design. Serve human auth over loopback or behind a TLS-terminating reverse proxy; we do NOT make plaintext human
-     * auth easy.
-     */
-    fun secureCookie(): Boolean = isNonLoopbackBind() || auth.trustedProxyCidrs.isNotEmpty()
+    fun secureCookie(): Boolean = TransportSecurityPolicy.derive(this).secureCookie
 
-    /**
-     * The P3 MCP DNS-rebinding HOST allowlist, fail-closed (the [secureCookie] accessor idiom): the operator value
-     * when set, ELSE a conservative default derived from the bind host (NOT empty, NOT a wildcard) plus loopback. The
-     * SDK matches the request `Host` header's HOSTNAME (port stripped) against this, so bare hostnames suffice; an
-     * operator behind a reverse proxy adds their external host. The bind host is the natural default - a request whose
-     * `Host` is the host we bind is the only one we serve by default.
-     */
-    fun mcpHostAllowlist(): List<String> = auth.mcpAllowedHosts.ifEmpty { (listOf(host) + MCP_LOOPBACK_HOSTS).distinct() }
+    fun mcpHostAllowlist(): List<String> = TransportSecurityPolicy.derive(this).effectiveMcpHosts
 
-    /**
-     * The P3 MCP DNS-rebinding ORIGIN allowlist, fail-closed: the operator value when set, ELSE the bind-host origins
-     * (http+https) plus the loopback origins. The SDK extracts the request `Origin` header's host for the match, so
-     * these full origins normalize to their hostnames; an operator adds their external origin behind a reverse proxy.
-     */
-    fun mcpOriginAllowlist(): List<String> = auth.mcpAllowedOrigins.ifEmpty {
-        (listOf("http://$host:$port", "https://$host:$port") + MCP_LOOPBACK_HOSTS.map { "http://$it:$port" }).distinct()
-    }
+    fun mcpOriginAllowlist(): List<String> = TransportSecurityPolicy.derive(this).effectiveMcpOrigins
 
     /**
      * The validated agent direct-commit globs as parsed [CommitGlob]s, FLAT — each carrying the root whose config key
@@ -600,9 +544,6 @@ data class PlainbaseConfig(
 
         /** A4b default proxy identity header (the IdP subject the trusted proxy stamps); operator-configurable. */
         const val DEFAULT_PROXY_IDENTITY_HEADER: String = "X-Forwarded-User"
-
-        /** The loopback hosts always added to the fail-closed MCP DNS-rebinding default (dev/test always reach these). */
-        private val MCP_LOOPBACK_HOSTS: List<String> = listOf("127.0.0.1", "localhost")
 
         /** Q9 default signing region: `auto` (R2, the primary provider). */
         const val DEFAULT_S3_REGION: String = "auto"

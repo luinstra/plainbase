@@ -1,4 +1,4 @@
-package com.plainbase.frameworks.ktor
+package com.plainbase.frameworks.net
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe

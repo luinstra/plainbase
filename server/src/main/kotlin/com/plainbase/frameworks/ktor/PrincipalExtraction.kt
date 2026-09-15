@@ -4,6 +4,7 @@ import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.principal.TOKEN_PREFIX
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.SessionService
+import com.plainbase.frameworks.net.RemoteAddress
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.ApplicationRequest

@@ -5,6 +5,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import java.nio.file.Files
 import kotlin.io.path.readText
 
 /**
@@ -35,7 +36,6 @@ class CliBootGateArchitectureTest : FunSpec({
     val banned = listOf(
         "nativeRootGuardFailure",
         "gitVersionFloorFailure",
-        "validateExplicitRoots",
         "explicitRootRefusals",
         "bootRefusals",
         "requireContentDir",
@@ -48,6 +48,8 @@ class CliBootGateArchitectureTest : FunSpec({
         "rootBootProbes(",
         "prepareRootBootInputs(",
         "RootStoreFactory",
+        "TransportSecurityPolicy.derive",
+        "bindRefusal",
         "koinApplication",
     )
     val detector: (String) -> List<String> = { source -> banned.filter(source::contains) }
@@ -67,6 +69,21 @@ class CliBootGateArchitectureTest : FunSpec({
         listOf("rootBootProbes(", "prepareRootBootInputs(", "RootStoreFactory").forEach { prohibited ->
             detector("private val leaked = $prohibited").contains(prohibited) shouldBe true
         }
+    }
+
+    test("the detector stays armed for direct transport-policy consumption") {
+        listOf("TransportSecurityPolicy.derive", "bindRefusal").forEach { prohibited ->
+            detector("private val leaked = $prohibited").contains(prohibited) shouldBe true
+        }
+    }
+
+    test("the transport policy producer is present and non-vacuous") {
+        val policy = mainSourceRoot().resolve("frameworks/config/TransportSecurityPolicy.kt")
+        Files.isRegularFile(policy) shouldBe true
+        val policyCode = stripComments(policy.readText())
+        policyCode shouldContain "internal object TransportSecurityPolicy"
+        policyCode shouldContain "fun derive(config: PlainbaseConfig): TransportSecurityValues"
+        policyCode shouldContain "bindRefusal"
     }
 
     test("RootCommand DOES call bootGateFor - the positive leg, or this only proves the CLI is quiet") {

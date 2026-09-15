@@ -529,4 +529,55 @@ class PlainbaseConfigTest : FunSpec({
         config.auth.mcpAllowedOrigins shouldBe listOf("https://docs.example.com", "https://proxy.example.com")
         config.mcpOriginAllowlist() shouldContain "https://docs.example.com"
     }
+
+    test("MCP defaults preserve host and origin order for loopback and routable binds") {
+        val loopback = PlainbaseConfig(
+            contentDir = Path.of("/tmp/content"),
+            dataDir = Path.of("/tmp/data"),
+            host = "127.0.0.1",
+            port = 8080,
+        )
+        loopback.mcpHostAllowlist() shouldBe listOf("127.0.0.1", "localhost")
+        loopback.mcpOriginAllowlist() shouldBe listOf(
+            "http://127.0.0.1:8080",
+            "https://127.0.0.1:8080",
+            "http://localhost:8080",
+        )
+
+        val routable = loopback.copy(host = "docs.example.com")
+        routable.mcpHostAllowlist() shouldBe listOf("docs.example.com", "127.0.0.1", "localhost")
+        routable.mcpOriginAllowlist() shouldBe listOf(
+            "http://docs.example.com:8080",
+            "https://docs.example.com:8080",
+            "http://127.0.0.1:8080",
+            "http://localhost:8080",
+        )
+
+        val localhost = loopback.copy(host = "localhost")
+        localhost.mcpHostAllowlist() shouldBe listOf("localhost", "127.0.0.1")
+        localhost.mcpOriginAllowlist() shouldBe listOf(
+            "http://localhost:8080",
+            "https://localhost:8080",
+            "http://127.0.0.1:8080",
+        )
+    }
+
+    test("directly constructed MCP overrides preserve order and duplicates") {
+        val config = PlainbaseConfig(
+            contentDir = Path.of("/tmp/content"),
+            dataDir = Path.of("/tmp/data"),
+            host = "127.0.0.1",
+            port = 8080,
+            auth = AuthConfig(
+                mcpAllowedHosts = listOf("proxy.example.com", "proxy.example.com", "docs.example.com"),
+                mcpAllowedOrigins = listOf("https://proxy.example.com", "https://proxy.example.com", "https://docs.example.com"),
+            ),
+        )
+        config.mcpHostAllowlist() shouldBe listOf("proxy.example.com", "proxy.example.com", "docs.example.com")
+        config.mcpOriginAllowlist() shouldBe listOf(
+            "https://proxy.example.com",
+            "https://proxy.example.com",
+            "https://docs.example.com",
+        )
+    }
 })

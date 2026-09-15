@@ -31,6 +31,7 @@ import com.plainbase.frameworks.cli.systemCommandOutput
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
+import com.plainbase.frameworks.config.TransportSecurityPolicy
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.koin.checkpointModule
@@ -743,7 +744,7 @@ internal fun detachedRootsRefusal(bound: Set<RootName>, configured: Set<RootName
 private fun Set<RootName>.sortedNames(): String = map { it.value }.sorted().joinToString(", ")
 
 /**
- * The single rev-3.4 backup-guidance WARN (pure accessor, the [PlainbaseConfig.bindGuardRefusal]
+ * The single rev-3.4 backup-guidance WARN (pure accessor, the [TransportSecurityPolicy]
  * idiom): non-null exactly when an object-mode boot runs without git history, i.e. point-in-time
  * content recovery is entirely the operator's backup schedule. `serve()` logs it ONCE; there is no
  * snapshot or manifest writer (backups are operator-owned by decision).

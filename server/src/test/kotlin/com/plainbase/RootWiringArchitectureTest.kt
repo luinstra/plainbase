@@ -92,7 +92,15 @@ class RootWiringArchitectureTest : FunSpec({
         files.size shouldBeGreaterThanOrEqual 100
         val names = files.map { it.name }.toSet()
         names.containsAll(
-            setOf("HistoryModule.kt", "ContentModule.kt", "AdoptCommand.kt", "ReindexCommand.kt", "RootRegistry.kt"),
+            setOf(
+                "HistoryModule.kt",
+                "ContentModule.kt",
+                "AdoptCommand.kt",
+                "ReindexCommand.kt",
+                "RootRegistry.kt",
+                "RemoteAddress.kt",
+                "TransportSecurityPolicy.kt",
+            ),
         ).shouldBeTrue()
     }
 

@@ -1,4 +1,4 @@
-package com.plainbase.frameworks.ktor
+package com.plainbase.frameworks.net
 
 import com.plainbase.frameworks.config.PlainbaseConfig
 import org.junit.jupiter.api.Tag

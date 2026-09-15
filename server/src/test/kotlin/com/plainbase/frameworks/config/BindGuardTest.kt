@@ -6,7 +6,18 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import java.nio.file.Path
+
+private const val UNPROTECTED_BIND_REFUSAL =
+    "binds 0.0.0.0 with auth.mode=builtin but no TLS/trusted-proxy and no insecure override. " +
+        "Remedies: (1) front with a TLS proxy and set PLAINBASE_TRUSTED_PROXY CIDRs; " +
+        "(2) bind loopback (PLAINBASE_HOST=127.0.0.1) behind the proxy; " +
+        "(3) set PLAINBASE_INSECURE_HTTP=1 to knowingly serve plaintext."
+
+private const val INCOMPLETE_PROXY_REFUSAL =
+    "auth.mode=proxy requires both a trusted-proxy allowlist and a shared secret. " +
+        "Remedies: set PLAINBASE_TRUSTED_PROXY to the proxy's /32; set PLAINBASE_PROXY_SECRET to a shared value the proxy stamps."
 
 /**
  * The ADR-0008 fail-closed bind guard, driven as the pure [PlainbaseConfig.bindGuardRefusal] predicate (no
@@ -25,10 +36,7 @@ class BindGuardTest : FunSpec({
 
     test("non-loopback bind + builtin + no proxy/override refuses, naming all three remedies") {
         val message = config("0.0.0.0", AuthConfig(mode = AuthMode.BUILTIN)).bindGuardRefusal()
-        message.shouldNotBeNull()
-        message shouldContain "loopback"
-        message shouldContain "PLAINBASE_INSECURE_HTTP"
-        message shouldContain "proxy"
+        message shouldBe UNPROTECTED_BIND_REFUSAL
     }
 
     test("loopback bind + builtin is allowed") {
@@ -66,11 +74,13 @@ class BindGuardTest : FunSpec({
 
     // A4b WI-2: a PROXY mode without BOTH a CIDR allowlist AND a secret is refused — even on a loopback bind (a
     // loopback proxy with no secret still trusts any loopback sibling). The refusal names both env vars.
-    test("proxy mode + empty trustedProxyCidrs (even loopback) → refuse, naming both env vars") {
-        val message = config("127.0.0.1", AuthConfig(mode = AuthMode.PROXY, proxySecret = "s")).bindGuardRefusal()
-        message.shouldNotBeNull()
-        message shouldContain "PLAINBASE_TRUSTED_PROXY"
-        message shouldContain "PLAINBASE_PROXY_SECRET"
+    test("proxy mode + empty trustedProxyCidrs refuses before insecure override, with exact refusal") {
+        val message = config(
+            "127.0.0.1",
+            AuthConfig(mode = AuthMode.PROXY, proxySecret = "fixture-proxy-secret", insecureHttp = true),
+        ).bindGuardRefusal()
+        message shouldBe INCOMPLETE_PROXY_REFUSAL
+        message shouldNotContain "fixture-proxy-secret"
     }
 
     test("proxy mode + CIDRs but a blank/absent secret (even loopback) → refuse") {
@@ -81,7 +91,14 @@ class BindGuardTest : FunSpec({
     }
 
     test("proxy mode + CIDRs + a secret → null (boot permitted)") {
-        config("127.0.0.1", AuthConfig(mode = AuthMode.PROXY, trustedProxyCidrs = listOf("10.0.0.0/8"), proxySecret = "s"))
+        config(
+            "127.0.0.1",
+            AuthConfig(
+                mode = AuthMode.PROXY,
+                trustedProxyCidrs = listOf("10.0.0.0/8"),
+                proxySecret = "fixture-proxy-secret",
+            ),
+        )
             .bindGuardRefusal().shouldBeNull()
     }
 
@@ -106,9 +123,10 @@ class BindGuardTest : FunSpec({
             .secureCookie() shouldBe true
     }
 
-    test("secureCookie: non-loopback → true (TLS-fronted)") {
-        config("0.0.0.0", AuthConfig(mode = AuthMode.BUILTIN, trustedProxyCidrs = listOf("10.0.0.0/8")))
-            .secureCookie() shouldBe true
+    test("non-loopback + insecure override permits bind but keeps secureCookie true") {
+        val config = config("0.0.0.0", AuthConfig(mode = AuthMode.BUILTIN, insecureHttp = true))
+        config.bindGuardRefusal().shouldBeNull()
+        config.secureCookie() shouldBe true
     }
 
     // A1-amber: the guard returns null (PERMITS) whenever trustedProxyCidrs.isNotEmpty(), so a GARBAGE CIDR used to

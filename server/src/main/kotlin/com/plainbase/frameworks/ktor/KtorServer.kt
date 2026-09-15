@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.TransportSecurityPolicy
 import com.plainbase.frameworks.ktor.dto.ErrorBody
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
@@ -129,7 +130,7 @@ class KtorServer(
                 nextStructuredChild.getAndSet(null)?.invoke(context)
             }
         }
-        plainbaseModule(routeContext, secureCookie = config.secureCookie())
+        plainbaseModule(routeContext, secureCookie = TransportSecurityPolicy.derive(config).secureCookie)
     }.apply {
         engineConfig.shutdownGracePeriod = STOP_GRACE_MILLIS
         engineConfig.shutdownTimeout = STOP_TIMEOUT_MILLIS
@@ -326,7 +327,7 @@ private val logger = KotlinLogging.logger {}
  * Shared between the real server and `testApplication` tests. [secureCookie] mirrors the secure context (ADR-0008):
  * the `pb_session` cookie's `Secure` attribute is true whenever the transport is TLS-fronted — a non-loopback
  * bind OR a loopback bind that declares a trusted proxy (the canonical prod deployment, see
- * [PlainbaseConfig.secureCookie]) — and false ONLY on pure loopback-dev with no proxy (a `Secure` cookie would never
+ * [TransportSecurityPolicy]) — and false ONLY on pure loopback-dev with no proxy (a `Secure` cookie would never
  * be sent back over plain http://localhost). Defaults to false (the dev/test loopback default).
  */
 fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false) {

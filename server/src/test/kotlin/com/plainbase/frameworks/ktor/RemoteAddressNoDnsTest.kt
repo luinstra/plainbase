@@ -27,7 +27,7 @@ private const val CLEANUP_REAP_MILLIS = 1_500L
 
 class RemoteAddressNoDnsTest : FunSpec({
     test("the production helper has one literal parser and no resolver operations") {
-        val sourceFile = mainSourceRoot().resolve("frameworks/ktor/RemoteAddress.kt")
+        val sourceFile = mainSourceRoot().resolve("frameworks/net/RemoteAddress.kt")
         val code = stripComments(Files.readString(sourceFile))
         val forbidden = listOf(
             "getByName",
