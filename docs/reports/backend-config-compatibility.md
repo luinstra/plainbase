@@ -108,10 +108,10 @@ tests establish these seams:
 - The native relocation set remains [`HoconParseNativeTest.kt`](../../server/src/nativeTest/kotlin/com/plainbase/frameworks/config/HoconParseNativeTest.kt),
   `RootCommandNativeTest`, `RootCommandNativeHistoryTest`, `RootsLockNativeTest`, and the existing config and boot
   native seams. Stage 0 does not move or duplicate these tests.
-- Stage 0b later adds the JVM-only `RemoteAddressNoDnsTest` provider/launcher and the execution-time
+- Stage 0b adds the JVM-only `RemoteAddressNoDnsTest` provider/launcher and the execution-time
   `plainbase.test.childRuntimeClasspath` Gradle property sourced from `test.runtimeClasspath`, with only a temporary
   service descriptor and a bounded 30-second process/drain/cleanup proof. It also adds the lean native literal test;
-  Stage 1 relocates that test with the corrected parser. These are future guards, not current Stage 0 changes.
+  Stage 1 relocates that test with the corrected parser.
 
 ## C04 compatibility rows
 
@@ -217,6 +217,29 @@ characterization evidence. No additional checks were run for these report-only c
 - The macOS native run did not reach image launch. The Linux native abort is the expected non-PID1 topology case above,
   not a new failure. No PID1/container campaign was run.
 
-This chunk does not claim that Plan04 is complete. Later chunks still own literal-only no-DNS parsing, conservative
-backup deletion, policy/net separation, values/loader/decoder relocation, inspection/freshness and warning order, and
-caller/documentation closeout.
+This chunk does not claim that Plan04 is complete. Later chunks still own conservative backup deletion, policy/net
+separation, values/loader/decoder relocation, inspection/freshness and warning order, and caller/documentation closeout.
+
+## C04-11 Stage0b measured address correction
+
+Stage0b was executed with the official macOS toolchain: `openjdk version "25.0.4.1"`, GraalVM CE
+`25.3.4.1+1.1`, `--max-workers=2`, and `--console=plain`. The six fresh JVM lanes use a temporary
+`InetAddressResolverProvider`; the provider's positive control attempted one controlled lookup before
+each lane, then the production rows were measured after resetting the counter. The table summarizes
+these observations; detailed row-level receipts are retained with the local verification records.
+
+| Lane | Measured correction | Public verdict and resolver attempts |
+| --- | --- | --- |
+| bind | `dead.beef` no longer looks like loopback; IPv4 zones and malformed ports are exposed; Unicode lookup is eliminated without changing exposed classification | `dead.beef` `false/1 → true/0`, `127.0.0.1%lo0` `false/0 → true/0`, `127.1` `false/0 → true/0`, `127.0.0.1:abc` `false/0 → true/0`, `١٢٧.0.0.1` `true/1 → true/0` |
+| remote | dotted-hex, abbreviated/zero-padded IPv4, IPv4 zones, bracketed aliases and invalid ports reject | `dead.beef` `true/1 → false/0`, `127.1` `true/0 → false/0`, `127.0.0.1%lo0` `true/0 → false/0`; canonical loopback remains `true/0` |
+| remote CIDR | runtime matching now shares strict literal parsing, including IPv4-zone rejection | `dead.beef` `true/1 → false/0`, `127.0.0.1%lo0` `true/0 → false/0`; mapped loopback `true/0 → true/0` |
+| network CIDR | malformed numeric network entries and IPv4 zones no longer match | `dead.beef/8` `true/1 → false/0`, `127.0.0.0%lo0/8` `true/0 → false/0`; `10.0.0.0/8` `true/0 → true/0` |
+| parse CIDR | config parser rejects strict/Unicode/dotted-hex malformed networks and IPv4 zones | `dead.beef/8` `false/0 → false/0`, `127.0.0.0%lo0/8` `false/0 → false/0`; Unicode `false/1 → false/0` |
+| config | explicit `DATA_DIR` and `CONTENT_DIR` were used; malformed env entries fail fast | `dead.beef/8` `iae:PLAINBASE_TRUSTED_PROXY/0` both, `127.0.0.0%lo0/8` same, mapped padded `loaded/0 → iae:PLAINBASE_TRUSTED_PROXY/0`; Unicode attempt `1 → 0` |
+
+The complete measured matrix is retained in the local Stage0b evidence with completion counts
+`bind/36`, `remote/69`, `remote-cidr/38`, `network-cidr/39`, `parse-cidr/38`, and `config/22`.
+`JVM-ORIGINAL` and raw-lookup mutation receipts show the expected RED behavior; the final `JVM-GREEN`
+suites passed, including the folded native-test class and named downstream consumers. The source guard
+rejects `getByName` in the temporary mutation and passes on final source. These observations come from
+JVM runs; native classification is checked separately by the native gate.

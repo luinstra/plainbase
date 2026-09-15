@@ -28,6 +28,19 @@ supplies values env omits. Secrets (`PLAINBASE_PROXY_SECRET`) belong in env, not
 file path exists for completeness, not as the recommended place for a secret. Config loads once at
 boot; every key here is restart-only, there is no hot reload.
 
+## Address inputs and trusted-proxy CIDRs
+
+`PLAINBASE_HOST` is passed to the server as configured. The bind guard treats only the case-insensitive,
+unbracketed `localhost`/`ip6-localhost` aliases and numeric loopback literals as loopback; another hostname is
+fail-closed as exposed and is never resolved by the guard. Numeric IPv4 values must be four ASCII
+decimal octets (`0`–`255`), with no abbreviations or leading-zero forms; IPv4 zone suffixes are rejected.
+IPv6 zones are stripped for classification, and IPv4-mapped IPv6 literals retain their IPv4 CIDR behavior.
+
+An optional host port accepts only ASCII decimal `0`–`65535`; bracketed IPv6 uses `[address]:port`.
+Malformed ports, bracketed aliases, hostnames, Unicode digits and dotted-hex forms are rejected by
+the security predicates. `PLAINBASE_TRUSTED_PROXY` is a comma-separated list of numeric CIDRs and
+is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUSTED_PROXY`.
+
 ## Reference table
 
 | Env var | Config path | Default | Source |

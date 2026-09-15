@@ -9,6 +9,18 @@ For **single-sign-on behind a reverse proxy** (`auth.mode=proxy`), see
 [`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) and the standalone Caddy + oauth2-proxy
 reference stack under `deploy/proxy/`.
 
+## Bind and proxy address safety
+
+The bind guard and proxy trust checks accept numeric address literals only. IPv4 must use four ASCII
+decimal octets without abbreviation or leading-zero ambiguity; IPv4 zones are rejected, while IPv6 may carry
+a zone, which is removed before classification. Host ports are validated as ASCII decimal `0`–`65535`, with bracketed IPv6
+syntax for a port-bearing value. Case-insensitive, unbracketed `localhost` and `ip6-localhost` remain supported aliases for
+loopback bind/remote checks, but bracketed aliases and arbitrary hostnames are not loopback evidence.
+
+`PLAINBASE_TRUSTED_PROXY` must contain valid numeric CIDRs. Plainbase refuses startup with an error
+naming that variable when an entry is malformed. The guard performs no hostname lookup, so a DNS name
+cannot turn a bind or socket peer into a trusted address; put a proxy's numeric CIDR in configuration.
+
 ## Upgrading the binary: stop the old one FIRST (schema v17)
 
 Per-root page identity ([ADR-0012](decisions/0012-per-root-page-identity.md)) makes a page's identity the

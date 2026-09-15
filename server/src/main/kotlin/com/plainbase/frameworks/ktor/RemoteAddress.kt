@@ -8,8 +8,8 @@ import java.net.InetAddress
  * logic: no socket, no coroutines, and **no DNS anywhere** — not for a per-request remote (a blocking lookup
  * on an attacker-controlled host is a latency + spoof surface) and not for the bind host (resolving a name
  * then trusting one result is a TOCTOU/DNS-rebinding bypass: `embeddedServer` binds the original NAME, not the
- * resolved address). Loopback is decided from numeric literals + the exact `localhost`/`ip6-localhost`
- * literals ONLY. Every classification is **fail-closed**: an unparseable or hostname remote/bind is treated
+ * resolved address). Loopback is decided from numeric literals + the case-insensitive, unbracketed
+ * `localhost`/`ip6-localhost` aliases. Every classification is **fail-closed**: an unparseable or hostname remote/bind is treated
  * as non-loopback / not-in-CIDR.
  *
  * Source identity is ALWAYS the socket remote address — `X-Forwarded-For` is never an input here (§0.10).
@@ -22,8 +22,8 @@ object RemoteAddress {
 
     /**
      * Is [remoteHost] a loopback address? Handles IPv4 `127.0.0.0/8`, IPv6 `::1`, the IPv4-mapped form
-     * `::ffff:127.0.0.1` (the classic bypass a naive `== "127.0.0.1"` misses), and the literals `localhost`/
-     * `ip6-localhost`. A `host:port` form is normalized first. A name other than those literals is NEVER
+     * `::ffff:127.0.0.1` (the classic bypass a naive `== "127.0.0.1"` misses), and the case-insensitive,
+     * unbracketed aliases `localhost`/`ip6-localhost`. A `host:port` form is normalized first. A name other than those literals is NEVER
      * resolved and classifies as non-loopback (fail-closed). The wildcard `0.0.0.0`/`::` is never a legitimate
      * remote, so it is non-loopback.
      */
@@ -38,7 +38,7 @@ object RemoteAddress {
     /**
      * The bind-guard test: is the configured bind [host] a non-loopback or wildcard interface (so a credential
      * would be exposed off-box)? `0.0.0.0`/`::` (bind every interface) and any routable IP / non-localhost
-     * NAME → true; loopback literals + the exact `localhost`/`ip6-localhost` literals → false.
+     * NAME → true; loopback literals + case-insensitive, unbracketed `localhost`/`ip6-localhost` aliases → false.
      *
      * A non-literal hostname is NEVER DNS-resolved (the resolve-then-trust-one-result path was a TOCTOU /
      * DNS-rebinding bypass: `embeddedServer` binds the original name, which could resolve to a non-loopback
@@ -79,39 +79,43 @@ object RemoteAddress {
         return tokens.isNotEmpty() && tokens.all { it.equals("https", ignoreCase = true) }
     }
 
-    /**
-     * Drops a trailing `:port`, unwrapping a bracketed IPv6 literal (`[::1]:8080` → `::1`). Leaves a bare IPv6
-     * literal untouched. **Fail-closed on malformed brackets:** a `[` with no closing `]`, or a non-empty,
-     * non-`:port` suffix after `]` (`[::1` / `[::1]junk`), returns null (→ unparseable → non-loopback).
-     */
+    /** Normalizes outer whitespace, validates an optional port, and unwraps bracketed IPv6 literals. */
     private fun stripPort(hostPort: String): String? {
         val host = hostPort.trim()
-        val close = host.indexOf(']')
-        return when {
-            !host.startsWith("[") && host.count { it == ':' } == 1 -> host.substringBefore(':')
-            !host.startsWith("[") -> host
-            close < 0 -> null
-            host.substring(close + 1).let { it.isNotEmpty() && !(it.startsWith(':') && it.drop(1).all(Char::isDigit)) } -> null
-            else -> host.substring(1, close)
+        if (!host.startsWith("[")) {
+            if (host.count { it == ':' } != 1) return host
+            val port = host.substringAfter(':')
+            return port.takeIf(::isValidPort)?.let { host.substringBefore(':') }
+        }
+        val close = host.indexOf(']').takeIf { it >= 0 } ?: return null
+        val content = host.substring(1, close)
+        if (':' !in content.substringBefore('%')) return null
+        val suffix = host.substring(close + 1)
+        if (suffix.isNotEmpty() && !(suffix.startsWith(':') && isValidPort(suffix.drop(1)))) return null
+        return content
+    }
+
+    /** Parses a strict numeric literal without invoking hostname resolution. */
+    private fun parseNumericLiteral(host: String): InetAddress? {
+        if (host.isEmpty()) return null
+        val literal = host.substringBefore('%')
+        if (literal.isEmpty()) return null
+        if ('%' in host && ':' !in literal) return null
+        if (!literal.all { it.isAsciiLiteralCharacter() }) return null
+        if (':' !in literal && !isStrictIpv4(literal)) return null
+        if (':' in literal && '.' in literal && !isStrictIpv4(literal.substringAfterLast(':'))) return null
+        return try {
+            InetAddress.ofLiteral(literal)
+        } catch (_: IllegalArgumentException) {
+            null
         }
     }
 
-    /**
-     * Parses a NUMERIC IP literal (v4 or v6) without touching DNS. `InetAddress.getByName` on a numeric literal
-     * parses rather than resolves; a hostname would resolve, so we pre-screen to digits/`.`/`:`/hex and return
-     * null for anything that is not a bare literal (so a hostname never sneaks a DNS lookup in).
-     */
-    private fun parseNumericLiteral(host: String): InetAddress? {
-        if (host.isEmpty()) return null
-        // Drop a trailing `%zone` (e.g. `fe80::1%eth0`): a zone id is meaningless for a CIDR/loopback verdict and is
-        // attacker-controllable on a remote, so it never reaches getByName (and `%` leaves the numeric screen).
-        val literal = host.substringBefore('%')
-        if (literal.isEmpty()) return null
-        val looksNumeric = literal.all { it.isDigit() || it == '.' || it == ':' || it in 'a'..'f' || it in 'A'..'F' }
-        if (!looksNumeric) return null
-        if ('.' !in literal && ':' !in literal) return null // a bare hex word like "abc" is a hostname, not a literal
-        return runCatching { InetAddress.getByName(literal) }.getOrNull()
-    }
+    private fun isValidPort(port: String): Boolean =
+        port.isNotEmpty() && port.all { it in '0'..'9' } && port.toIntOrNull()?.let { it in 0..65535 } == true
+
+    private fun Char.isAsciiLiteralCharacter(): Boolean =
+        this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F' || this == '.' || this == ':'
 
     /**
      * Does [cidr] parse as a well-formed CIDR (`a.b.c.d/n` or IPv6 `…/n`)? The config layer (A1-amber) requires
@@ -120,31 +124,31 @@ object RemoteAddress {
      * literal parse + prefix-bounds logic [matchesCidr] uses (one source of truth), minus the remote: a MISSING
      * `/prefix` (a bare address) and an OUT-OF-RANGE prefix (`/33`, `/129`, negative/non-numeric) both reject.
      */
-    fun isParseableCidr(cidr: String): Boolean = parseCidr(cidr, requireStrictIpv4 = true) != null
+    fun isParseableCidr(cidr: String): Boolean = parseCidr(cidr) != null
 
-    /** A strict dotted quad: exactly four `0..255` octets, no abbreviation, no leading-zero (octal) ambiguity. */
+    /** A strict dotted quad: exactly four ASCII `0..255` octets, no abbreviation or leading-zero ambiguity. */
     private fun isStrictIpv4(s: String): Boolean {
         val octets = s.split('.')
         return octets.size == IPV4_OCTET_COUNT &&
             octets.all { octet ->
                 octet.length in 1..MAX_IPV4_OCTET_DIGITS &&
                     (octet.length == 1 || octet[0] != '0') &&
+                    octet.all { it in '0'..'9' } &&
                     octet.toIntOrNull()?.let { it in 0..MAX_IPV4_OCTET } == true
             }
     }
 
     private fun matchesCidr(remoteBytes: ByteArray, cidr: String): Boolean {
-        val parsed = parseCidr(cidr, requireStrictIpv4 = false)
+        val parsed = parseCidr(cidr)
         return parsed?.let { it.network.size == remoteBytes.size && sharesPrefix(remoteBytes, it.network, it.prefix) } == true
     }
 
     private data class ParsedCidr(val network: ByteArray, val prefix: Int)
 
-    private fun parseCidr(cidr: String, requireStrictIpv4: Boolean): ParsedCidr? {
+    private fun parseCidr(cidr: String): ParsedCidr? {
         val slash = cidr.indexOf('/').takeIf { it >= 0 }
         val networkPart = slash?.let { cidr.substring(0, it).trim() }
-        val strictEnough = networkPart?.let { ':' in it || !requireStrictIpv4 || isStrictIpv4(it) } == true
-        val network = networkPart?.takeIf { strictEnough }?.let(::parseNumericLiteral)
+        val network = networkPart?.let(::parseNumericLiteral)
         val prefix = slash?.let { cidr.substring(it + 1).trim().toIntOrNull() }
         return when {
             network != null && prefix != null && prefix in 0..(network.address.size * BITS_PER_BYTE) ->
