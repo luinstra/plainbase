@@ -15,7 +15,7 @@ import com.plainbase.domain.root.RootedPageId
  *
  * **The app DB is the authoritative linearization boundary.** [applyProofs] re-reads each root's stamps - BOTH the
  * [ObservationId] (epoch continuity: a restart, break or unmount mints a new one) and the [BindingEpoch] (binding
- * freshness: every successful bind advances it) - compares them to the proof's, and, only if BOTH still match,
+ * freshness: every successful bind or unchanged confirmation advances it) - compares them to the proof's, and, only if BOTH still match,
  * applies the `id_map` -> `retired_binding` moves, the `page_checkpoint` deletes and the `dirty_page` clears, ALL IN
  * ONE TRANSACTION. The two are orthogonal on purpose: either advance alone invalidates a proof, and a bind must be
  * able to revoke one WITHOUT collapsing the epoch. Both revocations ([revoke], and the increment inside a bind) are
@@ -47,10 +47,10 @@ interface RetirementRepository {
      *    in what we observed, and SEEING the page refutes it. This is first because it is the one that ships bugs;
      *  - its [AbsenceProof.observationId] still equals the root's CURRENT token (epoch CONTINUITY - a restart, an
      *    unmount or a watcher break has not revoked it since it was minted);
-     *  - its [AbsenceProof.bindingEpoch] still equals the root's CURRENT binding epoch (binding FRESHNESS - no bind has
-     *    landed since the proof was stamped, so it cannot reap a binding a restore just re-created, nor that binding's
-     *    `dirty_page` recovery row). A bind advances THIS and deliberately leaves the observation token alone: a restore
-     *    must revoke the proof without collapsing the epoch;
+     *  - its [AbsenceProof.bindingEpoch] still equals the root's CURRENT binding epoch (binding FRESHNESS - no bind or
+     *    unchanged confirmation has landed since the proof was stamped, so it cannot reap a binding a restore just
+     *    re-created, nor that binding's `dirty_page` recovery row). Both operations advance the binding epoch and leave
+     *    the observation token alone: a restore must revoke the proof without collapsing the epoch;
      *  - `proof.root == the binding's root` (no cross-root proof replay: a [BindingRef] carries no root, so
      *    without this a proof minted for root A could retire a same-named, same-id binding in root B);
      *  - the live binding at that (root, path) still carries exactly the id the proof names (the page was not
@@ -126,8 +126,8 @@ interface RetirementRepository {
     /**
      * [root]'s CURRENT binding epoch (`root_observation.binding_epoch`). Local inferred-proof producers capture it
      * PRE-EVIDENCE in `AbsencePass.capture`; OBJECT_LIST receives its epoch co-read with the manifest at the poll
-     * boundary. [applyProofs] re-checks it. Orthogonal to [observation]: this advances on a `bind`, that revokes on a
-     * break. Zero when the root has no observation row yet (nothing to be fresh against, and no proof outstanding).
+     * boundary. [applyProofs] re-checks it. Orthogonal to [observation]: this advances on a `bind` or unchanged
+     * confirmation, that revokes on a break. Zero when the root has no observation row yet (no proof outstanding).
      */
     fun bindingEpoch(root: RootName): BindingEpoch
 

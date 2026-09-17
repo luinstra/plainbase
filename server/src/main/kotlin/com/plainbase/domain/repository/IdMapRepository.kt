@@ -90,6 +90,13 @@ interface IdMapRepository {
         supersession: Supersession = Supersession.NONE,
     ): BindOutcome
 
+    /**
+     * Atomically confirms a complete, materialized single-root binding set and advances its freshness epoch.
+     * Returns false without changing anything when the implementation is unsupported or the durable set differs;
+     * database failures throw. The default keeps alternate and test implementations on the ordinary bind path.
+     */
+    fun confirmUnchangedBindings(expected: List<IdBinding>): Boolean = false
+
     /** Marks [path]'s binding materialized — called after the patched file write lands (§5.2). */
     fun markMaterialized(path: RootedPath)
 

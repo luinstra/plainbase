@@ -91,9 +91,10 @@ value class ObservationId(val value: Long) {
 /**
  * The SECOND freshness stamp, ORTHOGONAL to [ObservationId] (`root_observation.binding_epoch`, C5 revoke-before-stamp).
  *
- * A per-root, monotonic, never-reset counter that ONLY a successful `bind` advances. Where [ObservationId] gates epoch
- * CONTINUITY - a break/restart/unmount mints a new one and kills every live epoch - this gates BINDING freshness: a
- * restore's re-bind of a covered key advances it, so an inferred proof minted under the old value loses `applyProofs`'
+ * A per-root, monotonic, never-reset counter that a successful `bind` or unchanged binding confirmation advances.
+ * Where [ObservationId] gates epoch CONTINUITY - a break/restart/unmount mints a new one and kills every live epoch -
+ * this gates BINDING freshness. A restore's re-bind of a covered key advances it, so an inferred proof minted under
+ * the old value loses `applyProofs`'
  * two-token compare and cannot reap the binding (and its `dirty_page` USER-CONTENT recovery row) the restore just
  * re-created - WITHOUT touching the observation token, so the epoch that shares that token is not collapsed. Because it
  * is monotonic and durable (never reset by observation churn), there is no ABA hazard: a value never recurs.
@@ -126,10 +127,10 @@ annotation class InferredProofMint
  * cross-root proof replay, in a MULTI-ROOT feature. Authority is per-root, always.
  *
  * [observationId] and [bindingEpoch] are BOTH re-read from `root_observation` INSIDE the apply transaction and must
- * still match, exact-equality, fail-closed. A revocation (a new observation) OR a re-bind (an advanced binding epoch)
+ * still match, exact-equality, fail-closed. A revocation (new observation) or a bind/confirmation (advanced binding epoch)
  * that commits before the apply opens therefore serializes AGAINST it and the reap becomes a no-op - there is no
  * window, because the compare and the deletes are ONE transaction. The two tokens are orthogonal: [observationId]
- * dies on an epoch break, [bindingEpoch] advances on a bind, and either mismatch alone discards the proof.
+ * dies on an epoch break, [bindingEpoch] advances on a bind or unchanged confirmation, and either mismatch discards the proof.
  */
 @ConsistentCopyVisibility
 data class AbsenceProof private constructor(

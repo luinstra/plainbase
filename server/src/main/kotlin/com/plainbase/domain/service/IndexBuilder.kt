@@ -148,7 +148,13 @@ class IndexBuilder(
 
     /** Runs the serialized full pass and atomically publishes the new snapshot. */
     @Synchronized
-    fun rebuild(): PageIndex {
+    fun rebuild(): PageIndex = rebuildInternal(createTarget = null)
+
+    /** Runs the same serialized full pass, allowing confirmation only for this eligible CREATE target. */
+    @Synchronized
+    fun rebuildAfterCreate(target: RootedPath): PageIndex = rebuildInternal(createTarget = target)
+
+    private fun rebuildInternal(createTarget: RootedPath?): PageIndex {
         val previous = holder.load()
         // The EMPTY holder is the startup sentinel: use the persisted checkpoint for the first alias comparison,
         // then use the previous published snapshot.
@@ -207,7 +213,15 @@ class IndexBuilder(
         val raisedIssues = mutableListOf<IdentityIssue>()
         scans.forEach { scan -> scan.issues.forEach { record(raisedIssues, it) } }
 
-        val identities = identityAssignments.resolveIdentities(scans, witnessed, scannedRoots, registeredRoots, raisedIssues)
+        val allowUnchangedConfirmation = createTarget?.let { isEligibleCreateConfirmation(it, scans) } == true
+        val identities = identityAssignments.resolveIdentities(
+            scans = scans,
+            witnessed = witnessed,
+            scannedRoots = scannedRoots,
+            registeredRoots = registeredRoots,
+            raised = raisedIssues,
+            allowUnchangedConfirmation = allowUnchangedConfirmation,
+        )
 
         val snapshot = snapshotAssembler.assemble(
             scans = scans,
@@ -219,6 +233,19 @@ class IndexBuilder(
         holder.store(snapshot)
         finishRebuild(snapshot, retired, witnessed, scannedRoots, raisedIssues)
         return snapshot
+    }
+
+    private fun isEligibleCreateConfirmation(target: RootedPath, scans: List<SourceScan>): Boolean {
+        if (sources.size != 1 || registeredRoots != setOf(target.root)) return false
+        val source = sources.single()
+        if (source.root.name != target.root || source.root.backend !is RootBackend.Local) return false
+        val scan = scans.singleOrNull { it.root == target.root } ?: return false
+        return availability.current().isAvailable(target.root) &&
+            scan.complete &&
+            scan.pageReadsComplete &&
+            scan.issues.isEmpty() &&
+            scan.urls.issues.isEmpty() &&
+            scan.drafts.any { it.file.path == target.path }
     }
 
     private fun finishRebuild(

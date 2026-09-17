@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.sqldelight
 
+import app.cash.sqldelight.Transacter
 import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlPreparedStatement
@@ -17,6 +18,7 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.ktor.livePathOf
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
@@ -25,6 +27,9 @@ import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
+import java.nio.file.Files
 
 /**
  * SqlDelightIdMapRepository over an in-memory SQLite db: composite (root, path) binding round-trips,
@@ -45,6 +50,13 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
             block(SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver)), driver)
         }
 
+    fun <T> withConfirmationRepo(block: (SqlDelightIdMapRepository, PlainbaseDb, ConfirmationCountingDriver) -> T): T =
+        DatabaseFactory.createInMemoryDriver().use { real ->
+            val driver = ConfirmationCountingDriver(real)
+            val database = DatabaseFactory.createDatabase(driver)
+            block(SqlDelightIdMapRepository(database), database, driver)
+        }
+
     val main = RootName.PRIMARY
     val extra = RootName.require("extra")
     val pathA = RootedPath(main, TreePath.require("guides/a.md"))
@@ -59,6 +71,315 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         registeredRoots = setOf(main, extra),
     )
     val idY = PageId.require("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+    val pathC = RootedPath(main, TreePath.require("archive/c.md"))
+    val idZ = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5c")
+
+    test("unchanged confirmation advances only the root binding epoch, once, with no per-page writes") {
+        withConfirmationRepo { repo, database, driver ->
+            database.rootObservationQueries.upsertObservation(root = main, observationId = 41L).value
+            repo.bind(pathA, idX, materialized = true)
+            repo.bind(pathB, idY, materialized = true)
+            val expected = listOf(repo.find(pathA), repo.find(pathB)).map { requireNotNull(it) }
+            val bindingsBefore = repo.bindings()
+            val tombstonesBefore = repo.retiredBindings()
+            val observationBefore = driver.queryLong("SELECT observation_id FROM root_observation WHERE root = '${main.value}'")
+            val epochBefore = driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'")
+
+            driver.resetConfirmationCounters()
+            repo.confirmUnchangedBindings(expected) shouldBe true
+
+            driver.transactionCount shouldBe 1
+            driver.executedSql.none { it.contains("id_map") } shouldBe true
+            driver.executedSql.count { it.contains("UPDATE root_observation") } shouldBe 1
+            driver.queryLong("SELECT observation_id FROM root_observation WHERE root = '${main.value}'") shouldBe observationBefore
+            driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe
+                epochBefore + expected.size
+            repo.bindings() shouldContainExactlyInAnyOrder bindingsBefore
+            repo.retiredBindings() shouldContainExactly tombstonesBefore
+        }
+    }
+
+    test("invalid confirmation input returns false without opening a transaction") {
+        withConfirmationRepo { repo, _, driver ->
+            val invalid = listOf(
+                emptyList(),
+                listOf(IdBinding(pathA, idX, materialized = false)),
+                listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathA, idY, materialized = true)),
+                listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathB, idX, materialized = true)),
+                listOf(
+                    IdBinding(pathA, idX, materialized = true),
+                    IdBinding(RootedPath(extra, pathB.path), idY, materialized = true),
+                ),
+            )
+
+            invalid.forEach { expected ->
+                repo.confirmUnchangedBindings(expected) shouldBe false
+            }
+            driver.transactionCount shouldBe 0
+        }
+    }
+
+    test("a missing root observation returns false without touching its live bindings") {
+        withConfirmationRepo { repo, _, driver ->
+            repo.bind(pathA, idX, materialized = true)
+            val bindingsBefore = repo.bindings()
+            driver.resetConfirmationCounters()
+
+            repo.confirmUnchangedBindings(listOf(IdBinding(pathA, idX, materialized = true))) shouldBe false
+
+            driver.transactionCount shouldBe 1
+            repo.bindings() shouldContainExactly bindingsBefore
+        }
+    }
+
+    test("set mismatches, an extra row, and a matching tombstone fail closed without changing state") {
+        fun assertUnchanged(
+            expected: List<IdBinding>,
+            prepare: (SqlDelightIdMapRepository, SqlDriver) -> Unit = { _, _ -> },
+        ) {
+            withConfirmationRepo { repo, database, driver ->
+                database.rootObservationQueries.upsertObservation(root = main, observationId = 73L).value
+                repo.bind(pathA, idX, materialized = true)
+                repo.bind(pathB, idY, materialized = true)
+                prepare(repo, driver)
+                val bindingsBefore = repo.bindings()
+                val tombstonesBefore = repo.retiredBindings()
+                val observationBefore = driver.queryLong("SELECT observation_id FROM root_observation WHERE root = '${main.value}'")
+                val epochBefore = driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'")
+
+                repo.confirmUnchangedBindings(expected) shouldBe false
+
+                repo.bindings() shouldContainExactlyInAnyOrder bindingsBefore
+                repo.retiredBindings() shouldContainExactly tombstonesBefore
+                driver.queryLong("SELECT observation_id FROM root_observation WHERE root = '${main.value}'") shouldBe observationBefore
+                driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe epochBefore
+            }
+        }
+
+        assertUnchanged(
+            listOf(IdBinding(pathA, idY, materialized = true), IdBinding(pathB, idX, materialized = true)),
+        )
+        val complete = listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathB, idY, materialized = true))
+        assertUnchanged(complete) { _, driver ->
+            driver.execute(
+                identifier = null,
+                sql = "DELETE FROM id_map WHERE root = '${main.value}' AND path = '${pathB.path.value}'",
+                parameters = 0,
+            )
+        }
+        assertUnchanged(complete) { _, driver ->
+            driver.execute(
+                identifier = null,
+                sql = "UPDATE id_map SET materialized = 0 WHERE root = '${main.value}' AND path = '${pathB.path.value}'",
+                parameters = 0,
+            )
+        }
+        assertUnchanged(
+            listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathB, idY, materialized = true)),
+            prepare = { repo, _ -> repo.bind(pathC, idZ, materialized = true) },
+        )
+        assertUnchanged(
+            listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathB, idY, materialized = true)),
+            prepare = { _, driver ->
+                driver.execute(
+                    identifier = null,
+                    sql = "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES (?, ?, ?, ?, ?)",
+                    parameters = 5,
+                    binders = {
+                        bindBytes(0, PageIdColumnAdapter.encode(idX))
+                        bindString(1, main.value)
+                        bindString(2, pathA.path.value)
+                        bindLong(3, 1L)
+                        bindLong(4, 99L)
+                    },
+                )
+            },
+        )
+    }
+
+    test("real, negative, and exhausted epochs fail before every binding mismatch or matching tombstone") {
+        fun assertBadEpoch(
+            expected: List<IdBinding>,
+            prepare: (PlainbaseDb, SqlDelightIdMapRepository, SqlDriver) -> Unit,
+        ) {
+            withConfirmationRepo { repo, database, driver ->
+                database.rootObservationQueries.upsertObservation(root = main, observationId = 74L).value
+                repo.bind(pathA, idX, materialized = true)
+                repo.bind(pathB, idY, materialized = true)
+                prepare(database, repo, driver)
+
+                val bindingsBefore = repo.bindings()
+                val tombstonesBefore = repo.retiredBindings()
+                listOf("real" to "1.5", "integer" to "-1", "integer" to Long.MAX_VALUE.toString()).forEach { (type, literal) ->
+                    driver.execute(
+                        identifier = null,
+                        sql = "UPDATE root_observation SET binding_epoch = $literal WHERE root = '${main.value}'",
+                        parameters = 0,
+                    )
+
+                    driver.resetConfirmationCounters()
+                    val failure = shouldThrow<IllegalStateException> { repo.confirmUnchangedBindings(expected) }
+                    failure.message shouldContain "cannot confirm unchanged bindings"
+                    driver.executedSql shouldBe emptyList()
+
+                    repo.bindings() shouldContainExactlyInAnyOrder bindingsBefore
+                    repo.retiredBindings() shouldContainExactly tombstonesBefore
+                    val epoch = database.rootObservationQueries.selectConfirmationEpoch(main).executeAsOne()
+                    epoch.binding_epoch_type shouldBe type
+                    epoch.binding_epoch shouldBe if (type == "real") 0L else literal.toLong()
+                }
+            }
+        }
+
+        val complete = listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathB, idY, materialized = true))
+        assertBadEpoch(
+            expected = listOf(IdBinding(pathA, idY, materialized = true), IdBinding(pathB, idX, materialized = true)),
+        ) { _, _, _ -> }
+        assertBadEpoch(expected = complete) { _, _, driver ->
+            driver.execute(
+                identifier = null,
+                sql = "DELETE FROM id_map WHERE root = '${main.value}' AND path = '${pathB.path.value}'",
+                parameters = 0,
+            )
+        }
+        assertBadEpoch(expected = complete) { _, _, driver ->
+            driver.execute(
+                identifier = null,
+                sql = "UPDATE id_map SET materialized = 0 WHERE root = '${main.value}' AND path = '${pathB.path.value}'",
+                parameters = 0,
+            )
+        }
+        assertBadEpoch(expected = complete) { _, _, driver ->
+            driver.execute(
+                identifier = null,
+                sql = "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES (?, ?, ?, ?, ?)",
+                parameters = 5,
+                binders = {
+                    bindBytes(0, PageIdColumnAdapter.encode(idX))
+                    bindString(1, main.value)
+                    bindString(2, pathA.path.value)
+                    bindLong(3, 1L)
+                    bindLong(4, 100L)
+                },
+            )
+        }
+    }
+
+    test("confirmation is root-scoped across live and retired claims in another root") {
+        withConfirmationRepo { repo, database, _ ->
+            database.rootObservationQueries.upsertObservation(root = main, observationId = 11L).value
+            repo.bind(pathA, idX, materialized = true)
+            val otherRootPath = RootedPath(extra, TreePath.require("foreign.md"))
+            repo.bind(otherRootPath, idX, materialized = true)
+            repo.bind(otherRootPath, idY, materialized = true, supersession = witnessedAll)
+
+            repo.confirmUnchangedBindings(listOf(IdBinding(pathA, idX, materialized = true))) shouldBe true
+            repo.find(pathA) shouldBe IdBinding(pathA, idX, materialized = true)
+            repo.retiredAt(extra, idX) shouldNotBe null
+        }
+    }
+
+    test("malformed, negative, and overflowing binding epochs throw before any confirmation write") {
+        withConfirmationRepo { repo, database, driver ->
+            database.rootObservationQueries.upsertObservation(root = main, observationId = 19L).value
+            repo.bind(pathA, idX, materialized = true)
+            val expected = listOf(IdBinding(pathA, idX, materialized = true))
+
+            driver.execute(
+                identifier = null,
+                sql = "UPDATE root_observation SET binding_epoch = ? WHERE root = ?",
+                parameters = 2,
+                binders = {
+                    bindString(0, "not-an-integer")
+                    bindString(1, main.value)
+                },
+            )
+            shouldThrowAny { repo.confirmUnchangedBindings(expected) }
+
+            driver.execute(
+                identifier = null,
+                sql = "UPDATE root_observation SET binding_epoch = ? WHERE root = ?",
+                parameters = 2,
+                binders = {
+                    bindLong(0, -1L)
+                    bindString(1, main.value)
+                },
+            )
+            shouldThrowAny { repo.confirmUnchangedBindings(expected) }
+
+            driver.execute(
+                identifier = null,
+                sql = "UPDATE root_observation SET binding_epoch = ? WHERE root = ?",
+                parameters = 2,
+                binders = {
+                    bindLong(0, Long.MAX_VALUE - 1L)
+                    bindString(1, main.value)
+                },
+            )
+            repo.confirmUnchangedBindings(expected) shouldBe true
+            driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe Long.MAX_VALUE
+            shouldThrowAny { repo.confirmUnchangedBindings(expected) }
+            driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe Long.MAX_VALUE
+        }
+    }
+
+    test("a failure in the guarded epoch update rolls the confirmation transaction back") {
+        DatabaseFactory.createInMemoryDriver().use { real ->
+            val driver = ConfirmationCountingDriver(real)
+            val database = DatabaseFactory.createDatabase(driver)
+            val repo = SqlDelightIdMapRepository(database)
+            database.rootObservationQueries.upsertObservation(root = main, observationId = 23L).value
+            repo.bind(pathA, idX, materialized = true)
+            val bindingsBefore = repo.bindings()
+            val tombstonesBefore = repo.retiredBindings()
+            val epochBefore = driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'")
+
+            driver.failEpochUpdate = true
+            val thrown = shouldThrowAny {
+                repo.confirmUnchangedBindings(listOf(IdBinding(pathA, idX, materialized = true)))
+            }
+
+            driver.epochUpdateDelegated shouldBe true
+            thrown shouldBeSameInstanceAs driver.epochUpdateFailure
+            repo.bindings() shouldContainExactly bindingsBefore
+            repo.retiredBindings() shouldContainExactly tombstonesBefore
+            driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe epochBefore
+        }
+    }
+
+    test("a post-update confirmation failure leaves file-backed bindings and epoch unchanged after reopen") {
+        val directory = Files.createTempDirectory("plainbase-confirmation-failure")
+        val expectedBinding = IdBinding(pathA, idX, materialized = true)
+        var epochBefore = 0L
+        try {
+            val dbPath = directory.resolve("plainbase.db")
+            DatabaseFactory.createDriver(dbPath).use { real ->
+                val driver = ConfirmationCountingDriver(real)
+                val database = DatabaseFactory.createDatabase(driver)
+                val repo = SqlDelightIdMapRepository(database)
+                database.rootObservationQueries.upsertObservation(root = main, observationId = 24L).value
+                repo.bind(pathA, idX, materialized = true)
+                val bindingsBefore = repo.bindings()
+                epochBefore = driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'")
+
+                driver.failEpochUpdate = true
+                shouldThrowAny {
+                    repo.confirmUnchangedBindings(listOf(IdBinding(pathA, idX, materialized = true)))
+                } shouldBeSameInstanceAs driver.epochUpdateFailure
+                driver.epochUpdateDelegated shouldBe true
+                repo.bindings() shouldContainExactly bindingsBefore
+                driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe epochBefore
+            }
+
+            DatabaseFactory.createDriver(dbPath).use { reopened ->
+                val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(reopened))
+                repo.bindings() shouldContainExactly listOf(expectedBinding)
+                reopened.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe epochBefore
+            }
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
 
     test("bind/find round-trip, including the materialized flag and the live rooted path") {
         withRepo { repo, _ ->
@@ -426,3 +747,38 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         }
     }
 })
+
+private class ConfirmationCountingDriver(
+    private val delegate: SqlDriver,
+) : SqlDriver by delegate {
+    var transactionCount = 0
+    var failEpochUpdate = false
+    var epochUpdateDelegated = false
+    val epochUpdateFailure = IllegalStateException("injected confirmation epoch failure after update")
+    val executedSql = mutableListOf<String>()
+
+    override fun newTransaction(): QueryResult<Transacter.Transaction> {
+        transactionCount++
+        return delegate.newTransaction()
+    }
+
+    override fun execute(
+        identifier: Int?,
+        sql: String,
+        parameters: Int,
+        binders: (SqlPreparedStatement.() -> Unit)?,
+    ): QueryResult<Long> {
+        executedSql += sql
+        if (failEpochUpdate && sql.contains("binding_epoch = binding_epoch + ?")) {
+            delegate.execute(identifier, sql, parameters, binders)
+            epochUpdateDelegated = true
+            throw epochUpdateFailure
+        }
+        return delegate.execute(identifier, sql, parameters, binders)
+    }
+
+    fun resetConfirmationCounters() {
+        transactionCount = 0
+        executedSql.clear()
+    }
+}

@@ -26,8 +26,8 @@ import kotlin.concurrent.thread
 import kotlin.system.measureTimeMillis
 
 /**
- * C2 item 4 — MEASURE the O(corpus) full-rebuild-per-create (WritePipeline.create runs a FULL
- * `indexBuilder.rebuild()` + the targeted O(1) `reindex()`, both under the pipeline monitor every
+ * C2 item 4: MEASURE the full-rebuild-per-create (WritePipeline.create runs a FULL
+ * `indexBuilder.rebuildAfterCreate` reconciliation pass + a targeted reindex, both under the pipeline monitor every
  * save serializes on). The `write-perf:` printed numbers are the deliverable — the tripwire asserts
  * are generous regression bounds (3-30x headroom), NOT the contract; the pre-committed 8 s
  * defer-vs-escalate rule is applied to the recorded numbers at chunk verification, never here.
@@ -80,7 +80,7 @@ class WritePathCorpusPerfTest : FunSpec({
                     // (a) Create end-to-end: full rebuild + targeted reindex under the monitor, distinct folders.
                     val createTimes = (0 until 5).map { i -> timedCreate(pipeline, "perf-%02d/created.md".format(i)) }.sorted()
 
-                    // (b) The O(1) contrast: 20 saves of one page, fresh baseHash each round (append-only edits
+                    // (b) The single-page reindex contrast: 20 saves of one page, fresh baseHash each round (append-only edits
                     // so the materialized frontmatter — id included — never changes and classifyEdit stays green).
                     val target = TreePath.require("section-00/page-000.md")
                     val saveTimes = (0 until 20).map { round ->

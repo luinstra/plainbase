@@ -11,6 +11,7 @@ import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.FileDiff
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.DirtyPage
 import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.repository.IdMapRepository
@@ -18,8 +19,10 @@ import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.repository.Stage
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingEpoch
+import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.GitCheckpointAdvance
+import com.plainbase.domain.root.InferredProofMint
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
@@ -28,8 +31,11 @@ import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
+import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import org.slf4j.LoggerFactory
 
@@ -83,6 +89,89 @@ class AbsenceInterleavingHarnessTest : FunSpec({
 
     val extra = RootName.require("extra")
     val rollback = TreePath.require("notes/rollback.md")
+
+    test("C5.1 confirmation advances freshness before stale proof apply, with a positive reap control") {
+        fun runScenario(confirm: Boolean): ConfirmationScenario = withAbsenceTrees { mainDir, extraDir ->
+            val firstId = PageId.require("01010101-0101-0101-0101-010101010101")
+            val secondId = PageId.require("02020202-0202-0202-0202-020202020202")
+            writePage(mainDir, "guides/deploy.md", "---\nid: $firstId\ntitle: Deploy\n---\n\n# Deploy\n\nbody\n")
+            writePage(
+                extraDir,
+                "notes/rollback.md",
+                "---\nid: $secondId\ntitle: Rollback\n---\n\n# Rollback\n\nrollback-unique-term\n",
+            )
+            writePage(
+                extraDir,
+                "notes/keep.md",
+                "---\nid: 03030303-0303-0303-0303-030303030303\ntitle: Keep\n---\n\n# Keep\n\nkeep\n",
+            )
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                world.observe("extra")
+                val snapshot = world.builder(mainDir, world.extraStore(extraDir), world.indexer).rebuild()
+                val expected = snapshot.section(extra).pages.map { page ->
+                    IdBinding(RootedPath(extra, page.path), page.id, materialized = true)
+                }
+                expected shouldContainExactlyInAnyOrder world.idMap.bindings().filter { it.path.root == extra }
+                expected.forEach { binding ->
+                    world.dirtyPages.mark(binding.id, binding.path, "sha256:recovery", Stage.WRITING)
+                }
+                val beforeEpoch = world.retirements.bindingEpoch(extra)
+                val observation = world.retirements.observation(extra)
+                val proof = inferredProof(extra, observation, beforeEpoch, expected)
+                val beforeCheckpoint = world.checkpoints.load()
+                val beforeSearch = world.engine.search(SearchQuery("rollback-unique-term", limit = 20, offset = 0))
+
+                val confirmed = if (confirm) world.idMap.confirmUnchangedBindings(expected) else false
+                val retired = world.retirements.applyProofs(
+                    proofs = listOf(proof),
+                    witnessed = emptySet(),
+                    unavailableNow = { emptySet() },
+                )
+                if (!confirm) world.indexer.sync(snapshot)
+
+                ConfirmationScenario(
+                    confirmed = confirmed,
+                    beforeEpoch = beforeEpoch,
+                    afterEpoch = world.retirements.bindingEpoch(extra),
+                    observation = observation,
+                    actualObservation = world.retirements.observation(extra),
+                    retired = retired,
+                    bindings = world.idMap.bindings().filter { it.path.root == extra },
+                    tombstones = world.idMap.retiredBindings().filter { it.path.root == extra },
+                    dirty = world.dirtyPages.all().filter { it.path.root == extra },
+                    checkpoints = world.checkpoints.load().filterKeys { it.root == extra },
+                    search = world.engine.search(SearchQuery("rollback-unique-term", limit = 20, offset = 0)),
+                    beforeCheckpoint = beforeCheckpoint.filterKeys { it.root == extra },
+                    beforeSearchTotal = beforeSearch.total,
+                )
+            }
+        }
+
+        val confirmed = runScenario(confirm = true)
+        assertSoftly {
+            confirmed.confirmed shouldBe true
+            confirmed.afterEpoch.value shouldBe confirmed.beforeEpoch.value + 2L
+            confirmed.actualObservation shouldBe confirmed.observation
+            confirmed.retired shouldBe emptySet()
+            withClue("live bindings survive confirmation") { confirmed.bindings shouldHaveSize 2 }
+            confirmed.tombstones shouldBe emptyList()
+            withClue("dirty recovery survives confirmation") { confirmed.dirty shouldHaveSize 2 }
+            confirmed.checkpoints shouldBe confirmed.beforeCheckpoint
+            confirmed.search.total shouldBe confirmed.beforeSearchTotal
+        }
+
+        val control = runScenario(confirm = false)
+        assertSoftly {
+            control.confirmed shouldBe false
+            control.afterEpoch shouldBe control.beforeEpoch
+            control.retired shouldHaveSize 2
+            control.bindings shouldBe emptyList()
+            control.tombstones shouldHaveSize 2
+            control.dirty shouldBe emptyList()
+            control.checkpoints shouldBe emptyMap()
+            control.search.total shouldBe 0L
+        }
+    }
 
     /**
      * Drives one pass to the point of reaping `(extra, notes/rollback.md)` under [source]'s authority, firing [event] at
@@ -288,6 +377,36 @@ class AbsenceInterleavingHarnessTest : FunSpec({
         }
     }
 })
+
+private data class ConfirmationScenario(
+    val confirmed: Boolean,
+    val beforeEpoch: BindingEpoch,
+    val afterEpoch: BindingEpoch,
+    val observation: com.plainbase.domain.root.ObservationId,
+    val actualObservation: com.plainbase.domain.root.ObservationId,
+    val retired: Set<RootedPageId>,
+    val bindings: List<IdBinding>,
+    val tombstones: List<com.plainbase.domain.root.RetiredBinding>,
+    val dirty: List<DirtyPage>,
+    val checkpoints: Map<RootedPageId, TreePath?>,
+    val search: com.plainbase.domain.search.SearchResults,
+    val beforeCheckpoint: Map<RootedPageId, TreePath?>,
+    val beforeSearchTotal: Long,
+)
+
+@OptIn(InferredProofMint::class)
+private fun inferredProof(
+    root: RootName,
+    observation: com.plainbase.domain.root.ObservationId,
+    epoch: BindingEpoch,
+    bindings: List<IdBinding>,
+): AbsenceProof = AbsenceProof.inferred(
+    root = root,
+    source = com.plainbase.domain.root.ProofSource.EPOCH,
+    observationId = observation,
+    bindingEpoch = epoch,
+    covers = bindings.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) },
+)
 
 /**
  * Which proof source's authority is under test. They fail differently and BOTH are needed: an early break stops EPOCH

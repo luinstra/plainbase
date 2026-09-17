@@ -3,26 +3,45 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
+import com.plainbase.domain.content.ScanIssue
+import com.plainbase.domain.content.ScanResult
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.createGrantForTests
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.repository.BindOutcome
+import com.plainbase.domain.repository.IdBinding
+import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.Supersession
+import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.Root
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SearchResults
+import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.time.Clock
 
 /**
  * PB-WRITE-1 chunk W1 — the serialized write pipeline's per-save behavior (named tests 1, 3, 4, 5).
@@ -37,7 +56,52 @@ class WritePipelineTest : FunSpec({
         writePage(root, "guides/edit-me.md", "---\ntitle: Edit Me\n---\n\n# Edit Me\n\noriginal body.\n")
     }
 
+    fun seedTarget(root: Path, id: String, path: String = "target.md") {
+        writePage(root, path, "---\nid: $id\ntitle: Target\n---\n\n# Target\n")
+    }
+
     fun targetOf(harness: IndexHarness) = harness.builder.current.pages.single()
+
+    fun runIneligibleCase(
+        seed: (Path) -> Unit,
+        target: RootedPath,
+        rootRegistryFactory: (Path) -> RootRegistry = { root ->
+            RootRegistry.of(listOf(localRoot("docs", root)))
+        },
+        contentStoreFactory: (Path) -> ContentStore = { root -> LocalContentStore(root) },
+        sourcesFactory: (Path, RootRegistry, ContentStore) -> List<IndexBuilder.Source> =
+            { _, registry, store -> listOf(IndexBuilder.Source(registry.primary, store, NoOpHistoryProvider)) },
+        availability: RootAvailability = RootAvailability(Clock.System),
+        registeredRootsOverride: (RootRegistry) -> Set<RootName>? = { null },
+        assertFixture: (IndexHarness) -> Unit = {},
+    ) {
+        withTempTree(seed) { root ->
+            val registry = rootRegistryFactory(root)
+            val store = contentStoreFactory(root)
+            val sources = sourcesFactory(root, registry, store)
+            lateinit var recording: RecordingConfirmationIdMap
+            IndexHarness(
+                root,
+                contentStore = store,
+                rootRegistry = registry,
+                sources = sources,
+                availability = availability,
+                decorateIdMap = { delegate ->
+                    RecordingConfirmationIdMap(delegate, forcedConfirmationResult = true).also { recording = it }
+                },
+                registeredRootsOverride = registeredRootsOverride(registry),
+            ).use { harness ->
+                harness.builder.rebuild()
+                assertFixture(harness)
+                val bindsBefore = recording.bindCalls
+                val snapshot = harness.builder.rebuildAfterCreate(target)
+                recording.confirmationCalls shouldBe 0
+                // Every non-confirmed, readable assignment uses the ordinary bind loop; a skipped source contributes
+                // no new binds, so this also pins the unavailable/incomplete skip arms.
+                recording.bindCalls shouldBe bindsBefore + snapshot.pages.size
+            }
+        }
+    }
 
     // Test 1: disk-clobber — an external on-disk edit before the CAS is never clobbered (fix A, the #1 gate).
     test("an external on-disk edit before reindex is never clobbered (disk-authoritative)") {
@@ -354,6 +418,310 @@ class WritePipelineTest : FunSpec({
             }
         }
     }
+
+    test("only an eligible CREATE uses unchanged confirmation; ordinary rebuild stays on bind path") {
+        withTempTree({ root ->
+            writePage(root, "existing-a.md", "---\nid: 01900000-0000-7000-8000-0000000000d1\ntitle: Existing A\n---\n\n# Existing A\n")
+            writePage(root, "existing-b.md", "---\nid: 01900000-0000-7000-8000-0000000000d2\ntitle: Existing B\n---\n\n# Existing B\n")
+        }) { root ->
+            lateinit var recording: RecordingConfirmationIdMap
+            IndexHarness(
+                root,
+                decorateIdMap = { delegate -> RecordingConfirmationIdMap(delegate).also { recording = it } },
+            ).use { harness ->
+                harness.observe()
+                harness.builder.rebuild()
+                recording.confirmationCalls shouldBe 0
+                recording.bindCalls shouldBe 2
+
+                val pageId = PageId.require("01900000-0000-7000-8000-0000000000e1")
+                val bytes = "---\nid: ${pageId.value}\ntitle: Confirmed\n---\n\n# Confirmed\n\nbody.\n".toByteArray()
+                harness.writePipeline().create(
+                    createGrantForTests(),
+                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("confirmed.md"), bytes),
+                ).shouldBeInstanceOf<WriteOutcome.Written>()
+
+                recording.confirmationCalls shouldBe 1
+                // The CREATE's initial durable bind is the only per-page bind; rebuild's resolver confirmed the set.
+                recording.bindCalls shouldBe 3
+            }
+        }
+    }
+
+    test("a CREATE confirmation failure retains bytes, dirty recovery, and the old published snapshot") {
+        withTempTree({}) { root ->
+            lateinit var recording: RecordingConfirmationIdMap
+            IndexHarness(
+                root,
+                decorateIdMap = { delegate -> RecordingConfirmationIdMap(delegate).also { recording = it } },
+            ).use { harness ->
+                harness.observe()
+                val old = harness.builder.rebuild()
+                val pipeline = harness.writePipeline()
+                val pageId = PageId.require("01900000-0000-7000-8000-0000000000e3")
+                val bytes = "---\nid: ${pageId.value}\ntitle: Confirmation failure\n---\n\n# Confirmation failure\n".toByteArray()
+                val failure = IllegalStateException("confirmation failed after CREATE bytes landed")
+                recording.confirmationFailure = failure
+
+                val outcome = pipeline.create(
+                    createGrantForTests(),
+                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("confirmation-failure.md"), bytes),
+                )
+
+                val unindexed = outcome.shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
+                unindexed.cause shouldBe failure.message
+                Files.readAllBytes(root.resolve("confirmation-failure.md")) shouldBe bytes
+                harness.dirtyPages.all().shouldHaveSize(1)
+                harness.builder.current shouldBeSameInstanceAs old
+                harness.builder.current.pages shouldBe emptyList()
+                recording.confirmationCalls shouldBe 1
+
+                // Startup-style recovery publishes the landed page before the existing targeted dirty replay.
+                recording.confirmationFailure = null
+                harness.builder.rebuild()
+                pipeline.reconcileDirtyPages()
+                harness.dirtyPages.all() shouldBe emptyList()
+                harness.builder.current.byPath[RootedPath(RootName.PRIMARY, TreePath.require("confirmation-failure.md"))] shouldNotBe null
+            }
+        }
+    }
+
+    test("a declined CREATE confirmation falls back to the original ordered binds") {
+        withTempTree({}) { root ->
+            lateinit var recording: RecordingConfirmationIdMap
+            IndexHarness(
+                root,
+                decorateIdMap = { delegate ->
+                    RecordingConfirmationIdMap(delegate, forcedConfirmationResult = false).also { recording = it }
+                },
+            ).use { harness ->
+                harness.observe()
+                harness.builder.rebuild()
+                val pageId = PageId.require("01900000-0000-0000-0000-0000000000e2")
+                val bytes = "---\nid: ${pageId.value}\ntitle: Fallback\n---\n\n# Fallback\n\nbody.\n".toByteArray()
+
+                harness.writePipeline().create(
+                    createGrantForTests(),
+                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("fallback.md"), bytes),
+                ).shouldBeInstanceOf<WriteOutcome.Written>()
+
+                recording.confirmationCalls shouldBe 1
+                // Initial CREATE bind plus the resolver's ordinary bind after the confirmation declined.
+                recording.bindCalls shouldBe 2
+            }
+        }
+    }
+
+    test("CREATE confirmation requires one exact registered local root") {
+        val target = RootedPath(RootName.PRIMARY, TreePath.require("target.md"))
+        runIneligibleCase(
+            seed = { root ->
+                writePage(root, "target.md", "---\nid: 01900000-0000-7000-8000-0000000000f1\ntitle: Target\n---\n\n# Target\n")
+                writePage(root, "extra/other.md", "---\nid: 01900000-0000-7000-8000-0000000000f2\ntitle: Other\n---\n\n# Other\n")
+            },
+            target = target,
+            rootRegistryFactory = { root ->
+                RootRegistry.of(
+                    listOf(
+                        localRoot("docs", root),
+                        localRoot("extra", root.resolve("extra")),
+                    ),
+                )
+            },
+            sourcesFactory = { root, registry, store ->
+                listOf(
+                    IndexBuilder.Source(registry.primary, store, NoOpHistoryProvider),
+                    IndexBuilder.Source(
+                        requireNotNull(registry.byName(RootName.require("extra"))),
+                        com.plainbase.frameworks.filesystem.LocalContentStore(root.resolve("extra")),
+                        NoOpHistoryProvider,
+                    ),
+                )
+            },
+            assertFixture = { harness ->
+                harness.rootRegistry.roots shouldHaveSize 2
+                harness.actualSources shouldHaveSize 2
+                harness.builder.current.pages shouldHaveSize 3
+            },
+        )
+
+        runIneligibleCase(
+            seed = { root ->
+                writePage(root, "target.md", "---\nid: 01900000-0000-7000-8000-0000000000f3\ntitle: Target\n---\n\n# Target\n")
+            },
+            target = target,
+            rootRegistryFactory = { root ->
+                RootRegistry.of(
+                    listOf(
+                        localRoot("docs", root),
+                        localRoot("extra", root.resolve("unconfigured")),
+                    ),
+                )
+            },
+            assertFixture = { harness ->
+                harness.rootRegistry.roots shouldHaveSize 2
+                harness.actualSources shouldHaveSize 1
+                harness.builder.current.pages shouldHaveSize 1
+            },
+        )
+
+        runIneligibleCase(
+            seed = { root ->
+                writePage(root, "target.md", "---\nid: 01900000-0000-7000-8000-0000000000f4\ntitle: Target\n---\n\n# Target\n")
+            },
+            target = target,
+            registeredRootsOverride = { setOf(RootName.require("extra")) },
+            assertFixture = { harness ->
+                harness.rootRegistry.roots.map { it.name } shouldBe listOf(RootName.PRIMARY)
+                harness.builder.current.pages.single().root shouldBe RootName.PRIMARY
+            },
+        )
+
+        runIneligibleCase(
+            seed = { root ->
+                writePage(root, "target.md", "---\nid: 01900000-0000-7000-8000-0000000000f5\ntitle: Target\n---\n\n# Target\n")
+            },
+            target = target,
+            rootRegistryFactory = { root ->
+                RootRegistry.of(
+                    listOf(
+                        Root(
+                            name = RootName.PRIMARY,
+                            backend = RootBackend.Object(bucket = "test-bucket", prefix = "docs"),
+                            editable = true,
+                            history = HistoryMode.OFF,
+                        ),
+                    ),
+                )
+            },
+            assertFixture = { harness ->
+                harness.actualSources.single().root.backend.shouldBeInstanceOf<RootBackend.Object>()
+                harness.builder.current.pages shouldHaveSize 1
+            },
+        )
+    }
+
+    test("CREATE confirmation rejects incomplete, buffered, and unavailable evidence") {
+        val target = RootedPath(RootName.PRIMARY, TreePath.require("target.md"))
+        lateinit var incompleteScan: EligibilityStore
+        runIneligibleCase(
+            seed = { root -> seedTarget(root, "01900000-0000-7000-8000-0000000000f6") },
+            target = target,
+            contentStoreFactory = { root ->
+                EligibilityStore(LocalContentStore(root), scanMutation = { scan -> scan.copy(complete = false) })
+                    .also { incompleteScan = it }
+            },
+            assertFixture = { harness ->
+                incompleteScan.observedScan!!.complete shouldBe false
+                harness.builder.current.pages shouldHaveSize 1
+            },
+        )
+
+        lateinit var incompletePageRead: EligibilityStore
+        val unreadPath = TreePath.require("unread.md")
+        runIneligibleCase(
+            seed = { root ->
+                seedTarget(root, "01900000-0000-7000-8000-0000000000f7")
+                writePage(root, "unread.md", "---\nid: 01900000-0000-7000-8000-0000000000ff\ntitle: Unread\n---\n\n# Unread\n")
+            },
+            target = target,
+            contentStoreFactory = { root ->
+                EligibilityStore(LocalContentStore(root), unreadPath = unreadPath).also { incompletePageRead = it }
+            },
+            assertFixture = { harness ->
+                incompletePageRead.readClassifiedPaths shouldContainExactly listOf(target.path, unreadPath)
+                harness.builder.current.byPath[target] shouldNotBe null
+                harness.builder.current.byPath[RootedPath(target.root, unreadPath)] shouldBe null
+            },
+        )
+
+        lateinit var bufferedScan: EligibilityStore
+        runIneligibleCase(
+            seed = { root -> seedTarget(root, "01900000-0000-7000-8000-0000000000f8") },
+            target = target,
+            contentStoreFactory = { root ->
+                EligibilityStore(
+                    LocalContentStore(root),
+                    scanMutation = { scan ->
+                        scan.copy(
+                            issues = scan.issues + ScanIssue.PathCollision(
+                                path = TreePath.require("buffered.md"),
+                                winnerRawName = "buffered.md",
+                                loserRawName = "buffered-copy.md",
+                            ),
+                        )
+                    },
+                ).also { bufferedScan = it }
+            },
+            assertFixture = { harness ->
+                bufferedScan.observedScan!!.issues shouldHaveSize 1
+                harness.idMap.issues().filterIsInstance<IdentityIssue.PathCollision>() shouldHaveSize 1
+            },
+        )
+
+        runIneligibleCase(
+            seed = { root ->
+                writePage(root, "a.md", "---\nid: 01900000-0000-7000-8000-0000000000f9\nslug: same\ntitle: A\n---\n\n# A\n")
+                writePage(root, "b.md", "---\nid: 01900000-0000-7000-8000-0000000000fa\nslug: same\ntitle: B\n---\n\n# B\n")
+            },
+            target = RootedPath(RootName.PRIMARY, TreePath.require("a.md")),
+            assertFixture = { harness ->
+                harness.builder.current.pages shouldHaveSize 2
+                harness.idMap.issues().filterIsInstance<IdentityIssue.PathSlugCollision>() shouldHaveSize 1
+            },
+        )
+
+        val unavailable = RootAvailability(Clock.System)
+        unavailable.markUnavailable(RootName.PRIMARY, UnavailableCause.VANISHED)
+        runIneligibleCase(
+            seed = { root -> seedTarget(root, "01900000-0000-7000-8000-0000000000fb") },
+            target = target,
+            availability = unavailable,
+            assertFixture = { harness ->
+                harness.availability.current().isAvailable(RootName.PRIMARY) shouldBe false
+                harness.builder.current.pages shouldBe emptyList()
+            },
+        )
+    }
+
+    test("CREATE confirmation rejects absent, wrong-root, unmaterialized, and conflicted assignments") {
+        val target = RootedPath(RootName.PRIMARY, TreePath.require("target.md"))
+        runIneligibleCase(
+            seed = { root -> seedTarget(root, "01900000-0000-7000-8000-0000000000fc", "present.md") },
+            target = target,
+            assertFixture = { harness -> harness.builder.current.byPath[target] shouldBe null },
+        )
+
+        runIneligibleCase(
+            seed = { root -> seedTarget(root, "01900000-0000-7000-8000-0000000000fd") },
+            target = RootedPath(RootName.require("extra"), TreePath.require("target.md")),
+            assertFixture = { harness ->
+                harness.builder.current.pages.single().root shouldBe RootName.PRIMARY
+                harness.builder.current.byPath[RootedPath(RootName.require("extra"), TreePath.require("target.md"))] shouldBe null
+            },
+        )
+
+        runIneligibleCase(
+            seed = { root -> writePage(root, "target.md", "---\ntitle: Target\n---\n\n# Target\n") },
+            target = target,
+            assertFixture = { harness ->
+                harness.idMap.find(target)!!.materialized shouldBe false
+                harness.builder.current.pages.single().materialized shouldBe false
+            },
+        )
+
+        runIneligibleCase(
+            seed = { root ->
+                writePage(root, "target.md", "---\nid: 01900000-0000-7000-8000-0000000000fe\ntitle: Target\n---\n\n# Target\n")
+                writePage(root, "copy.md", "---\nid: 01900000-0000-7000-8000-0000000000fe\ntitle: Copy\n---\n\n# Copy\n")
+            },
+            target = target,
+            assertFixture = { harness ->
+                harness.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>() shouldHaveSize 1
+                harness.builder.current.pages shouldHaveSize 2
+            },
+        )
+    }
 })
 
 /**
@@ -378,3 +746,39 @@ private class TogglingSearchProvider : SearchProvider {
 
 /** A real LocalContentStore over [root] — the delegate behind a CAS-failing test stand-in. */
 private fun realStoreDelegate(root: Path): ContentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root)
+
+private class RecordingConfirmationIdMap(
+    private val delegate: IdMapRepository,
+    private val forcedConfirmationResult: Boolean? = null,
+) : IdMapRepository by delegate {
+    var bindCalls = 0
+    var confirmationCalls = 0
+    var confirmationFailure: Throwable? = null
+
+    override fun bind(path: RootedPath, id: PageId, materialized: Boolean, supersession: Supersession): BindOutcome {
+        bindCalls++
+        return delegate.bind(path, id, materialized, supersession)
+    }
+
+    override fun confirmUnchangedBindings(expected: List<IdBinding>): Boolean {
+        confirmationCalls++
+        confirmationFailure?.let { throw it }
+        return forcedConfirmationResult ?: delegate.confirmUnchangedBindings(expected)
+    }
+}
+
+private class EligibilityStore(
+    private val delegate: ContentStore,
+    private val scanMutation: (ScanResult) -> ScanResult = { it },
+    private val unreadPath: TreePath? = null,
+) : ContentStore by delegate {
+    var observedScan: ScanResult? = null
+    val readClassifiedPaths = mutableListOf<TreePath>()
+
+    override fun scan(): ScanResult = scanMutation(delegate.scan()).also { observedScan = it }
+
+    override fun readClassified(path: TreePath): StoreRead {
+        readClassifiedPaths += path
+        return if (path == unreadPath) StoreRead.NoBytes else delegate.readClassified(path)
+    }
+}

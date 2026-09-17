@@ -63,8 +63,8 @@ class MultiRootCorpusPerfTest : FunSpec({
         report("rebuild median ms", single.rebuildMedian, singleAgain.rebuildMedian, triple.rebuildMedian)
         report("create median ms", single.createMedian, singleAgain.createMedian, triple.createMedian)
         report("render p95 ms", single.renderP95, singleAgain.renderP95, triple.renderP95)
-        // No ratio: an O(1) reindex does not scale with the root count, and a ratio over single-digit
-        // milliseconds reports the scheduler, not the topology. Recorded because it is a gated tripwire.
+        // No ratio: single-digit-millisecond differences report scheduler noise more than topology.
+        // Recorded because it is a gated tripwire.
         println(
             "multiroot-perf: solo-save median ms 1-root %d / 3-root %d (tripwire only)"
                 .format(single.soloMedian, triple.soloMedian),
@@ -78,7 +78,7 @@ class MultiRootCorpusPerfTest : FunSpec({
     }
 })
 
-/** One shape's numbers. [createMin] is the write-path tripwire's second leg; [soloMedian] its O(1) contrast. */
+/** One shape's numbers. [createMin] is the write-path tripwire's second leg; [soloMedian] is its solo-save comparison. */
 private class Metrics(
     val rebuildMedian: Long,
     val createMedian: Long,
@@ -134,7 +134,7 @@ private fun measure(slices: List<Pair<String, IntRange>>): Metrics = withSeededT
             val renderP95 = renderP95(snapshot)
 
             val pipeline = harness.writePipeline()
-            // The O(1) contrast, on a page that lives in MAIN under both shapes. Append-only edits, so the
+            // The single-page reindex contrast, on a page that lives in MAIN under both shapes. Append-only edits, so the
             // materialized frontmatter (id included) never changes and classifyEdit stays green.
             val target = TreePath.require("section-00/page-000.md")
             val saves = (0 until 20).map { round ->
