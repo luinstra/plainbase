@@ -370,7 +370,7 @@ val performanceScreen = tasks.register<Test>("performanceScreen") {
         require(runId.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,31}"))) {
             "unsafe performanceRun: $runId"
         }
-        val outputRoot = rootProject.layout.projectDirectory.dir("docs/reports/data/backend-performance").dir(runId).asFile
+        val outputRoot = layout.buildDirectory.dir("backend-performance/$runId").get().asFile
         val fixtureRoot = layout.buildDirectory.dir("performance-screen").get().asFile.resolve(runId)
         val sourceStagingRoot = layout.buildDirectory.dir("performance-screen-source").get().asFile.resolve(runId)
         require(!outputRoot.exists()) { "performance evidence directory already exists: $outputRoot" }
@@ -491,7 +491,7 @@ val performanceScreen = tasks.register<Test>("performanceScreen") {
         val profile = providers.gradleProperty("performanceProfile").orElse("screen").get()
         val runId = providers.gradleProperty("performanceRun").orNull
             ?: throw GradleException("performanceScreen requires -PperformanceRun=<run-id>")
-        val outputRoot = rootProject.layout.projectDirectory.dir("docs/reports/data/backend-performance").dir(runId).asFile
+        val outputRoot = layout.buildDirectory.dir("backend-performance/$runId").get().asFile
         val observations = outputRoot.resolve("observations.csv")
         if (!observations.isFile) throw GradleException("performance screen wrote no observations: $observations")
         fun csvFields(row: String): List<String> {

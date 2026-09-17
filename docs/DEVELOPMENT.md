@@ -22,10 +22,8 @@ The bounded backend performance worker is opt-in and is not part of `check` or
 ./gradlew :server:performanceScreen -PperformanceRun=<run-id>
 ```
 
-It writes observations, manifests, and per-run source snapshots to
-`docs/reports/data/backend-performance/<run-id>/`. See the [bounded backend
-operating envelope](reports/backend-operating-envelope.md) for retained
-screening results and limitations. Use the diagnostic
+Run output stays under the gitignored `server/build/backend-performance/<run-id>/` directory.
+See the [performance summary](reports/backend-operating-envelope.md) for results and limitations. Use the diagnostic
 `-PperformanceScreenAllowCoverage` flag only with the explicit performance
 worker and a fresh run ID, for example
 `./gradlew :server:performanceScreen -PperformanceRun=<run-id> -PperformanceScreenAllowCoverage`;
@@ -34,8 +32,7 @@ not performance evidence. Do not pass this flag to general `build` or `check`
 invocations.
 
 A refused or failed run may leave its evidence, fixture, or staging directory
-behind, and the run ID is not reusable. Preserve the files for diagnosis and
-choose a fresh run ID for another attempt.
+behind, and the run ID is not reusable. Choose a fresh run ID for another attempt.
 
 Requirements: JDK 25+ (the build auto-provisions the 25 toolchain for
 bytecode). Node is downloaded by the Gradle build - no local install needed.
