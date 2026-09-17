@@ -1,6 +1,5 @@
 package com.plainbase.domain.service
 
-import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.FrontmatterParser
@@ -69,15 +68,13 @@ class IndexHarness(
     sources: List<IndexBuilder.Source>? = null,
     /** C4: the availability holder the builder probes/marks through. Empty (every root serving) by default. */
     val availability: RootAvailability = RootAvailability(Clock.System),
-    /** Allows corpus tests to inject an isolated file-backed SQL driver. */
-    driverFactory: () -> SqlDriver = DatabaseFactory::createInMemoryDriver,
-    /** Allows performance tests to decorate the one real SQLDelight identity repository. */
+    /** Allows tests to record calls to the real identity repository. */
     decorateIdMap: (IdMapRepository) -> IdMapRepository = { it },
     /** Allows eligibility tests to exercise the builder's explicit registered-root port independently of topology. */
     registeredRootsOverride: Set<RootName>? = null,
 ) : AutoCloseable {
 
-    private val driver = driverFactory()
+    private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
     private val citations = CitationFactory()
 

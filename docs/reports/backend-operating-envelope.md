@@ -36,5 +36,3 @@ different operations and does not establish this transaction's behavior at that 
 Regression tests cover eligibility, ordered fallback, rollback, link repair and stale deletion-proof
 invalidation. The full build and native gates passed; the native spike passed 9/9. A PID1-dependent
 test requires its dedicated namespace and was skipped/aborted in the ordinary JVM/native runs.
-
-The opt-in performance runner is documented in [Development](../DEVELOPMENT.md).
