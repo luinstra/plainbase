@@ -131,6 +131,56 @@ class SqlDelightIdMapRepository(
             BindOutcome.Bound
         }
 
+    override fun confirmUnchangedBindings(expected: List<IdBinding>): Boolean {
+        val copied = expected.toList()
+        if (!validConfirmationInput(copied)) return false
+        val root = copied.first().path.root
+        val expectedCount = copied.size.toLong()
+        val expectedByPath = copied.associateBy { it.path.path }
+        return db.transactionWithResult {
+            val epochRow = observations.selectConfirmationEpoch(root).executeAsOneOrNull()
+                ?: return@transactionWithResult false
+            val epoch = checkConfirmationEpoch(epochRow.binding_epoch, epochRow.binding_epoch_type, root, expectedCount)
+            val rows = queries.selectRootBindingsForConfirmation(root = root, limit = expectedCount + 1L).executeAsList()
+            if (rows.size != copied.size || rows.any { it.tombstone_id != null }) return@transactionWithResult false
+            val actualByPath = rows.associate { row ->
+                row.path to IdBinding(RootedPath(root, row.path), row.id, row.materialized)
+            }
+            if (actualByPath != expectedByPath) return@transactionWithResult false
+            check(
+                observations.advanceBindingEpochIfCurrent(
+                    expectedEpoch = epoch,
+                    increment = expectedCount,
+                    root = root,
+                ).value == 1L,
+            ) {
+                "unchanged binding confirmation lost root '$root' epoch $epoch before its guarded update"
+            }
+            true
+        }
+    }
+
+    private fun validConfirmationInput(expected: List<IdBinding>): Boolean {
+        if (expected.isEmpty() || expected.any { !it.materialized }) return false
+        val root = expected.first().path.root
+        return expected.all { it.path.root == root } &&
+            expected.map { it.path.path }.size == expected.map { it.path.path }.toSet().size &&
+            expected.map { it.id }.size == expected.map { it.id }.toSet().size
+    }
+
+    private fun checkConfirmationEpoch(epoch: Long, type: String, root: RootName, count: Long): Long {
+        check(type == "integer") {
+            "cannot confirm unchanged bindings for root '$root': binding_epoch has SQLite type '$type'"
+        }
+        check(epoch >= 0L) {
+            "cannot confirm unchanged bindings for root '$root': binding_epoch $epoch is negative"
+        }
+        check(epoch <= Long.MAX_VALUE - count) {
+            "cannot confirm unchanged bindings for root '$root': binding_epoch $epoch overflows by $count"
+        }
+        return epoch
+    }
+
     override fun markMaterialized(path: RootedPath) {
         queries.markMaterialized(materialized = true, root = path.root, path = path.path)
     }

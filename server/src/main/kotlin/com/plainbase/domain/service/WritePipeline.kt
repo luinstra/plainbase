@@ -29,7 +29,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * The serialized write pipeline (PB-WRITE-1): the single funnel for a content-mutating
  * save. Every [write] runs under ONE `@Synchronized` monitor (the house [IndexBuilder] idiom, never
  * `@Volatile`); the disk write is a single atomic, disk-authoritative compare-and-swap, and the index
- * update is a targeted O(changed-page) reindex. Pure domain — no framework imports.
+ * update is a targeted reindex of the changed page. Pure domain; no framework imports.
  *
  * The critical section, in order:
  *  0. **Edit-classification guard**: a buffer that changes `id`/`slug`/
@@ -166,7 +166,7 @@ class WritePipeline(
      *  2. exclusive create — [CreateResult.Exists] → [WriteOutcome.AlreadyExists]; [CreateResult
      *     .Rejected] → [WriteOutcome.InvalidLocation] (containment); [CreateResult.Unreadable] →
      *     [WriteOutcome.Unreadable]; [CreateResult.Created] → the post-steps;
-     *  3. bind identity, run the history hook (no-op until Git history), index via a full [IndexBuilder.rebuild]
+     *  3. bind identity, run the history hook (no-op until Git history), index via a full [IndexBuilder.rebuildAfterCreate]
      *     (its own scan picks up the just-created file, sidestepping the indexed-only read gate and
      *     reusing every collision/alias/checkpoint rule), then a targeted [IndexBuilder.reindex] whose
      *     PROPAGATING single-page search upsert surfaces an FTS-sync failure. A post-step throw is
@@ -229,7 +229,8 @@ class WritePipeline(
             // The create's commit SHA (null off Git). A plain POST /pages leaves author/committer null (server
             // identity); create-apply threads the proposer->author + approver->committer (an in-glob agent: both = agent).
             val commit = historyHook.commit(intent.root, intent.path, intent.bytes, intent.author, intent.committer)
-            indexBuilder.rebuild() // re-scans disk; picks up the new file, reuses every collision/alias/URL rule
+            // The full pass may use the CREATE-only unchanged-binding confirmation when its evidence is eligible.
+            indexBuilder.rebuildAfterCreate(RootedPath(intent.root, intent.path))
             // A rebuild no longer FAILS on a lost root - it probes, marks, skips, carries and returns normally -
             // so `it returned, so it worked` is no longer true and a try/catch around it is not a guard. Re-read
             // the mark the rebuild itself just made: a create into a root that died mid-request must never answer
@@ -482,7 +483,7 @@ class WritePipeline(
             // The save's commit SHA (null off Git). Threads the proposer->author + approver->committer
             // attribution from the apply call site through [WriteIntent]; a plain PUT leaves them null (server identity).
             val commit = historyHook.commit(intent.root, intent.path, intent.bytes, intent.author, intent.committer)
-            // Targeted O(1); THROWS on a vanished save-path page. Addressed by the LOCATION the CAS just wrote
+            // Targeted reindex; THROWS on a vanished save-path page. Addressed by the LOCATION the CAS just wrote
             // to - never by the page id, which a concurrent rebuild can make AMBIGUOUS by admitting that same id
             // under another root between the CAS and this call, sending the reindex at a file these bytes never
             // touched.

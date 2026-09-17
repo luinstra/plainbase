@@ -1286,6 +1286,7 @@ class IndexCollaboratorAuthorityTest : FunSpec({
                 "java.util.Set<com.plainbase.domain.root.RootName>",
                 "java.util.Set<com.plainbase.domain.root.RootName>",
                 "java.util.List<com.plainbase.domain.model.IdentityIssue>",
+                "boolean",
             )
             if (resolve.parameterTypes.toList() != listOf(
                     Class.forName("java.util.List"),
@@ -1293,6 +1294,7 @@ class IndexCollaboratorAuthorityTest : FunSpec({
                     Class.forName("java.util.Set"),
                     Class.forName("java.util.Set"),
                     Class.forName("java.util.List"),
+                    java.lang.Boolean.TYPE,
                 )
             ) {
                 violations += "resolve parameters=${resolve.parameterTypes.toList()}"
@@ -1328,7 +1330,8 @@ class IndexCollaboratorAuthorityTest : FunSpec({
             "witnessed", ":", "Map", "<", "RootedPath", ",", "Witness", ">", ",",
             "scannedRoots", ":", "Set", "<", "RootName", ">", ",",
             "registeredRoots", ":", "Set", "<", "RootName", ">", ",",
-            "raised", ":", "MutableList", "<", "IdentityIssue", ">", ",", ")", ":", "Map", "<",
+            "raised", ":", "MutableList", "<", "IdentityIssue", ">", ",",
+            "allowUnchangedConfirmation", ":", "Boolean", ",", ")", ":", "Map", "<",
             "RootedPath", ",", "Identity", ">",
         )
         sourceUnit.readerSourceSchemaViolations(
@@ -1352,6 +1355,7 @@ class IndexCollaboratorAuthorityTest : FunSpec({
                     scannedRoots: Set<RootName>,
                     registeredRoots: Set<RootName>,
                     raised: MutableList<IdentityIssue>,
+                    allowUnchangedConfirmation: Boolean,
                 ): Map<RootedPath, Identity> = TODO()
             }
         """.trimIndent()
@@ -2794,20 +2798,25 @@ private fun Class<*>.authorityLabel(forbiddenTypes: Map<String, String> = FORBID
 
 private fun Method.isAdmittedIdMapBindDefaultReceiver(): Boolean =
     declaringClass == IdMapRepository::class.java &&
-        name == "bind\$default" &&
         Modifier.isPublic(modifiers) &&
         Modifier.isStatic(modifiers) &&
         isSynthetic &&
-        parameterTypes.toList() == listOf(
-            IdMapRepository::class.java,
-            RootedPath::class.java,
-            PageId::class.java,
-            java.lang.Boolean.TYPE,
-            Supersession::class.java,
-            java.lang.Integer.TYPE,
-            Any::class.java,
-        ) &&
-        returnType == BindOutcome::class.java
+        when (name) {
+            "bind\$default" -> parameterTypes.toList() == listOf(
+                IdMapRepository::class.java,
+                RootedPath::class.java,
+                PageId::class.java,
+                java.lang.Boolean.TYPE,
+                Supersession::class.java,
+                java.lang.Integer.TYPE,
+                Any::class.java,
+            ) && returnType == BindOutcome::class.java
+            "access\$confirmUnchangedBindings\$jd" -> parameterTypes.toList() == listOf(
+                IdMapRepository::class.java,
+                List::class.java,
+            ) && returnType == java.lang.Boolean.TYPE
+            else -> false
+        }
 
 private fun Method.authorityGenericParameterTypes(): List<Type> =
     genericParameterTypes.drop(if (isAdmittedIdMapBindDefaultReceiver()) 1 else 0)

@@ -7,6 +7,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -34,6 +35,12 @@ tasks.named("check") {
 
 group = "com.plainbase"
 version = rootProject.version
+
+val performanceScreenAllowCoverage = providers.gradleProperty("performanceScreenAllowCoverage").isPresent
+val performanceScreenHeap = "1g"
+val performanceScreenSizeDeadline = Duration.ofMinutes(2)
+val performanceScreenTaskTimeout = Duration.ofMinutes(10)
+val performanceScreenProfiles = setOf("screen", "create-on-off", "create-off-on")
 
 kotlin {
     jvmToolchain(25)
@@ -63,6 +70,11 @@ distributions {
 
 kover {
     currentProject {
+        instrumentation {
+            if (!performanceScreenAllowCoverage) {
+                disabledForTestTasks.add("performanceScreen")
+            }
+        }
         sources {
             includedSourceSets.add("main")
         }
@@ -291,11 +303,11 @@ sourceSets {
     }
 }
 
-// ---- Test execution split: JVM runs EVERYTHING, native runs ONLY the nativeTest source set ----
+// ---- Test execution split: JVM runs the configured suite, native runs only nativeTest ----
 //
-// The JVM `test` task runs the FULL suite: its own Kotest/MockK logic tests PLUS the kotlin.test
-// native-smoke tests from the `nativeTest` source set (folded in below). So `./gradlew build`
-// always exercises every test on the JVM. The `nativeTest` source set additionally feeds the
+// The JVM `test` task runs the full configured suite: its own Kotest/MockK logic tests PLUS the
+// kotlin.test native-smoke tests from the `nativeTest` source set (folded in below). The opt-in
+// performance worker remains separate. The `nativeTest` source set additionally feeds the
 // GraalVM native test image - and ONLY it does, so the closed-world image never sees Kotest/MockK.
 val mainRuntimeClasspathInput = sourceSets["main"].runtimeClasspath
 val testRuntimeClasspathInput: FileCollection = sourceSets["test"].runtimeClasspath
@@ -311,6 +323,7 @@ fun Test.configurePlainbaseMainRuntimeClasspath() {
 
 tasks.test {
     useJUnitPlatform()
+    exclude("com/plainbase/performance/**")
     // ServerBootCliContractTest consumes this execution-time production classpath and evidence identity.
     configurePlainbaseMainRuntimeClasspath()
     inputs.files(testRuntimeClasspathInput)
@@ -331,6 +344,224 @@ tasks.test {
         events("passed", "failed", "skipped")
         showStandardStreams = true
     }
+}
+
+// Opt-in bounded backend screening only. This task is intentionally outside `check`/`build` and the native source-set wiring.
+val performanceScreen = tasks.register<Test>("performanceScreen") {
+    description = "Runs the opt-in bounded backend performance screen."
+    group = "verification"
+    useJUnitPlatform()
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    configurePlainbaseMainRuntimeClasspath()
+    maxParallelForks = 1
+    maxHeapSize = performanceScreenHeap
+    timeout.set(performanceScreenTaskTimeout)
+    filter { includeTestsMatching("com.plainbase.performance.BackendPerformanceScreenTest") }
+    outputs.upToDateWhen { false }
+    outputs.cacheIf { false }
+    doFirst {
+        val profile = providers.gradleProperty("performanceProfile").orElse("screen").get()
+        require(profile in performanceScreenProfiles) {
+            "unsupported performanceProfile: $profile (expected one of ${performanceScreenProfiles.joinToString()})"
+        }
+        val runId = providers.gradleProperty("performanceRun").orNull
+            ?: throw GradleException("performanceScreen requires -PperformanceRun=<run-id>")
+        require(runId.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,31}"))) {
+            "unsafe performanceRun: $runId"
+        }
+        val outputRoot = rootProject.layout.projectDirectory.dir("docs/reports/data/backend-performance").dir(runId).asFile
+        val fixtureRoot = layout.buildDirectory.dir("performance-screen").get().asFile.resolve(runId)
+        val sourceStagingRoot = layout.buildDirectory.dir("performance-screen-source").get().asFile.resolve(runId)
+        require(!outputRoot.exists()) { "performance evidence directory already exists: $outputRoot" }
+        require(!fixtureRoot.exists()) { "performance fixture directory already exists: $fixtureRoot" }
+        require(!sourceStagingRoot.exists()) { "performance source staging directory already exists: $sourceStagingRoot" }
+
+        val probeFile = "server/src/test/kotlin/com/plainbase/performance/BackendPerformanceScreenTest.kt"
+        val lifecycleTestFile = "server/src/test/kotlin/com/plainbase/performance/BackendPerformanceScreenLifecycleTest.kt"
+        val requiredSourceFiles = setOf(
+            "server/src/main/kotlin/com/plainbase/frameworks/sqldelight/DatabaseFactory.kt",
+            "server/src/main/kotlin/com/plainbase/frameworks/sqldelight/BeginImmediateSqliteDriver.kt",
+            "server/src/main/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepository.kt",
+        )
+        fun gitBytes(args: List<String>): ByteArray {
+            val process =
+                ProcessBuilder(listOf("git") + args)
+                    .directory(rootProject.projectDir)
+                    .redirectErrorStream(true)
+                    .start()
+            val output = process.inputStream.use { it.readBytes() }
+            require(process.waitFor() == 0) { "git metadata capture failed: ${output.toString(Charsets.UTF_8)}" }
+            return output
+        }
+        fun sha256(bytes: ByteArray): String =
+            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { byte -> "%02x".format(byte) }
+
+        fun gitNames(args: List<String>): List<String> =
+            gitBytes(args).toString(Charsets.UTF_8).split('\u0000').filter { it.isNotEmpty() }
+
+        val head = gitBytes(listOf("rev-parse", "HEAD")).toString(Charsets.UTF_8).trim()
+        val patchBytes = gitBytes(listOf("diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--", "server"))
+        val allowedUntrackedSourceFiles = setOf(probeFile, lifecycleTestFile)
+        val untrackedSourceFiles =
+            gitBytes(listOf("status", "--porcelain=v1", "--untracked-files=all", "-z", "--", "server"))
+                .toString(Charsets.UTF_8)
+                .split('\u0000')
+                .filter { it.startsWith("?? ") }
+                .map { it.substring(3) }
+                .filter {
+                    it.startsWith("server/src/main/") ||
+                        it.startsWith("server/src/test/") ||
+                        it.startsWith("server/src/nativeTest/")
+                }
+                .toList()
+        require(untrackedSourceFiles.all { it in allowedUntrackedSourceFiles }) {
+            "uncaptured untracked server source: ${untrackedSourceFiles.filterNot { it in allowedUntrackedSourceFiles }}"
+        }
+        val trackedSourceFiles =
+            gitNames(listOf("diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--diff-filter=ACMRT", "HEAD", "--", "server"))
+                .filter { rootProject.file(it).isFile }
+                .toList()
+        val sourceFiles =
+            (
+                trackedSourceFiles +
+                    requiredSourceFiles +
+                    allowedUntrackedSourceFiles.filter { rootProject.file(it).isFile }
+            )
+                .distinct()
+                .sorted()
+        require(probeFile in sourceFiles && lifecycleTestFile in sourceFiles) {
+            "performance source identity does not include all untracked test sources"
+        }
+        val sourceHashes = sourceFiles.joinToString(";") { sourceFile ->
+            "$sourceFile=${sha256(Files.readAllBytes(rootProject.file(sourceFile).toPath()))}"
+        }
+        Files.createDirectories(sourceStagingRoot.toPath())
+        Files.write(sourceStagingRoot.toPath().resolve("tracked.patch"), patchBytes)
+        Files.write(
+            sourceStagingRoot.toPath().resolve("BackendPerformanceScreenTest.kt"),
+            Files.readAllBytes(rootProject.file(probeFile).toPath()),
+        )
+        Files.write(
+            sourceStagingRoot.toPath().resolve("BackendPerformanceScreenLifecycleTest.kt"),
+            Files.readAllBytes(rootProject.file(lifecycleTestFile).toPath()),
+        )
+        val gradleStartParameters = listOf(
+            "gradle=${gradle.gradleVersion}",
+            "tasks=${gradle.startParameter.taskNames.joinToString(",")}",
+            "project_properties=${gradle.startParameter.projectProperties.keys.sorted().joinToString(",")}",
+        ).joinToString(";")
+        systemProperty("plainbase.performance.screen.enabled", "true")
+        systemProperty("plainbase.performance.screen.run", runId)
+        systemProperty("plainbase.performance.screen.output", outputRoot.absolutePath)
+        systemProperty("plainbase.performance.screen.fixtures", fixtureRoot.absolutePath)
+        systemProperty("plainbase.performance.screen.profile", profile)
+        systemProperty("plainbase.performance.screen.head", head)
+        systemProperty("plainbase.performance.screen.patch", sha256(patchBytes))
+        systemProperty("plainbase.performance.screen.sourceStaging", sourceStagingRoot.absolutePath)
+        systemProperty("plainbase.performance.screen.gradleStartParameters", gradleStartParameters)
+        systemProperty(
+            "plainbase.performance.screen.sourceFiles",
+            sourceFiles.map { rootProject.file(it).absolutePath }.joinToString(File.pathSeparator),
+        )
+        systemProperty("plainbase.performance.screen.sourceKeys", sourceFiles.joinToString(File.pathSeparator))
+        systemProperty("plainbase.performance.screen.expectedSourceHashes", sourceHashes)
+        systemProperty("plainbase.performance.screen.configuredHeap", performanceScreenHeap)
+        systemProperty(
+            "plainbase.performance.screen.sizeDeadlineMs",
+            performanceScreenSizeDeadline.toMillis().toString(),
+        )
+        systemProperty(
+            "plainbase.performance.screen.taskTimeoutMs",
+            performanceScreenTaskTimeout.toMillis().toString(),
+        )
+        systemProperty(
+            "plainbase.performance.screen.versions",
+            configurations.getByName("testRuntimeClasspath").resolvedConfiguration.resolvedArtifacts
+                .map { artifact -> "${artifact.moduleVersion.id.group}:${artifact.name}=${artifact.moduleVersion.id.version}" }
+                .sorted()
+                .joinToString(","),
+        )
+    }
+    testLogging {
+        events("passed", "failed", "skipped")
+        showStandardStreams = true
+    }
+    doLast {
+        val profile = providers.gradleProperty("performanceProfile").orElse("screen").get()
+        val runId = providers.gradleProperty("performanceRun").orNull
+            ?: throw GradleException("performanceScreen requires -PperformanceRun=<run-id>")
+        val outputRoot = rootProject.layout.projectDirectory.dir("docs/reports/data/backend-performance").dir(runId).asFile
+        val observations = outputRoot.resolve("observations.csv")
+        if (!observations.isFile) throw GradleException("performance screen wrote no observations: $observations")
+        fun csvFields(row: String): List<String> {
+            val fields = mutableListOf<String>()
+            val field = StringBuilder()
+            var quoted = false
+            var index = 0
+            while (index < row.length) {
+                val character = row[index]
+                when {
+                    character == '"' && quoted && index + 1 < row.length && row[index + 1] == '"' -> {
+                        field.append('"')
+                        index += 1
+                    }
+                    character == '"' -> quoted = !quoted
+                    character == ',' && !quoted -> {
+                        fields += field.toString()
+                        field.clear()
+                    }
+                    else -> field.append(character)
+                }
+                index += 1
+            }
+            require(!quoted) { "malformed observations CSV row: $row" }
+            fields += field.toString()
+            return fields
+        }
+        val rows = Files.readAllLines(observations.toPath())
+        require(rows.isNotEmpty()) { "performance screen wrote an empty observations file: $observations" }
+        val header = csvFields(rows.first())
+        require(header.getOrNull(5) == "status") { "performance observations status column moved from index 5" }
+        require(header.lastOrNull() == "arm") { "performance observations arm column is not final" }
+        val parsedRows = rows.drop(1).map(::csvFields)
+        require(parsedRows.all { it.size == header.size }) { "performance observations row width mismatch" }
+        val expected = when (profile) {
+            "screen" -> 246
+            "create-on-off", "create-off-on" -> 28
+            else -> throw GradleException("unsupported performanceProfile: $profile")
+        }
+        val completedRows = parsedRows.filter { it[5] == "completed" }
+        val arms = completedRows.map { it.last() }.toSet()
+        val expectedArms = if (profile == "screen") setOf("none") else setOf("on", "off")
+        require(arms == expectedArms) { "performance observations arm identity mismatch: $arms" }
+        logger.lifecycle(
+            "performance-screen profile=$profile completed observations=${completedRows.size} " +
+                "expected=$expected arms=${arms.sorted().joinToString(",")}",
+        )
+        if (completedRows.size != expected) {
+            throw GradleException("performance screen completed ${completedRows.size} observations; expected $expected")
+        }
+    }
+}
+
+val performanceScreenLifecycleTest = tasks.register<Test>("performanceScreenLifecycleTest") {
+    description = "Runs deterministic lifecycle checks for the bounded backend performance screen."
+    group = "verification"
+    useJUnitPlatform()
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    configurePlainbaseMainRuntimeClasspath()
+    maxParallelForks = 1
+    filter { includeTestsMatching("com.plainbase.performance.BackendPerformanceScreenLifecycleTest") }
+    testLogging {
+        events("passed", "failed", "skipped")
+        showStandardStreams = true
+    }
+}
+
+tasks.named("check") {
+    dependsOn(performanceScreenLifecycleTest)
 }
 
 // The Phase-1 acceptance gate as one named task (chunk 8). The gate ALREADY runs inside `test`
@@ -452,7 +683,7 @@ graalvmNative {
 // registerTestBinary("test") throws "NativeImageOptions ... already exists"), so we re-point its
 // own mechanism here: run the UID listener on `nativeTestList` (the nativeTest source set only) and
 // feed BOTH the test list AND the image classpath from that source set. Net effect: JVM `test`
-// still runs the FULL suite; the native image is built from kotlin.test-only code, no Kotest/MockK.
+// still runs the full configured suite; the native image is built from kotlin.test-only code, no Kotest/MockK.
 run {
     val nativeTestListDir = layout.buildDirectory.dir("test-results/nativeTestList/testlist")
     val nativeTestSourceSet = sourceSets["nativeTest"]

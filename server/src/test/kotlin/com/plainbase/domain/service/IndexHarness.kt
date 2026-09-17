@@ -1,10 +1,12 @@
 package com.plainbase.domain.service
 
+import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.NoTopology
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.BindingLatch
@@ -44,12 +46,13 @@ import kotlin.time.Clock
 
 /**
  * The chunk-5 integration harness: a real [IndexBuilder] over a real tree ([LocalContentStore]),
- * real rendering ([FlexmarkRenderer]), and real persistence (in-memory SQLite repos) — the same
+ * real rendering ([FlexmarkRenderer]), and real persistence (SQLite repos) — the same
  * wiring `indexModule` produces, minus HTTP. One harness = one DATA_DIR lifetime, so successive
  * [IndexBuilder.rebuild]s exercise rescan semantics (move aliases, issue accumulation) for real.
  *
  * [contentStore], [frontmatterParser], and [rendererFactory] are injectable so the one-pass
- * counting test can wrap them.
+ * counting test can wrap them. The [decorateIdMap] seam keeps that decoration on the same
+ * repository instance every consumer receives.
  */
 class IndexHarness(
     root: Path,
@@ -66,13 +69,19 @@ class IndexHarness(
     sources: List<IndexBuilder.Source>? = null,
     /** C4: the availability holder the builder probes/marks through. Empty (every root serving) by default. */
     val availability: RootAvailability = RootAvailability(Clock.System),
+    /** Allows corpus tests to inject an isolated file-backed SQL driver. */
+    driverFactory: () -> SqlDriver = DatabaseFactory::createInMemoryDriver,
+    /** Allows performance tests to decorate the one real SQLDelight identity repository. */
+    decorateIdMap: (IdMapRepository) -> IdMapRepository = { it },
+    /** Allows eligibility tests to exercise the builder's explicit registered-root port independently of topology. */
+    registeredRootsOverride: Set<RootName>? = null,
 ) : AutoCloseable {
 
-    private val driver = DatabaseFactory.createInMemoryDriver()
+    private val driver = driverFactory()
     private val database = DatabaseFactory.createDatabase(driver)
     private val citations = CitationFactory()
 
-    val idMap = SqlDelightIdMapRepository(database)
+    val idMap = decorateIdMap(SqlDelightIdMapRepository(database))
     val aliases = SqlDelightUrlAliasRepository(database)
     val registry = UrlAliasRegistry(aliases)
     val checkpoints = SqlDelightPageCheckpointRepository(database)
@@ -85,7 +94,7 @@ class IndexHarness(
      */
     val retirements = SqlDelightRetirementRepository(database)
 
-    // A3 auth substrate over the SAME in-memory DB (the schema includes subject_role/audit_log via 5.sqm). The
+    // A3 auth substrate over the SAME SQLite DB (the schema includes subject_role/audit_log via 5.sqm). The
     // route-test harnesses build a PolicyService over these + seed a role; ApiTokenService mints test bearers.
     val roleRepository = SqlDelightRoleRepository(database)
     val auditRepository = SqlDelightAuditRepository(database)
@@ -93,7 +102,7 @@ class IndexHarness(
     val proposalRepository = SqlDelightProposalRepository(database)
     val apiTokens = ApiTokenService(minter = ApiTokenMinter(), hasher = TokenHasher(), tokens = apiTokenRepository, clock = Clock.System)
 
-    // A4a human-auth substrate over the SAME in-memory DB (the v7 schema includes users/sessions/setup_tokens).
+    // A4a human-auth substrate over the SAME SQLite DB (the v7 schema includes users/sessions/setup_tokens).
     val userRepository = SqlDelightUserRepository(database)
     val sessionRepository = SqlDelightSessionRepository(database)
     val setupTokenRepository = SqlDelightSetupTokenRepository(database)
@@ -143,6 +152,7 @@ class IndexHarness(
     val identityProvider = UuidV7IdProvider()
     val identity = PageIdentityService(identityProvider)
     val bindings = BindingLatch(NoTopology)
+    private val registeredRootNames = registeredRootsOverride ?: rootRegistry.roots.map { it.name }.toSet()
 
     /** Declares [root] under continuous observation - what `serve()` does when it installs the root's watcher. */
     fun observe(root: String = "docs"): IndexHarness = apply { epochs.observing(RootName.require(root)) }
@@ -164,7 +174,7 @@ class IndexHarness(
         checkpoint = checkpoints,
         citations = citations,
         rootRank = rootRegistry::rank,
-        registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
+        registeredRoots = registeredRootNames,
         // The §B3 checkpoint-replace listener is part of the production graph (checkpointModule),
         // so the harness always registers it first — callers' listeners follow, as in `getAll()`.
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)) + listeners,

@@ -2,6 +2,7 @@ package com.plainbase.frameworks.sqldelight
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import org.junit.jupiter.api.Tag
@@ -25,6 +26,58 @@ import kotlin.test.assertNull
  */
 @Tag("native")
 class IdMapClaimantQueriesNativeTest {
+
+    @Test
+    fun `same binding preserves state while every bound bind advances the epoch in-image`() {
+        val dir = Files.createTempDirectory("pb-native-id-map-guard")
+        try {
+            DatabaseFactory.createDriver(dir.resolve("plainbase.db")).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                val repo = SqlDelightIdMapRepository(db)
+                val root = RootName.PRIMARY
+                val path = RootedPath(root, TreePath.require("guides/a.md"))
+                val newPath = RootedPath(root, TreePath.require("guides/new.md"))
+                val id = PageId.require("01010101-0101-0101-0101-010101010101")
+                val newRowId = PageId.require("02020202-0202-0202-0202-020202020202")
+                val replacementId = PageId.require("03030303-0303-0303-0303-030303030303")
+
+                db.rootObservationQueries.upsertObservation(root = root, observationId = 41L)
+                val initial = db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne()
+                assertEquals(41L, initial.observation_id)
+                assertEquals(0L, initial.binding_epoch)
+
+                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = true))
+                val beforeRepeat = db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne()
+                assertEquals(1L, beforeRepeat.binding_epoch)
+
+                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = true))
+                val afterRepeat = db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne()
+                assertEquals(41L, afterRepeat.observation_id)
+                assertEquals(beforeRepeat.binding_epoch + 1L, afterRepeat.binding_epoch)
+                assertEquals(id, assertNotNull(repo.find(path)).id)
+                assertEquals(true, assertNotNull(repo.find(path)).materialized)
+
+                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = false))
+                assertEquals(false, assertNotNull(repo.find(path)).materialized)
+                assertEquals(3L, db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne().binding_epoch)
+
+                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = true))
+                assertEquals(true, assertNotNull(repo.find(path)).materialized)
+                assertEquals(4L, db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne().binding_epoch)
+
+                assertEquals(BindOutcome.Bound, repo.bind(newPath, newRowId, materialized = false))
+                assertEquals(newRowId, assertNotNull(repo.find(newPath)).id)
+
+                assertEquals(BindOutcome.Bound, repo.bind(path, replacementId, materialized = true))
+                assertEquals(replacementId, assertNotNull(repo.find(path)).id)
+                val tombstone = assertNotNull(repo.retiredAt(root, id))
+                assertEquals(id, tombstone.id)
+                assertEquals(path, tombstone.path)
+            }
+        } finally {
+            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
 
     @Test
     fun `rootsHoldingId, retiredRootsHoldingId and retiredAt round-trip in-image`() {

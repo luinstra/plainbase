@@ -1,0 +1,595 @@
+diff --git a/server/build.gradle.kts b/server/build.gradle.kts
+index cd562c3..df8f83f 100644
+--- a/server/build.gradle.kts
++++ b/server/build.gradle.kts
+@@ -7,6 +7,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+ import java.nio.file.Files
+ import java.nio.file.StandardCopyOption
+ import java.security.MessageDigest
++import java.time.Duration
+ import java.util.UUID
+ import java.util.concurrent.ConcurrentHashMap
+ import java.util.concurrent.TimeUnit
+@@ -35,6 +36,12 @@ tasks.named("check") {
+ group = "com.plainbase"
+ version = rootProject.version
+ 
++val performanceScreenAllowCoverage = providers.gradleProperty("performanceScreenAllowCoverage").isPresent
++val performanceScreenHeap = "1g"
++val performanceScreenSizeDeadline = Duration.ofMinutes(2)
++val performanceScreenTaskTimeout = Duration.ofMinutes(10)
++val performanceScreenProfiles = setOf("screen", "create-on-off", "create-off-on")
++
+ kotlin {
+     jvmToolchain(25)
+     compilerOptions {
+@@ -63,6 +70,11 @@ distributions {
+ 
+ kover {
+     currentProject {
++        instrumentation {
++            if (!performanceScreenAllowCoverage) {
++                disabledForTestTasks.add("performanceScreen")
++            }
++        }
+         sources {
+             includedSourceSets.add("main")
+         }
+@@ -291,11 +303,11 @@ sourceSets {
+     }
+ }
+ 
+-// ---- Test execution split: JVM runs EVERYTHING, native runs ONLY the nativeTest source set ----
++// ---- Test execution split: JVM runs the configured suite, native runs only nativeTest ----
+ //
+-// The JVM `test` task runs the FULL suite: its own Kotest/MockK logic tests PLUS the kotlin.test
+-// native-smoke tests from the `nativeTest` source set (folded in below). So `./gradlew build`
+-// always exercises every test on the JVM. The `nativeTest` source set additionally feeds the
++// The JVM `test` task runs the full configured suite: its own Kotest/MockK logic tests PLUS the
++// kotlin.test native-smoke tests from the `nativeTest` source set (folded in below). The opt-in
++// performance worker remains separate. The `nativeTest` source set additionally feeds the
+ // GraalVM native test image - and ONLY it does, so the closed-world image never sees Kotest/MockK.
+ val mainRuntimeClasspathInput = sourceSets["main"].runtimeClasspath
+ val testRuntimeClasspathInput: FileCollection = sourceSets["test"].runtimeClasspath
+@@ -311,6 +323,7 @@ fun Test.configurePlainbaseMainRuntimeClasspath() {
+ 
+ tasks.test {
+     useJUnitPlatform()
++    exclude("com/plainbase/performance/**")
+     // ServerBootCliContractTest consumes this execution-time production classpath and evidence identity.
+     configurePlainbaseMainRuntimeClasspath()
+     inputs.files(testRuntimeClasspathInput)
+@@ -333,6 +346,224 @@ tasks.test {
+     }
+ }
+ 
++// Opt-in bounded backend screening only. This task is intentionally outside `check`/`build` and the native source-set wiring.
++val performanceScreen = tasks.register<Test>("performanceScreen") {
++    description = "Runs the opt-in bounded backend performance screen."
++    group = "verification"
++    useJUnitPlatform()
++    testClassesDirs = sourceSets["test"].output.classesDirs
++    classpath = sourceSets["test"].runtimeClasspath
++    configurePlainbaseMainRuntimeClasspath()
++    maxParallelForks = 1
++    maxHeapSize = performanceScreenHeap
++    timeout.set(performanceScreenTaskTimeout)
++    filter { includeTestsMatching("com.plainbase.performance.BackendPerformanceScreenTest") }
++    outputs.upToDateWhen { false }
++    outputs.cacheIf { false }
++    doFirst {
++        val profile = providers.gradleProperty("performanceProfile").orElse("screen").get()
++        require(profile in performanceScreenProfiles) {
++            "unsupported performanceProfile: $profile (expected one of ${performanceScreenProfiles.joinToString()})"
++        }
++        val runId = providers.gradleProperty("performanceRun").orNull
++            ?: throw GradleException("performanceScreen requires -PperformanceRun=screen-XX")
++        require(runId.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,31}"))) {
++            "unsafe performanceRun: $runId"
++        }
++        val outputRoot = rootProject.layout.projectDirectory.dir("docs/reports/data/backend-performance").dir(runId).asFile
++        val fixtureRoot = layout.buildDirectory.dir("performance-screen").get().asFile.resolve(runId)
++        val sourceStagingRoot = layout.buildDirectory.dir("performance-screen-source").get().asFile.resolve(runId)
++        require(!outputRoot.exists()) { "performance evidence directory already exists: $outputRoot" }
++        require(!fixtureRoot.exists()) { "performance fixture directory already exists: $fixtureRoot" }
++        require(!sourceStagingRoot.exists()) { "performance source staging directory already exists: $sourceStagingRoot" }
++
++        val probeFile = "server/src/test/kotlin/com/plainbase/performance/BackendPerformanceScreenTest.kt"
++        val lifecycleTestFile = "server/src/test/kotlin/com/plainbase/performance/BackendPerformanceScreenLifecycleTest.kt"
++        val requiredSourceFiles = setOf(
++            "server/src/main/kotlin/com/plainbase/frameworks/sqldelight/DatabaseFactory.kt",
++            "server/src/main/kotlin/com/plainbase/frameworks/sqldelight/BeginImmediateSqliteDriver.kt",
++            "server/src/main/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepository.kt",
++        )
++        fun gitBytes(args: List<String>): ByteArray {
++            val process =
++                ProcessBuilder(listOf("git") + args)
++                    .directory(rootProject.projectDir)
++                    .redirectErrorStream(true)
++                    .start()
++            val output = process.inputStream.use { it.readBytes() }
++            require(process.waitFor() == 0) { "git metadata capture failed: ${output.toString(Charsets.UTF_8)}" }
++            return output
++        }
++        fun sha256(bytes: ByteArray): String =
++            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { byte -> "%02x".format(byte) }
++
++        fun gitNames(args: List<String>): List<String> =
++            gitBytes(args).toString(Charsets.UTF_8).split('\u0000').filter { it.isNotEmpty() }
++
++        val head = gitBytes(listOf("rev-parse", "HEAD")).toString(Charsets.UTF_8).trim()
++        val patchBytes = gitBytes(listOf("diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--", "server"))
++        val allowedUntrackedSourceFiles = setOf(probeFile, lifecycleTestFile)
++        val untrackedSourceFiles =
++            gitBytes(listOf("status", "--porcelain=v1", "--untracked-files=all", "-z", "--", "server"))
++                .toString(Charsets.UTF_8)
++                .split('\u0000')
++                .filter { it.startsWith("?? ") }
++                .map { it.substring(3) }
++                .filter {
++                    it.startsWith("server/src/main/") ||
++                        it.startsWith("server/src/test/") ||
++                        it.startsWith("server/src/nativeTest/")
++                }
++                .toList()
++        require(untrackedSourceFiles.all { it in allowedUntrackedSourceFiles }) {
++            "uncaptured untracked server source: ${untrackedSourceFiles.filterNot { it in allowedUntrackedSourceFiles }}"
++        }
++        val trackedSourceFiles =
++            gitNames(listOf("diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--diff-filter=ACMRT", "HEAD", "--", "server"))
++                .filter { rootProject.file(it).isFile }
++                .toList()
++        val sourceFiles =
++            (
++                trackedSourceFiles +
++                    requiredSourceFiles +
++                    allowedUntrackedSourceFiles.filter { rootProject.file(it).isFile }
++            )
++                .distinct()
++                .sorted()
++        require(probeFile in sourceFiles && lifecycleTestFile in sourceFiles) {
++            "performance source identity does not include all untracked test sources"
++        }
++        val sourceHashes = sourceFiles.joinToString(";") { sourceFile ->
++            "$sourceFile=${sha256(Files.readAllBytes(rootProject.file(sourceFile).toPath()))}"
++        }
++        Files.createDirectories(sourceStagingRoot.toPath())
++        Files.write(sourceStagingRoot.toPath().resolve("tracked.patch"), patchBytes)
++        Files.write(
++            sourceStagingRoot.toPath().resolve("BackendPerformanceScreenTest.kt"),
++            Files.readAllBytes(rootProject.file(probeFile).toPath()),
++        )
++        Files.write(
++            sourceStagingRoot.toPath().resolve("BackendPerformanceScreenLifecycleTest.kt"),
++            Files.readAllBytes(rootProject.file(lifecycleTestFile).toPath()),
++        )
++        val gradleStartParameters = listOf(
++            "gradle=${gradle.gradleVersion}",
++            "tasks=${gradle.startParameter.taskNames.joinToString(",")}",
++            "project_properties=${gradle.startParameter.projectProperties.keys.sorted().joinToString(",")}",
++        ).joinToString(";")
++        systemProperty("plainbase.performance.screen.enabled", "true")
++        systemProperty("plainbase.performance.screen.run", runId)
++        systemProperty("plainbase.performance.screen.output", outputRoot.absolutePath)
++        systemProperty("plainbase.performance.screen.fixtures", fixtureRoot.absolutePath)
++        systemProperty("plainbase.performance.screen.profile", profile)
++        systemProperty("plainbase.performance.screen.head", head)
++        systemProperty("plainbase.performance.screen.patch", sha256(patchBytes))
++        systemProperty("plainbase.performance.screen.sourceStaging", sourceStagingRoot.absolutePath)
++        systemProperty("plainbase.performance.screen.gradleStartParameters", gradleStartParameters)
++        systemProperty(
++            "plainbase.performance.screen.sourceFiles",
++            sourceFiles.map { rootProject.file(it).absolutePath }.joinToString(File.pathSeparator),
++        )
++        systemProperty("plainbase.performance.screen.sourceKeys", sourceFiles.joinToString(File.pathSeparator))
++        systemProperty("plainbase.performance.screen.expectedSourceHashes", sourceHashes)
++        systemProperty("plainbase.performance.screen.configuredHeap", performanceScreenHeap)
++        systemProperty(
++            "plainbase.performance.screen.sizeDeadlineMs",
++            performanceScreenSizeDeadline.toMillis().toString(),
++        )
++        systemProperty(
++            "plainbase.performance.screen.taskTimeoutMs",
++            performanceScreenTaskTimeout.toMillis().toString(),
++        )
++        systemProperty(
++            "plainbase.performance.screen.versions",
++            configurations.getByName("testRuntimeClasspath").resolvedConfiguration.resolvedArtifacts
++                .map { artifact -> "${artifact.moduleVersion.id.group}:${artifact.name}=${artifact.moduleVersion.id.version}" }
++                .sorted()
++                .joinToString(","),
++        )
++    }
++    testLogging {
++        events("passed", "failed", "skipped")
++        showStandardStreams = true
++    }
++    doLast {
++        val profile = providers.gradleProperty("performanceProfile").orElse("screen").get()
++        val runId = providers.gradleProperty("performanceRun").orNull
++            ?: throw GradleException("performanceScreen requires -PperformanceRun=screen-XX")
++        val outputRoot = rootProject.layout.projectDirectory.dir("docs/reports/data/backend-performance").dir(runId).asFile
++        val observations = outputRoot.resolve("observations.csv")
++        if (!observations.isFile) throw GradleException("performance screen wrote no observations: $observations")
++        fun csvFields(row: String): List<String> {
++            val fields = mutableListOf<String>()
++            val field = StringBuilder()
++            var quoted = false
++            var index = 0
++            while (index < row.length) {
++                val character = row[index]
++                when {
++                    character == '"' && quoted && index + 1 < row.length && row[index + 1] == '"' -> {
++                        field.append('"')
++                        index += 1
++                    }
++                    character == '"' -> quoted = !quoted
++                    character == ',' && !quoted -> {
++                        fields += field.toString()
++                        field.clear()
++                    }
++                    else -> field.append(character)
++                }
++                index += 1
++            }
++            require(!quoted) { "malformed observations CSV row: $row" }
++            fields += field.toString()
++            return fields
++        }
++        val rows = Files.readAllLines(observations.toPath())
++        require(rows.isNotEmpty()) { "performance screen wrote an empty observations file: $observations" }
++        val header = csvFields(rows.first())
++        require(header.getOrNull(5) == "status") { "performance observations status column moved from index 5" }
++        require(header.lastOrNull() == "arm") { "performance observations arm column is not final" }
++        val parsedRows = rows.drop(1).map(::csvFields)
++        require(parsedRows.all { it.size == header.size }) { "performance observations row width mismatch" }
++        val expected = when (profile) {
++            "screen" -> 246
++            "create-on-off", "create-off-on" -> 28
++            else -> throw GradleException("unsupported performanceProfile: $profile")
++        }
++        val completedRows = parsedRows.filter { it[5] == "completed" }
++        val arms = completedRows.map { it.last() }.toSet()
++        val expectedArms = if (profile == "screen") setOf("none") else setOf("on", "off")
++        require(arms == expectedArms) { "performance observations arm identity mismatch: $arms" }
++        logger.lifecycle(
++            "performance-screen profile=$profile completed observations=${completedRows.size} " +
++                "expected=$expected arms=${arms.sorted().joinToString(",")}",
++        )
++        if (completedRows.size != expected) {
++            throw GradleException("performance screen completed ${completedRows.size} observations; expected $expected")
++        }
++    }
++}
++
++val performanceScreenLifecycleTest = tasks.register<Test>("performanceScreenLifecycleTest") {
++    description = "Runs deterministic lifecycle checks for the bounded backend performance screen."
++    group = "verification"
++    useJUnitPlatform()
++    testClassesDirs = sourceSets["test"].output.classesDirs
++    classpath = sourceSets["test"].runtimeClasspath
++    configurePlainbaseMainRuntimeClasspath()
++    maxParallelForks = 1
++    filter { includeTestsMatching("com.plainbase.performance.BackendPerformanceScreenLifecycleTest") }
++    testLogging {
++        events("passed", "failed", "skipped")
++        showStandardStreams = true
++    }
++}
++
++tasks.named("check") {
++    dependsOn(performanceScreenLifecycleTest)
++}
++
+ // The Phase-1 acceptance gate as one named task (chunk 8). The gate ALREADY runs inside `test`
+ // (and therefore `build`/CI) like every other suite; this is the convenience handle to run it
+ // alone. The native half of the gate is Phase1AcceptanceNativeTest, which `nativeTest` runs
+@@ -452,7 +683,7 @@ graalvmNative {
+ // registerTestBinary("test") throws "NativeImageOptions ... already exists"), so we re-point its
+ // own mechanism here: run the UID listener on `nativeTestList` (the nativeTest source set only) and
+ // feed BOTH the test list AND the image classpath from that source set. Net effect: JVM `test`
+-// still runs the FULL suite; the native image is built from kotlin.test-only code, no Kotest/MockK.
++// still runs the full configured suite; the native image is built from kotlin.test-only code, no Kotest/MockK.
+ run {
+     val nativeTestListDir = layout.buildDirectory.dir("test-results/nativeTestList/testlist")
+     val nativeTestSourceSet = sourceSets["nativeTest"]
+diff --git a/server/src/main/kotlin/com/plainbase/domain/service/WritePipeline.kt b/server/src/main/kotlin/com/plainbase/domain/service/WritePipeline.kt
+index ab4a8f5..8c7e8e0 100644
+--- a/server/src/main/kotlin/com/plainbase/domain/service/WritePipeline.kt
++++ b/server/src/main/kotlin/com/plainbase/domain/service/WritePipeline.kt
+@@ -29,7 +29,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
+  * The serialized write pipeline (PB-WRITE-1): the single funnel for a content-mutating
+  * save. Every [write] runs under ONE `@Synchronized` monitor (the house [IndexBuilder] idiom, never
+  * `@Volatile`); the disk write is a single atomic, disk-authoritative compare-and-swap, and the index
+- * update is a targeted O(changed-page) reindex. Pure domain — no framework imports.
++ * update is a targeted reindex of the changed page. Pure domain; no framework imports.
+  *
+  * The critical section, in order:
+  *  0. **Edit-classification guard**: a buffer that changes `id`/`slug`/
+@@ -482,7 +482,7 @@ class WritePipeline(
+             // The save's commit SHA (null off Git). Threads the proposer->author + approver->committer
+             // attribution from the apply call site through [WriteIntent]; a plain PUT leaves them null (server identity).
+             val commit = historyHook.commit(intent.root, intent.path, intent.bytes, intent.author, intent.committer)
+-            // Targeted O(1); THROWS on a vanished save-path page. Addressed by the LOCATION the CAS just wrote
++            // Targeted reindex; THROWS on a vanished save-path page. Addressed by the LOCATION the CAS just wrote
+             // to - never by the page id, which a concurrent rebuild can make AMBIGUOUS by admitting that same id
+             // under another root between the CAS and this call, sending the reindex at a file these bytes never
+             // touched.
+diff --git a/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/IdMap.sq b/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/IdMap.sq
+index 81b7a5b..0f2bf31 100644
+--- a/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/IdMap.sq
++++ b/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/IdMap.sq
+@@ -174,7 +174,8 @@ ON CONFLICT(root, id) DO UPDATE SET path = excluded.path, materialized = exclude
+ upsertBinding:
+ INSERT INTO id_map(root, path, id, materialized)
+ VALUES (:root, :path, :id, :materialized)
+-ON CONFLICT(root, path) DO UPDATE SET id = excluded.id, materialized = excluded.materialized;
++ON CONFLICT(root, path) DO UPDATE SET id = excluded.id, materialized = excluded.materialized
++WHERE id IS NOT excluded.id OR materialized IS NOT excluded.materialized;
+ 
+ markMaterialized:
+ UPDATE id_map
+diff --git a/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/IdMapClaimantQueriesNativeTest.kt b/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/IdMapClaimantQueriesNativeTest.kt
+index d6d3d13..21505d3 100644
+--- a/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/IdMapClaimantQueriesNativeTest.kt
++++ b/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/IdMapClaimantQueriesNativeTest.kt
+@@ -2,6 +2,7 @@ package com.plainbase.frameworks.sqldelight
+ 
+ import com.plainbase.domain.content.TreePath
+ import com.plainbase.domain.page.PageId
++import com.plainbase.domain.repository.BindOutcome
+ import com.plainbase.domain.root.RootName
+ import com.plainbase.domain.root.RootedPath
+ import org.junit.jupiter.api.Tag
+@@ -26,6 +27,58 @@ import kotlin.test.assertNull
+ @Tag("native")
+ class IdMapClaimantQueriesNativeTest {
+ 
++    @Test
++    fun `same binding preserves state while every bound bind advances the epoch in-image`() {
++        val dir = Files.createTempDirectory("pb-native-id-map-guard")
++        try {
++            DatabaseFactory.createDriver(dir.resolve("plainbase.db")).use { driver ->
++                val db = DatabaseFactory.createDatabase(driver)
++                val repo = SqlDelightIdMapRepository(db)
++                val root = RootName.PRIMARY
++                val path = RootedPath(root, TreePath.require("guides/a.md"))
++                val newPath = RootedPath(root, TreePath.require("guides/new.md"))
++                val id = PageId.require("01010101-0101-0101-0101-010101010101")
++                val newRowId = PageId.require("02020202-0202-0202-0202-020202020202")
++                val replacementId = PageId.require("03030303-0303-0303-0303-030303030303")
++
++                db.rootObservationQueries.upsertObservation(root = root, observationId = 41L)
++                val initial = db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne()
++                assertEquals(41L, initial.observation_id)
++                assertEquals(0L, initial.binding_epoch)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = true))
++                val beforeRepeat = db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne()
++                assertEquals(1L, beforeRepeat.binding_epoch)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = true))
++                val afterRepeat = db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne()
++                assertEquals(41L, afterRepeat.observation_id)
++                assertEquals(beforeRepeat.binding_epoch + 1L, afterRepeat.binding_epoch)
++                assertEquals(id, assertNotNull(repo.find(path)).id)
++                assertEquals(true, assertNotNull(repo.find(path)).materialized)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = false))
++                assertEquals(false, assertNotNull(repo.find(path)).materialized)
++                assertEquals(3L, db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne().binding_epoch)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = true))
++                assertEquals(true, assertNotNull(repo.find(path)).materialized)
++                assertEquals(4L, db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne().binding_epoch)
++
++                assertEquals(BindOutcome.Bound, repo.bind(newPath, newRowId, materialized = false))
++                assertEquals(newRowId, assertNotNull(repo.find(newPath)).id)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, replacementId, materialized = true))
++                assertEquals(replacementId, assertNotNull(repo.find(path)).id)
++                val tombstone = assertNotNull(repo.retiredAt(root, id))
++                assertEquals(id, tombstone.id)
++                assertEquals(path, tombstone.path)
++            }
++        } finally {
++            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
++        }
++    }
++
+     @Test
+     fun `rootsHoldingId, retiredRootsHoldingId and retiredAt round-trip in-image`() {
+         val dir = Files.createTempDirectory("pb-native-claimants")
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/IndexBuilderReindexTargetedTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/IndexBuilderReindexTargetedTest.kt
+index bbcf0be..146429d 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/IndexBuilderReindexTargetedTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/IndexBuilderReindexTargetedTest.kt
+@@ -31,12 +31,13 @@ import java.nio.file.Path
+ import java.util.concurrent.ConcurrentHashMap
+ 
+ /**
+- * PB-WRITE-1 named tests 8, 9, 10 — the targeted reindex is O(changed-page) END-TO-END and never
+- * silently no-ops. The three correctness guards: render count = 1, search work = single-page (no
+- * corpus diff), checkpoint writes = 0; plus the vanished-page throw (MUST-FIX 4).
++ * PB-WRITE-1 named tests 8, 9, 10; the targeted reindex updates one page and never silently no-ops.
++ * The three correctness guards: render count = 1, search work = single-page (no corpus diff),
++ * checkpoint writes = 0; plus the vanished-page throw (MUST-FIX 4). These guards do not establish
++ * end-to-end constant cost for the published snapshot.
+  *
+  * Built with explicit spy collaborators (a counting renderer, a counting [SearchProvider], a counting
+- * [PageCheckpointRepository]) so each O(changed-page) claim is asserted independently of corpus size.
++ * [PageCheckpointRepository]) so each targeted-work claim is asserted independently of corpus size.
+  */
+ class IndexBuilderReindexTargetedTest : FunSpec({
+ 
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/IndexHarness.kt b/server/src/test/kotlin/com/plainbase/domain/service/IndexHarness.kt
+index 542f206..68d648d 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/IndexHarness.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/IndexHarness.kt
+@@ -1,10 +1,12 @@
+ package com.plainbase.domain.service
+ 
++import app.cash.sqldelight.db.SqlDriver
+ import com.plainbase.domain.content.ContentStore
+ import com.plainbase.domain.history.HistoryProvider
+ import com.plainbase.domain.page.FrontmatterParser
+ import com.plainbase.domain.page.PageIndexView
+ import com.plainbase.domain.render.MarkdownRenderer
++import com.plainbase.domain.repository.IdMapRepository
+ import com.plainbase.domain.repository.NoTopology
+ import com.plainbase.domain.repository.replaceFrom
+ import com.plainbase.domain.root.BindingLatch
+@@ -44,12 +46,13 @@ import kotlin.time.Clock
+ 
+ /**
+  * The chunk-5 integration harness: a real [IndexBuilder] over a real tree ([LocalContentStore]),
+- * real rendering ([FlexmarkRenderer]), and real persistence (in-memory SQLite repos) — the same
++ * real rendering ([FlexmarkRenderer]), and real persistence (SQLite repos) — the same
+  * wiring `indexModule` produces, minus HTTP. One harness = one DATA_DIR lifetime, so successive
+  * [IndexBuilder.rebuild]s exercise rescan semantics (move aliases, issue accumulation) for real.
+  *
+  * [contentStore], [frontmatterParser], and [rendererFactory] are injectable so the one-pass
+- * counting test can wrap them.
++ * counting test can wrap them. The [decorateIdMap] seam keeps that decoration on the same
++ * repository instance every consumer receives.
+  */
+ class IndexHarness(
+     root: Path,
+@@ -66,13 +69,17 @@ class IndexHarness(
+     sources: List<IndexBuilder.Source>? = null,
+     /** C4: the availability holder the builder probes/marks through. Empty (every root serving) by default. */
+     val availability: RootAvailability = RootAvailability(Clock.System),
++    /** Allows corpus tests to inject an isolated file-backed SQL driver. */
++    driverFactory: () -> SqlDriver = DatabaseFactory::createInMemoryDriver,
++    /** Allows performance tests to decorate the one real SQLDelight identity repository. */
++    decorateIdMap: (IdMapRepository) -> IdMapRepository = { it },
+ ) : AutoCloseable {
+ 
+-    private val driver = DatabaseFactory.createInMemoryDriver()
++    private val driver = driverFactory()
+     private val database = DatabaseFactory.createDatabase(driver)
+     private val citations = CitationFactory()
+ 
+-    val idMap = SqlDelightIdMapRepository(database)
++    val idMap = decorateIdMap(SqlDelightIdMapRepository(database))
+     val aliases = SqlDelightUrlAliasRepository(database)
+     val registry = UrlAliasRegistry(aliases)
+     val checkpoints = SqlDelightPageCheckpointRepository(database)
+@@ -85,7 +92,7 @@ class IndexHarness(
+      */
+     val retirements = SqlDelightRetirementRepository(database)
+ 
+-    // A3 auth substrate over the SAME in-memory DB (the schema includes subject_role/audit_log via 5.sqm). The
++    // A3 auth substrate over the SAME SQLite DB (the schema includes subject_role/audit_log via 5.sqm). The
+     // route-test harnesses build a PolicyService over these + seed a role; ApiTokenService mints test bearers.
+     val roleRepository = SqlDelightRoleRepository(database)
+     val auditRepository = SqlDelightAuditRepository(database)
+@@ -93,7 +100,7 @@ class IndexHarness(
+     val proposalRepository = SqlDelightProposalRepository(database)
+     val apiTokens = ApiTokenService(minter = ApiTokenMinter(), hasher = TokenHasher(), tokens = apiTokenRepository, clock = Clock.System)
+ 
+-    // A4a human-auth substrate over the SAME in-memory DB (the v7 schema includes users/sessions/setup_tokens).
++    // A4a human-auth substrate over the SAME SQLite DB (the v7 schema includes users/sessions/setup_tokens).
+     val userRepository = SqlDelightUserRepository(database)
+     val sessionRepository = SqlDelightSessionRepository(database)
+     val setupTokenRepository = SqlDelightSetupTokenRepository(database)
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/MultiRootCorpusPerfTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/MultiRootCorpusPerfTest.kt
+index 8bc37ef..6396791 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/MultiRootCorpusPerfTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/MultiRootCorpusPerfTest.kt
+@@ -63,8 +63,8 @@ class MultiRootCorpusPerfTest : FunSpec({
+         report("rebuild median ms", single.rebuildMedian, singleAgain.rebuildMedian, triple.rebuildMedian)
+         report("create median ms", single.createMedian, singleAgain.createMedian, triple.createMedian)
+         report("render p95 ms", single.renderP95, singleAgain.renderP95, triple.renderP95)
+-        // No ratio: an O(1) reindex does not scale with the root count, and a ratio over single-digit
+-        // milliseconds reports the scheduler, not the topology. Recorded because it is a gated tripwire.
++        // No ratio: single-digit-millisecond differences report scheduler noise more than topology.
++        // Recorded because it is a gated tripwire.
+         println(
+             "multiroot-perf: solo-save median ms 1-root %d / 3-root %d (tripwire only)"
+                 .format(single.soloMedian, triple.soloMedian),
+@@ -78,7 +78,7 @@ class MultiRootCorpusPerfTest : FunSpec({
+     }
+ })
+ 
+-/** One shape's numbers. [createMin] is the write-path tripwire's second leg; [soloMedian] its O(1) contrast. */
++/** One shape's numbers. [createMin] is the write-path tripwire's second leg; [soloMedian] is its solo-save comparison. */
+ private class Metrics(
+     val rebuildMedian: Long,
+     val createMedian: Long,
+@@ -134,7 +134,7 @@ private fun measure(slices: List<Pair<String, IntRange>>): Metrics = withSeededT
+             val renderP95 = renderP95(snapshot)
+ 
+             val pipeline = harness.writePipeline()
+-            // The O(1) contrast, on a page that lives in MAIN under both shapes. Append-only edits, so the
++            // The single-page reindex contrast, on a page that lives in MAIN under both shapes. Append-only edits, so the
+             // materialized frontmatter (id included) never changes and classifyEdit stays green.
+             val target = TreePath.require("section-00/page-000.md")
+             val saves = (0 until 20).map { round ->
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/WritePathCorpusPerfTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/WritePathCorpusPerfTest.kt
+index dec9ae5..e113599 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/WritePathCorpusPerfTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/WritePathCorpusPerfTest.kt
+@@ -26,8 +26,8 @@ import kotlin.concurrent.thread
+ import kotlin.system.measureTimeMillis
+ 
+ /**
+- * C2 item 4 — MEASURE the O(corpus) full-rebuild-per-create (WritePipeline.create runs a FULL
+- * `indexBuilder.rebuild()` + the targeted O(1) `reindex()`, both under the pipeline monitor every
++ * C2 item 4: MEASURE the full-rebuild-per-create (WritePipeline.create runs a FULL
++ * `indexBuilder.rebuild()` + a targeted reindex, both under the pipeline monitor every
+  * save serializes on). The `write-perf:` printed numbers are the deliverable — the tripwire asserts
+  * are generous regression bounds (3-30x headroom), NOT the contract; the pre-committed 8 s
+  * defer-vs-escalate rule is applied to the recorded numbers at chunk verification, never here.
+@@ -80,7 +80,7 @@ class WritePathCorpusPerfTest : FunSpec({
+                     // (a) Create end-to-end: full rebuild + targeted reindex under the monitor, distinct folders.
+                     val createTimes = (0 until 5).map { i -> timedCreate(pipeline, "perf-%02d/created.md".format(i)) }.sorted()
+ 
+-                    // (b) The O(1) contrast: 20 saves of one page, fresh baseHash each round (append-only edits
++                    // (b) The single-page reindex contrast: 20 saves of one page, fresh baseHash each round (append-only edits
+                     // so the materialized frontmatter — id included — never changes and classifyEdit stays green).
+                     val target = TreePath.require("section-00/page-000.md")
+                     val saveTimes = (0 until 20).map { round ->
+diff --git a/server/src/test/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepositoryTest.kt b/server/src/test/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepositoryTest.kt
+index 1416cf7..713cc43 100644
+--- a/server/src/test/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepositoryTest.kt
++++ b/server/src/test/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepositoryTest.kt
+@@ -299,6 +299,38 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
+         }
+     }
+ 
++    test("upsertBinding reports one insert, zero exact repeat, and one changed-value update") {
++        DatabaseFactory.createInMemoryDriver().use { driver ->
++            val database = DatabaseFactory.createDatabase(driver)
++            val first = database.idMapQueries.upsertBinding(
++                root = main,
++                path = pathA.path,
++                id = idX,
++                materialized = false,
++            ).value
++            val exactRepeat = database.idMapQueries.upsertBinding(
++                root = main,
++                path = pathA.path,
++                id = idX,
++                materialized = false,
++            ).value
++            val changedMaterialization = database.idMapQueries.upsertBinding(
++                root = main,
++                path = pathA.path,
++                id = idX,
++                materialized = true,
++            ).value
++            val changedId = database.idMapQueries.upsertBinding(
++                root = main,
++                path = pathA.path,
++                id = idY,
++                materialized = true,
++            ).value
++
++            listOf(first, exactRepeat, changedMaterialization, changedId) shouldContainExactly listOf(1L, 0L, 1L, 1L)
++        }
++    }
++
+     test("retired-unbound whole and point reads agree across roots, reclaim, refusal, and defensive live state") {
+         withRepo { repo, driver ->
+             val extraPath = RootedPath(extra, TreePath.require("mirror/x.md"))

@@ -2,6 +2,7 @@ package com.plainbase.frameworks.sqldelight
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.InferredProofMint
@@ -11,6 +12,7 @@ import com.plainbase.domain.root.RootedPath
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -32,6 +34,48 @@ import kotlin.test.assertTrue
  */
 @Tag("native")
 class BindRevokesProofNativeTest {
+
+    @OptIn(InferredProofMint::class)
+    @Test
+    fun `unchanged confirmation revokes an epoch proof without changing observation or recovery state`() {
+        val dir = Files.createTempDirectory("pb-native-confirmation-revoke")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                val idMap = SqlDelightIdMapRepository(db)
+                val retirements = SqlDelightRetirementRepository(db)
+                val root = RootName.PRIMARY
+                val path = RootedPath(root, TreePath.require("guides/unchanged.md"))
+                val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5d")
+
+                idMap.bind(path, id, materialized = true)
+                db.dirtyPageQueries.upsert(id = id, root = root, path = path.path, expectedHash = "sha256:recovery", stage = "WRITING")
+                val observation = retirements.observation(root)
+                val proof = AbsenceProof.inferred(
+                    root = root,
+                    source = ProofSource.EPOCH,
+                    observationId = observation,
+                    bindingEpoch = retirements.bindingEpoch(root),
+                    covers = setOf(BindingRef(path.path, id)),
+                )
+
+                assertTrue(idMap.confirmUnchangedBindings(listOf(IdBinding(path, id, materialized = true))))
+
+                val retired = retirements.applyProofs(listOf(proof), witnessed = emptySet(), unavailableNow = { emptySet() })
+                assertTrue(retired.isEmpty(), "the stale confirmation proof reaped $retired")
+                assertEquals(observation, retirements.observation(root))
+                assertEquals(1L, retirements.bindingEpoch(root).value)
+                assertNotNull(idMap.bindingInRoot(root, id), "the confirmed binding was tombstoned by its stale proof")
+                assertNotNull(
+                    db.dirtyPageQueries.selectByRootId(root = root, id = id).executeAsOneOrNull(),
+                    "the dirty_page recovery row was destroyed by a stale confirmation proof",
+                )
+            }
+        } finally {
+            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
 
     @OptIn(InferredProofMint::class)
     @Test

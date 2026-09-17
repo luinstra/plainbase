@@ -232,6 +232,58 @@ class IndexIdentityAssignmentsTest : FunSpec({
         }
     }
 
+    test("eligible CREATE confirmation refusal preserves ordered fallback and old publication") {
+        withTempTree(seed = { root ->
+            writeIdentityPage(root, "a.md", ID_REFUSAL_OLD, "A")
+            writeIdentityPage(root, "z-anchor.md", ID_REFUSAL_HELD, "Anchor")
+        }) { root ->
+            val registry = RootRegistry.of(listOf(localRoot("docs", root)))
+            val graph = IdentityAssignmentsGraph.single(root, registry)
+            graph.use {
+                val warm = graph.builder.rebuild()
+                val oldCheckpoint = graph.checkpoints.load()
+                graph.bindAttempts.clear()
+                graph.events.clear()
+                graph.observedSnapshots.clear()
+                graph.observedCheckpoints.clear()
+
+                writeIdentityPage(root, "a.md", ID_REFUSAL_NEW, "A re-identified")
+                writeIdentityPage(root, "b.md", ID_REFUSAL_THIRD, "B")
+                writeIdentityPage(root, "c.md", ID_REFUSAL_FOURTH, "C")
+                val target = RootedPath(RootName.PRIMARY, TreePath.require("b.md"))
+                graph.refusalPath = target
+                graph.refusalHolder = RootedPath(RootName.PRIMARY, TreePath.require("z-anchor.md"))
+                graph.confirmationResult = false
+
+                val thrown = shouldThrow<IllegalStateException> { graph.builder.rebuildAfterCreate(target) }
+                graph.confirmationCalls.map { call -> call.map { it.path } } shouldContainExactly listOf(
+                    listOf(
+                        RootedPath(RootName.PRIMARY, TreePath.require("a.md")),
+                        target,
+                        RootedPath(RootName.PRIMARY, TreePath.require("c.md")),
+                        RootedPath(RootName.PRIMARY, TreePath.require("z-anchor.md")),
+                    ),
+                )
+                graph.bindAttempts.map { it.path } shouldContainExactly listOf(
+                    RootedPath(RootName.PRIMARY, TreePath.require("a.md")),
+                    target,
+                )
+                val refused = graph.bindAttempts.single { it.path == target }
+                thrown.message shouldBe refusalMessage(refused.id, refused.path, graph.refusalHolder)
+                graph.realIdMap.find(RootedPath(RootName.PRIMARY, TreePath.require("a.md"))) shouldBe
+                    IdBinding(RootedPath(RootName.PRIMARY, TreePath.require("a.md")), ID_REFUSAL_NEW, true)
+                graph.realIdMap.retiredAt(RootName.PRIMARY, ID_REFUSAL_OLD)?.path shouldBe
+                    RootedPath(RootName.PRIMARY, TreePath.require("a.md"))
+                graph.realIdMap.find(target) shouldBe null
+                graph.realIdMap.find(RootedPath(RootName.PRIMARY, TreePath.require("c.md"))) shouldBe null
+                graph.builder.current shouldBeSameInstanceAs warm
+                graph.checkpoints.load() shouldBe oldCheckpoint
+                graph.observedSnapshots shouldBe emptyList()
+                graph.observedCheckpoints shouldBe emptyList()
+            }
+        }
+    }
+
     test("mixed scan identity and alias issues retain their exact persisted order") {
         withTempTree(seed = { root -> writeIdentityPage(root, "anchor.md", ID_MIXED_ANCHOR, "Anchor") }) { root ->
             val registry = RootRegistry.of(listOf(localRoot("docs", root)))
@@ -358,6 +410,7 @@ class IndexIdentityAssignmentsTest : FunSpec({
                         scannedRoots = setOf(RootName.PRIMARY),
                         registeredRoots = setOf(RootName.PRIMARY),
                         raised = raised,
+                        allowUnchangedConfirmation = false,
                     )
 
                 raised shouldContainExactly listOf(scanIssue, firstDuplicate, secondDuplicate)
@@ -392,6 +445,7 @@ private val ID_REFUSAL_OLD = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5
 private val ID_REFUSAL_HELD = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b55")
 private val ID_REFUSAL_NEW = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b56")
 private val ID_REFUSAL_THIRD = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b57")
+private val ID_REFUSAL_FOURTH = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5b")
 private val ID_MIXED_ANCHOR = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b58")
 private val ID_MIXED_U = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b59")
 private val ID_MIXED_V = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
@@ -448,6 +502,8 @@ private class IdentityAssignmentsGraph(
     var issueAccumulator: (() -> List<IdentityIssue>)? = null
     var refusalPath: RootedPath? = null
     var refusalHolder: RootedPath? = null
+    var confirmationResult: Boolean? = null
+    val confirmationCalls = mutableListOf<List<IdBinding>>()
     val idMap: IdMapRepository = IdentityAssignmentsRecordingIdMap(
         delegate = realIdMap,
         recordedIssues = recordedIssues,
@@ -455,6 +511,8 @@ private class IdentityAssignmentsGraph(
         bindAttempts = bindAttempts,
         refusalPath = { refusalPath },
         refusalHolder = { refusalHolder },
+        confirmationResult = { confirmationResult },
+        confirmationCalls = confirmationCalls,
         issueAccumulator = { issueAccumulator?.invoke() },
     )
     val checkpoints: PageCheckpointRepository = SqlDelightPageCheckpointRepository(database)
@@ -507,8 +565,15 @@ private class IdentityAssignmentsRecordingIdMap(
     private val bindAttempts: MutableList<BindAttempt>,
     private val refusalPath: () -> RootedPath?,
     private val refusalHolder: () -> RootedPath?,
+    private val confirmationResult: () -> Boolean?,
+    private val confirmationCalls: MutableList<List<IdBinding>>,
     private val issueAccumulator: () -> List<IdentityIssue>?,
 ) : IdMapRepository by delegate {
+    override fun confirmUnchangedBindings(expected: List<IdBinding>): Boolean {
+        confirmationCalls += expected.toList()
+        return confirmationResult() ?: delegate.confirmUnchangedBindings(expected)
+    }
+
     override fun bind(path: RootedPath, id: PageId, materialized: Boolean, supersession: Supersession): BindOutcome {
         bindAttempts += BindAttempt(path, id)
         val outcome = if (path == refusalPath()) {

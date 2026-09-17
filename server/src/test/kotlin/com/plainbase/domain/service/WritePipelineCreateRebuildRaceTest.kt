@@ -7,11 +7,16 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.createGrantForTests
+import com.plainbase.domain.repository.BindOutcome
+import com.plainbase.domain.repository.IdBinding
+import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.nio.file.Files
@@ -123,4 +128,150 @@ class WritePipelineCreateRebuildRaceTest : FunSpec({
             }
         }
     }
+
+    test("materialized CREATE rebuild repairs an incoming broken link and fires its coordination scan") {
+        withTempTree({ root ->
+            writePage(
+                root,
+                "source.md",
+                "---\nid: 01900000-0000-7000-8000-000000000101\ntitle: Source\n---\n\n# Source\n\n[incoming](incoming.md)\n",
+            )
+        }) { root ->
+            val probe = MaterializedCreateProbe()
+            val scanAfterCreate = CountDownLatch(1)
+            val landed = AtomicBoolean(false)
+            val real = LocalContentStore(root)
+            val coordinated = object : ContentStore by real {
+                override fun scan(): ScanResult = real.scan().also {
+                    if (landed.get()) scanAfterCreate.countDown()
+                }
+
+                override fun createExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult =
+                    real.createExclusive(path, bytes, hasher).also { landed.set(true) }
+            }
+            IndexHarness(
+                root,
+                contentStore = coordinated,
+                decorateIdMap = { probe.attach(it) },
+            ).use { harness ->
+                harness.observe()
+                harness.builder.rebuild()
+                LinkChecker().check(harness.builder.current).broken shouldHaveSize 1
+                val pageId = PageId.require("01900000-0000-7000-8000-000000000102")
+                val bytes = "---\nid: ${pageId.value}\ntitle: Incoming\n---\n\n# Incoming\n".toByteArray()
+
+                harness.writePipeline().create(
+                    createGrantForTests(),
+                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("incoming.md"), bytes),
+                ).shouldBeInstanceOf<WriteOutcome.Written>()
+
+                check(scanAfterCreate.await(10, TimeUnit.SECONDS)) { "materialized CREATE rebuild scan never fired" }
+                LinkChecker().check(harness.builder.current).broken shouldBe emptyList()
+                probe.confirmationCalls shouldBe 1
+                probe.bindCalls shouldBe 2
+            }
+        }
+    }
+
+    test("materialized CREATE confirms bindings after an external content change") {
+        withTempTree({ root ->
+            writePage(root, "existing.md", "---\nid: 01900000-0000-7000-8000-000000000103\ntitle: Existing\n---\n\n# Existing\nold\n")
+        }) { root ->
+            val probe = MaterializedCreateProbe()
+            val scanAfterCreate = CountDownLatch(1)
+            val landed = AtomicBoolean(false)
+            val real = LocalContentStore(root)
+            val coordinated = materializedCoordinationStore(real, landed, scanAfterCreate)
+            IndexHarness(root, contentStore = coordinated, decorateIdMap = { probe.attach(it) }).use { harness ->
+                harness.observe()
+                harness.builder.rebuild()
+                Files.writeString(
+                    root.resolve("existing.md"),
+                    "---\nid: 01900000-0000-7000-8000-000000000103\ntitle: Existing\n---\n\n# Existing\nexternal\n",
+                )
+                val pageId = PageId.require("01900000-0000-7000-8000-000000000104")
+
+                harness.writePipeline().create(
+                    createGrantForTests(),
+                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("incoming.md"), materializedBytes(pageId)),
+                ).shouldBeInstanceOf<WriteOutcome.Written>()
+
+                check(scanAfterCreate.await(10, TimeUnit.SECONDS)) { "materialized CREATE rebuild scan never fired" }
+                harness.builder.current.byPath[RootedPath(RootName.PRIMARY, TreePath.require("existing.md"))]!!.markdown shouldBe
+                    "---\nid: 01900000-0000-7000-8000-000000000103\ntitle: Existing\n---\n\n# Existing\nexternal\n"
+                probe.confirmationCalls shouldBe 1
+                probe.bindCalls shouldBe 2 // seed bind + incoming CREATE bind; rebuild used the real confirmation.
+            }
+        }
+    }
+
+    test("materialized CREATE falls back to ordered binds after an external ID change") {
+        withTempTree({ root ->
+            writePage(root, "existing.md", "---\nid: 01900000-0000-7000-8000-000000000105\ntitle: Existing\n---\n\n# Existing\nold\n")
+        }) { root ->
+            val probe = MaterializedCreateProbe()
+            val scanAfterCreate = CountDownLatch(1)
+            val landed = AtomicBoolean(false)
+            val real = LocalContentStore(root)
+            val coordinated = materializedCoordinationStore(real, landed, scanAfterCreate)
+            IndexHarness(root, contentStore = coordinated, decorateIdMap = { probe.attach(it) }).use { harness ->
+                harness.observe()
+                harness.builder.rebuild()
+                Files.writeString(
+                    root.resolve("existing.md"),
+                    "---\nid: 01900000-0000-7000-8000-000000000106\ntitle: Existing\n---\n\n# Existing\nnew id\n",
+                )
+                val pageId = PageId.require("01900000-0000-7000-8000-000000000107")
+
+                harness.writePipeline().create(
+                    createGrantForTests(),
+                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("incoming.md"), materializedBytes(pageId)),
+                ).shouldBeInstanceOf<WriteOutcome.Written>()
+
+                check(scanAfterCreate.await(10, TimeUnit.SECONDS)) { "materialized CREATE rebuild scan never fired" }
+                harness.builder.current.byPath[RootedPath(RootName.PRIMARY, TreePath.require("existing.md"))]!!.id shouldBe
+                    PageId.require("01900000-0000-7000-8000-000000000106")
+                probe.confirmationCalls shouldBe 1
+                probe.bindCalls shouldBe 4 // seed + CREATE bind + two ordered fallback binds after confirmation=false.
+            }
+        }
+    }
 })
+
+private fun materializedBytes(pageId: PageId): ByteArray =
+    "---\nid: ${pageId.value}\ntitle: Incoming\n---\n\n# Incoming\n".toByteArray()
+
+private fun materializedCoordinationStore(
+    real: ContentStore,
+    landed: AtomicBoolean,
+    scanAfterCreate: CountDownLatch,
+): ContentStore = object : ContentStore by real {
+    override fun scan(): ScanResult = real.scan().also {
+        if (landed.get()) scanAfterCreate.countDown()
+    }
+
+    override fun createExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult =
+        real.createExclusive(path, bytes, hasher).also { landed.set(true) }
+}
+
+private class MaterializedCreateProbe {
+    var bindCalls = 0
+    var confirmationCalls = 0
+
+    fun attach(value: IdMapRepository): IdMapRepository = MaterializedCreateRecordingIdMap(value, this)
+
+    private class MaterializedCreateRecordingIdMap(
+        private val delegate: IdMapRepository,
+        private val probe: MaterializedCreateProbe,
+    ) : IdMapRepository by delegate {
+        override fun bind(path: RootedPath, id: PageId, materialized: Boolean, supersession: Supersession): BindOutcome {
+            probe.bindCalls++
+            return delegate.bind(path, id, materialized, supersession)
+        }
+
+        override fun confirmUnchangedBindings(expected: List<IdBinding>): Boolean {
+            probe.confirmationCalls++
+            return delegate.confirmUnchangedBindings(expected)
+        }
+    }
+}

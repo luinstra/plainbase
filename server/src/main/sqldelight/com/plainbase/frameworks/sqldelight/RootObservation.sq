@@ -18,10 +18,10 @@ import com.plainbase.domain.root.RootName;
 
 -- binding_epoch is the SECOND, orthogonal freshness stamp (C5, revoke-before-stamp). observation_id gates epoch
 -- CONTINUITY (a break, restart or unmount mints a new one and kills every live epoch); binding_epoch is a per-root,
--- monotonic, never-reset counter that ONLY a successful bind advances, so a restore's re-bind revokes an in-flight
--- inferred proof (minted under the old epoch value) WITHOUT touching observation_id and so WITHOUT collapsing the
--- epoch. applyProofs compares BOTH tokens, exact-equality, fail-closed. upsertObservation deliberately leaves
--- binding_epoch alone: observation churn must not reset it.
+-- monotonic, never-reset counter that a successful bind or unchanged confirmation advances. A restore's re-bind
+-- revokes an in-flight inferred proof (minted under the old epoch value) WITHOUT touching observation_id and so
+-- WITHOUT collapsing the epoch. applyProofs compares BOTH tokens, exact-equality, fail-closed. upsertObservation
+-- deliberately leaves binding_epoch alone: observation churn must not reset it.
 CREATE TABLE root_observation (
   root TEXT AS RootName NOT NULL PRIMARY KEY,
   observation_id INTEGER NOT NULL,
@@ -36,6 +36,15 @@ WHERE root = :root;
 -- The pair the apply-time freshness gate reads together (one row, one snapshot): a proof survives only if BOTH still match.
 selectObservationAndEpoch:
 SELECT observation_id, binding_epoch
+FROM root_observation
+WHERE root = :root;
+
+-- The confirmation path needs the SQLite storage class before it can trust the numeric value. A malformed REAL/TEXT
+-- value is returned as a harmless sentinel so the adapter can reject it before comparing or advancing the epoch.
+selectConfirmationEpoch:
+SELECT
+  CASE WHEN typeof(binding_epoch) = 'integer' THEN binding_epoch ELSE 0 END AS binding_epoch,
+  typeof(binding_epoch) AS binding_epoch_type
 FROM root_observation
 WHERE root = :root;
 
@@ -55,3 +64,9 @@ incrementBindingEpoch:
 UPDATE root_observation
 SET binding_epoch = binding_epoch + 1
 WHERE root = :root;
+
+-- Confirmation advances by the unchanged binding count, conditional on the epoch read in the same transaction.
+advanceBindingEpochIfCurrent:
+UPDATE root_observation
+SET binding_epoch = binding_epoch + :increment
+WHERE root = :root AND binding_epoch = :expectedEpoch;

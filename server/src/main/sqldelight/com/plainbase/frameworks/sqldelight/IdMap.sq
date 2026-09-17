@@ -103,6 +103,17 @@ SELECT *
 FROM id_map
 WHERE root = :root AND path = :path;
 
+-- One bounded rooted set read for CREATE-only unchanged-binding confirmation. The LEFT JOIN detects a matching
+-- tombstone without a second tombstone scan; the caller limits this to expected-count + 1 to distinguish an exact set
+-- from a root with extra durable rows.
+selectRootBindingsForConfirmation:
+SELECT m.path, m.id, m.materialized, rb.id AS tombstone_id
+FROM id_map m
+LEFT JOIN retired_binding rb ON rb.root = m.root AND rb.id = m.id
+WHERE m.root = :root
+ORDER BY m.path
+LIMIT :limit;
+
 -- The bare-id resolver's LIVE claimant list (Option B). Index-served by the id-leading UNIQUE(id, root). Shaped
 -- List<RootName> for the C5 multiplicity the One/Ambiguous/None contract models - post-flip it is 0..N rows, one
 -- per root holding the id live.

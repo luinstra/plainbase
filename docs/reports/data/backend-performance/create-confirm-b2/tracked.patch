@@ -1,0 +1,1480 @@
+diff --git a/server/build.gradle.kts b/server/build.gradle.kts
+index cd562c3..df8f83f 100644
+--- a/server/build.gradle.kts
++++ b/server/build.gradle.kts
+@@ -7,6 +7,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+ import java.nio.file.Files
+ import java.nio.file.StandardCopyOption
+ import java.security.MessageDigest
++import java.time.Duration
+ import java.util.UUID
+ import java.util.concurrent.ConcurrentHashMap
+ import java.util.concurrent.TimeUnit
+@@ -35,6 +36,12 @@ tasks.named("check") {
+ group = "com.plainbase"
+ version = rootProject.version
+ 
++val performanceScreenAllowCoverage = providers.gradleProperty("performanceScreenAllowCoverage").isPresent
++val performanceScreenHeap = "1g"
++val performanceScreenSizeDeadline = Duration.ofMinutes(2)
++val performanceScreenTaskTimeout = Duration.ofMinutes(10)
++val performanceScreenProfiles = setOf("screen", "create-on-off", "create-off-on")
++
+ kotlin {
+     jvmToolchain(25)
+     compilerOptions {
+@@ -63,6 +70,11 @@ distributions {
+ 
+ kover {
+     currentProject {
++        instrumentation {
++            if (!performanceScreenAllowCoverage) {
++                disabledForTestTasks.add("performanceScreen")
++            }
++        }
+         sources {
+             includedSourceSets.add("main")
+         }
+@@ -291,11 +303,11 @@ sourceSets {
+     }
+ }
+ 
+-// ---- Test execution split: JVM runs EVERYTHING, native runs ONLY the nativeTest source set ----
++// ---- Test execution split: JVM runs the configured suite, native runs only nativeTest ----
+ //
+-// The JVM `test` task runs the FULL suite: its own Kotest/MockK logic tests PLUS the kotlin.test
+-// native-smoke tests from the `nativeTest` source set (folded in below). So `./gradlew build`
+-// always exercises every test on the JVM. The `nativeTest` source set additionally feeds the
++// The JVM `test` task runs the full configured suite: its own Kotest/MockK logic tests PLUS the
++// kotlin.test native-smoke tests from the `nativeTest` source set (folded in below). The opt-in
++// performance worker remains separate. The `nativeTest` source set additionally feeds the
+ // GraalVM native test image - and ONLY it does, so the closed-world image never sees Kotest/MockK.
+ val mainRuntimeClasspathInput = sourceSets["main"].runtimeClasspath
+ val testRuntimeClasspathInput: FileCollection = sourceSets["test"].runtimeClasspath
+@@ -311,6 +323,7 @@ fun Test.configurePlainbaseMainRuntimeClasspath() {
+ 
+ tasks.test {
+     useJUnitPlatform()
++    exclude("com/plainbase/performance/**")
+     // ServerBootCliContractTest consumes this execution-time production classpath and evidence identity.
+     configurePlainbaseMainRuntimeClasspath()
+     inputs.files(testRuntimeClasspathInput)
+@@ -333,6 +346,224 @@ tasks.test {
+     }
+ }
+ 
++// Opt-in bounded backend screening only. This task is intentionally outside `check`/`build` and the native source-set wiring.
++val performanceScreen = tasks.register<Test>("performanceScreen") {
++    description = "Runs the opt-in bounded backend performance screen."
++    group = "verification"
++    useJUnitPlatform()
++    testClassesDirs = sourceSets["test"].output.classesDirs
++    classpath = sourceSets["test"].runtimeClasspath
++    configurePlainbaseMainRuntimeClasspath()
++    maxParallelForks = 1
++    maxHeapSize = performanceScreenHeap
++    timeout.set(performanceScreenTaskTimeout)
++    filter { includeTestsMatching("com.plainbase.performance.BackendPerformanceScreenTest") }
++    outputs.upToDateWhen { false }
++    outputs.cacheIf { false }
++    doFirst {
++        val profile = providers.gradleProperty("performanceProfile").orElse("screen").get()
++        require(profile in performanceScreenProfiles) {
++            "unsupported performanceProfile: $profile (expected one of ${performanceScreenProfiles.joinToString()})"
++        }
++        val runId = providers.gradleProperty("performanceRun").orNull
++            ?: throw GradleException("performanceScreen requires -PperformanceRun=screen-XX")
++        require(runId.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,31}"))) {
++            "unsafe performanceRun: $runId"
++        }
++        val outputRoot = rootProject.layout.projectDirectory.dir("docs/reports/data/backend-performance").dir(runId).asFile
++        val fixtureRoot = layout.buildDirectory.dir("performance-screen").get().asFile.resolve(runId)
++        val sourceStagingRoot = layout.buildDirectory.dir("performance-screen-source").get().asFile.resolve(runId)
++        require(!outputRoot.exists()) { "performance evidence directory already exists: $outputRoot" }
++        require(!fixtureRoot.exists()) { "performance fixture directory already exists: $fixtureRoot" }
++        require(!sourceStagingRoot.exists()) { "performance source staging directory already exists: $sourceStagingRoot" }
++
++        val probeFile = "server/src/test/kotlin/com/plainbase/performance/BackendPerformanceScreenTest.kt"
++        val lifecycleTestFile = "server/src/test/kotlin/com/plainbase/performance/BackendPerformanceScreenLifecycleTest.kt"
++        val requiredSourceFiles = setOf(
++            "server/src/main/kotlin/com/plainbase/frameworks/sqldelight/DatabaseFactory.kt",
++            "server/src/main/kotlin/com/plainbase/frameworks/sqldelight/BeginImmediateSqliteDriver.kt",
++            "server/src/main/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepository.kt",
++        )
++        fun gitBytes(args: List<String>): ByteArray {
++            val process =
++                ProcessBuilder(listOf("git") + args)
++                    .directory(rootProject.projectDir)
++                    .redirectErrorStream(true)
++                    .start()
++            val output = process.inputStream.use { it.readBytes() }
++            require(process.waitFor() == 0) { "git metadata capture failed: ${output.toString(Charsets.UTF_8)}" }
++            return output
++        }
++        fun sha256(bytes: ByteArray): String =
++            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { byte -> "%02x".format(byte) }
++
++        fun gitNames(args: List<String>): List<String> =
++            gitBytes(args).toString(Charsets.UTF_8).split('\u0000').filter { it.isNotEmpty() }
++
++        val head = gitBytes(listOf("rev-parse", "HEAD")).toString(Charsets.UTF_8).trim()
++        val patchBytes = gitBytes(listOf("diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--", "server"))
++        val allowedUntrackedSourceFiles = setOf(probeFile, lifecycleTestFile)
++        val untrackedSourceFiles =
++            gitBytes(listOf("status", "--porcelain=v1", "--untracked-files=all", "-z", "--", "server"))
++                .toString(Charsets.UTF_8)
++                .split('\u0000')
++                .filter { it.startsWith("?? ") }
++                .map { it.substring(3) }
++                .filter {
++                    it.startsWith("server/src/main/") ||
++                        it.startsWith("server/src/test/") ||
++                        it.startsWith("server/src/nativeTest/")
++                }
++                .toList()
++        require(untrackedSourceFiles.all { it in allowedUntrackedSourceFiles }) {
++            "uncaptured untracked server source: ${untrackedSourceFiles.filterNot { it in allowedUntrackedSourceFiles }}"
++        }
++        val trackedSourceFiles =
++            gitNames(listOf("diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--diff-filter=ACMRT", "HEAD", "--", "server"))
++                .filter { rootProject.file(it).isFile }
++                .toList()
++        val sourceFiles =
++            (
++                trackedSourceFiles +
++                    requiredSourceFiles +
++                    allowedUntrackedSourceFiles.filter { rootProject.file(it).isFile }
++            )
++                .distinct()
++                .sorted()
++        require(probeFile in sourceFiles && lifecycleTestFile in sourceFiles) {
++            "performance source identity does not include all untracked test sources"
++        }
++        val sourceHashes = sourceFiles.joinToString(";") { sourceFile ->
++            "$sourceFile=${sha256(Files.readAllBytes(rootProject.file(sourceFile).toPath()))}"
++        }
++        Files.createDirectories(sourceStagingRoot.toPath())
++        Files.write(sourceStagingRoot.toPath().resolve("tracked.patch"), patchBytes)
++        Files.write(
++            sourceStagingRoot.toPath().resolve("BackendPerformanceScreenTest.kt"),
++            Files.readAllBytes(rootProject.file(probeFile).toPath()),
++        )
++        Files.write(
++            sourceStagingRoot.toPath().resolve("BackendPerformanceScreenLifecycleTest.kt"),
++            Files.readAllBytes(rootProject.file(lifecycleTestFile).toPath()),
++        )
++        val gradleStartParameters = listOf(
++            "gradle=${gradle.gradleVersion}",
++            "tasks=${gradle.startParameter.taskNames.joinToString(",")}",
++            "project_properties=${gradle.startParameter.projectProperties.keys.sorted().joinToString(",")}",
++        ).joinToString(";")
++        systemProperty("plainbase.performance.screen.enabled", "true")
++        systemProperty("plainbase.performance.screen.run", runId)
++        systemProperty("plainbase.performance.screen.output", outputRoot.absolutePath)
++        systemProperty("plainbase.performance.screen.fixtures", fixtureRoot.absolutePath)
++        systemProperty("plainbase.performance.screen.profile", profile)
++        systemProperty("plainbase.performance.screen.head", head)
++        systemProperty("plainbase.performance.screen.patch", sha256(patchBytes))
++        systemProperty("plainbase.performance.screen.sourceStaging", sourceStagingRoot.absolutePath)
++        systemProperty("plainbase.performance.screen.gradleStartParameters", gradleStartParameters)
++        systemProperty(
++            "plainbase.performance.screen.sourceFiles",
++            sourceFiles.map { rootProject.file(it).absolutePath }.joinToString(File.pathSeparator),
++        )
++        systemProperty("plainbase.performance.screen.sourceKeys", sourceFiles.joinToString(File.pathSeparator))
++        systemProperty("plainbase.performance.screen.expectedSourceHashes", sourceHashes)
++        systemProperty("plainbase.performance.screen.configuredHeap", performanceScreenHeap)
++        systemProperty(
++            "plainbase.performance.screen.sizeDeadlineMs",
++            performanceScreenSizeDeadline.toMillis().toString(),
++        )
++        systemProperty(
++            "plainbase.performance.screen.taskTimeoutMs",
++            performanceScreenTaskTimeout.toMillis().toString(),
++        )
++        systemProperty(
++            "plainbase.performance.screen.versions",
++            configurations.getByName("testRuntimeClasspath").resolvedConfiguration.resolvedArtifacts
++                .map { artifact -> "${artifact.moduleVersion.id.group}:${artifact.name}=${artifact.moduleVersion.id.version}" }
++                .sorted()
++                .joinToString(","),
++        )
++    }
++    testLogging {
++        events("passed", "failed", "skipped")
++        showStandardStreams = true
++    }
++    doLast {
++        val profile = providers.gradleProperty("performanceProfile").orElse("screen").get()
++        val runId = providers.gradleProperty("performanceRun").orNull
++            ?: throw GradleException("performanceScreen requires -PperformanceRun=screen-XX")
++        val outputRoot = rootProject.layout.projectDirectory.dir("docs/reports/data/backend-performance").dir(runId).asFile
++        val observations = outputRoot.resolve("observations.csv")
++        if (!observations.isFile) throw GradleException("performance screen wrote no observations: $observations")
++        fun csvFields(row: String): List<String> {
++            val fields = mutableListOf<String>()
++            val field = StringBuilder()
++            var quoted = false
++            var index = 0
++            while (index < row.length) {
++                val character = row[index]
++                when {
++                    character == '"' && quoted && index + 1 < row.length && row[index + 1] == '"' -> {
++                        field.append('"')
++                        index += 1
++                    }
++                    character == '"' -> quoted = !quoted
++                    character == ',' && !quoted -> {
++                        fields += field.toString()
++                        field.clear()
++                    }
++                    else -> field.append(character)
++                }
++                index += 1
++            }
++            require(!quoted) { "malformed observations CSV row: $row" }
++            fields += field.toString()
++            return fields
++        }
++        val rows = Files.readAllLines(observations.toPath())
++        require(rows.isNotEmpty()) { "performance screen wrote an empty observations file: $observations" }
++        val header = csvFields(rows.first())
++        require(header.getOrNull(5) == "status") { "performance observations status column moved from index 5" }
++        require(header.lastOrNull() == "arm") { "performance observations arm column is not final" }
++        val parsedRows = rows.drop(1).map(::csvFields)
++        require(parsedRows.all { it.size == header.size }) { "performance observations row width mismatch" }
++        val expected = when (profile) {
++            "screen" -> 246
++            "create-on-off", "create-off-on" -> 28
++            else -> throw GradleException("unsupported performanceProfile: $profile")
++        }
++        val completedRows = parsedRows.filter { it[5] == "completed" }
++        val arms = completedRows.map { it.last() }.toSet()
++        val expectedArms = if (profile == "screen") setOf("none") else setOf("on", "off")
++        require(arms == expectedArms) { "performance observations arm identity mismatch: $arms" }
++        logger.lifecycle(
++            "performance-screen profile=$profile completed observations=${completedRows.size} " +
++                "expected=$expected arms=${arms.sorted().joinToString(",")}",
++        )
++        if (completedRows.size != expected) {
++            throw GradleException("performance screen completed ${completedRows.size} observations; expected $expected")
++        }
++    }
++}
++
++val performanceScreenLifecycleTest = tasks.register<Test>("performanceScreenLifecycleTest") {
++    description = "Runs deterministic lifecycle checks for the bounded backend performance screen."
++    group = "verification"
++    useJUnitPlatform()
++    testClassesDirs = sourceSets["test"].output.classesDirs
++    classpath = sourceSets["test"].runtimeClasspath
++    configurePlainbaseMainRuntimeClasspath()
++    maxParallelForks = 1
++    filter { includeTestsMatching("com.plainbase.performance.BackendPerformanceScreenLifecycleTest") }
++    testLogging {
++        events("passed", "failed", "skipped")
++        showStandardStreams = true
++    }
++}
++
++tasks.named("check") {
++    dependsOn(performanceScreenLifecycleTest)
++}
++
+ // The Phase-1 acceptance gate as one named task (chunk 8). The gate ALREADY runs inside `test`
+ // (and therefore `build`/CI) like every other suite; this is the convenience handle to run it
+ // alone. The native half of the gate is Phase1AcceptanceNativeTest, which `nativeTest` runs
+@@ -452,7 +683,7 @@ graalvmNative {
+ // registerTestBinary("test") throws "NativeImageOptions ... already exists"), so we re-point its
+ // own mechanism here: run the UID listener on `nativeTestList` (the nativeTest source set only) and
+ // feed BOTH the test list AND the image classpath from that source set. Net effect: JVM `test`
+-// still runs the FULL suite; the native image is built from kotlin.test-only code, no Kotest/MockK.
++// still runs the full configured suite; the native image is built from kotlin.test-only code, no Kotest/MockK.
+ run {
+     val nativeTestListDir = layout.buildDirectory.dir("test-results/nativeTestList/testlist")
+     val nativeTestSourceSet = sourceSets["nativeTest"]
+diff --git a/server/src/main/kotlin/com/plainbase/domain/repository/IdMapRepository.kt b/server/src/main/kotlin/com/plainbase/domain/repository/IdMapRepository.kt
+index ba3b1d9..350af21 100644
+--- a/server/src/main/kotlin/com/plainbase/domain/repository/IdMapRepository.kt
++++ b/server/src/main/kotlin/com/plainbase/domain/repository/IdMapRepository.kt
+@@ -90,6 +90,13 @@ interface IdMapRepository {
+         supersession: Supersession = Supersession.NONE,
+     ): BindOutcome
+ 
++    /**
++     * Atomically confirms a complete, materialized single-root binding set and advances its freshness epoch.
++     * Returns false without changing anything when the implementation is unsupported or the durable set differs;
++     * database failures throw. The default keeps alternate and test implementations on the ordinary bind path.
++     */
++    fun confirmUnchangedBindings(expected: List<IdBinding>): Boolean = false
++
+     /** Marks [path]'s binding materialized — called after the patched file write lands (§5.2). */
+     fun markMaterialized(path: RootedPath)
+ 
+diff --git a/server/src/main/kotlin/com/plainbase/domain/repository/RetirementRepository.kt b/server/src/main/kotlin/com/plainbase/domain/repository/RetirementRepository.kt
+index 01ae928..87bad1a 100644
+--- a/server/src/main/kotlin/com/plainbase/domain/repository/RetirementRepository.kt
++++ b/server/src/main/kotlin/com/plainbase/domain/repository/RetirementRepository.kt
+@@ -15,7 +15,7 @@ import com.plainbase.domain.root.RootedPageId
+  *
+  * **The app DB is the authoritative linearization boundary.** [applyProofs] re-reads each root's stamps - BOTH the
+  * [ObservationId] (epoch continuity: a restart, break or unmount mints a new one) and the [BindingEpoch] (binding
+- * freshness: every successful bind advances it) - compares them to the proof's, and, only if BOTH still match,
++ * freshness: every successful bind or unchanged confirmation advances it) - compares them to the proof's, and, only if BOTH still match,
+  * applies the `id_map` -> `retired_binding` moves, the `page_checkpoint` deletes and the `dirty_page` clears, ALL IN
+  * ONE TRANSACTION. The two are orthogonal on purpose: either advance alone invalidates a proof, and a bind must be
+  * able to revoke one WITHOUT collapsing the epoch. Both revocations ([revoke], and the increment inside a bind) are
+diff --git a/server/src/main/kotlin/com/plainbase/domain/root/AbsenceProof.kt b/server/src/main/kotlin/com/plainbase/domain/root/AbsenceProof.kt
+index 97c3de1..69b155d 100644
+--- a/server/src/main/kotlin/com/plainbase/domain/root/AbsenceProof.kt
++++ b/server/src/main/kotlin/com/plainbase/domain/root/AbsenceProof.kt
+@@ -91,7 +91,7 @@ value class ObservationId(val value: Long) {
+ /**
+  * The SECOND freshness stamp, ORTHOGONAL to [ObservationId] (`root_observation.binding_epoch`, C5 revoke-before-stamp).
+  *
+- * A per-root, monotonic, never-reset counter that ONLY a successful `bind` advances. Where [ObservationId] gates epoch
++ * A per-root, monotonic, never-reset counter that a successful `bind` or unchanged binding confirmation advances. Where [ObservationId] gates epoch
+  * CONTINUITY - a break/restart/unmount mints a new one and kills every live epoch - this gates BINDING freshness: a
+  * restore's re-bind of a covered key advances it, so an inferred proof minted under the old value loses `applyProofs`'
+  * two-token compare and cannot reap the binding (and its `dirty_page` USER-CONTENT recovery row) the restore just
+diff --git a/server/src/main/kotlin/com/plainbase/domain/service/IndexBuilder.kt b/server/src/main/kotlin/com/plainbase/domain/service/IndexBuilder.kt
+index 5a06756..b298110 100644
+--- a/server/src/main/kotlin/com/plainbase/domain/service/IndexBuilder.kt
++++ b/server/src/main/kotlin/com/plainbase/domain/service/IndexBuilder.kt
+@@ -148,7 +148,13 @@ class IndexBuilder(
+ 
+     /** Runs the serialized full pass and atomically publishes the new snapshot. */
+     @Synchronized
+-    fun rebuild(): PageIndex {
++    fun rebuild(): PageIndex = rebuildInternal(createTarget = null)
++
++    /** Runs the same serialized full pass, allowing confirmation only for this eligible CREATE target. */
++    @Synchronized
++    fun rebuildAfterCreate(target: RootedPath): PageIndex = rebuildInternal(createTarget = target)
++
++    private fun rebuildInternal(createTarget: RootedPath?): PageIndex {
+         val previous = holder.load()
+         // The EMPTY holder is the startup sentinel: use the persisted checkpoint for the first alias comparison,
+         // then use the previous published snapshot.
+@@ -207,7 +213,15 @@ class IndexBuilder(
+         val raisedIssues = mutableListOf<IdentityIssue>()
+         scans.forEach { scan -> scan.issues.forEach { record(raisedIssues, it) } }
+ 
+-        val identities = identityAssignments.resolveIdentities(scans, witnessed, scannedRoots, registeredRoots, raisedIssues)
++        val allowUnchangedConfirmation = createTarget?.let { isEligibleCreateConfirmation(it, scans) } == true
++        val identities = identityAssignments.resolveIdentities(
++            scans = scans,
++            witnessed = witnessed,
++            scannedRoots = scannedRoots,
++            registeredRoots = registeredRoots,
++            raised = raisedIssues,
++            allowUnchangedConfirmation = allowUnchangedConfirmation,
++        )
+ 
+         val snapshot = snapshotAssembler.assemble(
+             scans = scans,
+@@ -221,6 +235,19 @@ class IndexBuilder(
+         return snapshot
+     }
+ 
++    private fun isEligibleCreateConfirmation(target: RootedPath, scans: List<SourceScan>): Boolean {
++        if (sources.size != 1 || registeredRoots.size != 1) return false
++        val source = sources.single()
++        if (source.root.name != target.root || source.root.backend !is RootBackend.Local) return false
++        val scan = scans.singleOrNull { it.root == target.root } ?: return false
++        return availability.current().isAvailable(target.root) &&
++            scan.complete &&
++            scan.pageReadsComplete &&
++            scan.issues.isEmpty() &&
++            scan.urls.issues.isEmpty() &&
++            scan.drafts.any { it.file.path == target.path }
++    }
++
+     private fun finishRebuild(
+         snapshot: PageIndex,
+         retired: Set<RootedPageId>,
+diff --git a/server/src/main/kotlin/com/plainbase/domain/service/IndexIdentityAssignments.kt b/server/src/main/kotlin/com/plainbase/domain/service/IndexIdentityAssignments.kt
+index d98189e..f15eba0 100644
+--- a/server/src/main/kotlin/com/plainbase/domain/service/IndexIdentityAssignments.kt
++++ b/server/src/main/kotlin/com/plainbase/domain/service/IndexIdentityAssignments.kt
+@@ -3,6 +3,7 @@ package com.plainbase.domain.service
+ import com.plainbase.domain.model.IdentityIssue
+ import com.plainbase.domain.page.PageId
+ import com.plainbase.domain.repository.BindOutcome
++import com.plainbase.domain.repository.IdBinding
+ import com.plainbase.domain.repository.IdMapRepository
+ import com.plainbase.domain.repository.Supersession
+ import com.plainbase.domain.root.RootName
+@@ -29,6 +30,7 @@ internal class IndexIdentityAssignments(
+         registeredRoots: Set<RootName>,
+         // Accumulate this pass's issues for [IndexBuilder.rebuild]; do not decode the legacy `idMap.issues()` rows here.
+         raised: MutableList<IdentityIssue>,
++        allowUnchangedConfirmation: Boolean,
+     ): Map<RootedPath, Identity> {
+         // Share one [Supersession] between resolution and binding. Proofs are applied before this call, so their
+         // bindings are gone; that ordering also lets the tombstone arm see this pass's retirements.
+@@ -67,6 +69,17 @@ internal class IndexIdentityAssignments(
+         // Check uniqueness before binding. Earlier coordinator effects may remain; no rollback is promised.
+         requireDistinctIds(resolved.mapValues { (_, assignment) -> assignment.id })
+ 
++        val confirmed = allowUnchangedConfirmation &&
++            resolved.values.all { assignment ->
++                assignment.source == PageIdentityService.Source.FRONTMATTER && assignment.issue == null
++            } &&
++            idMap.confirmUnchangedBindings(
++                resolved.map { (path, assignment) -> IdBinding(path, assignment.id, materialized = true) },
++            )
++        if (confirmed) {
++            return resolved.mapValues { (_, assignment) -> Identity(assignment.id, materialized = true) }
++        }
++
+         val identities = HashMap<RootedPath, Identity>()
+         for ((path, assignment) in resolved) {
+             val materialized = assignment.source == PageIdentityService.Source.FRONTMATTER
+diff --git a/server/src/main/kotlin/com/plainbase/domain/service/WritePipeline.kt b/server/src/main/kotlin/com/plainbase/domain/service/WritePipeline.kt
+index ab4a8f5..5f574d8 100644
+--- a/server/src/main/kotlin/com/plainbase/domain/service/WritePipeline.kt
++++ b/server/src/main/kotlin/com/plainbase/domain/service/WritePipeline.kt
+@@ -29,7 +29,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
+  * The serialized write pipeline (PB-WRITE-1): the single funnel for a content-mutating
+  * save. Every [write] runs under ONE `@Synchronized` monitor (the house [IndexBuilder] idiom, never
+  * `@Volatile`); the disk write is a single atomic, disk-authoritative compare-and-swap, and the index
+- * update is a targeted O(changed-page) reindex. Pure domain — no framework imports.
++ * update is a targeted reindex of the changed page. Pure domain; no framework imports.
+  *
+  * The critical section, in order:
+  *  0. **Edit-classification guard**: a buffer that changes `id`/`slug`/
+@@ -229,7 +229,8 @@ class WritePipeline(
+             // The create's commit SHA (null off Git). A plain POST /pages leaves author/committer null (server
+             // identity); create-apply threads the proposer->author + approver->committer (an in-glob agent: both = agent).
+             val commit = historyHook.commit(intent.root, intent.path, intent.bytes, intent.author, intent.committer)
+-            indexBuilder.rebuild() // re-scans disk; picks up the new file, reuses every collision/alias/URL rule
++            // The full pass may use the CREATE-only unchanged-binding confirmation when its evidence is eligible.
++            indexBuilder.rebuildAfterCreate(RootedPath(intent.root, intent.path))
+             // A rebuild no longer FAILS on a lost root - it probes, marks, skips, carries and returns normally -
+             // so `it returned, so it worked` is no longer true and a try/catch around it is not a guard. Re-read
+             // the mark the rebuild itself just made: a create into a root that died mid-request must never answer
+@@ -482,7 +483,7 @@ class WritePipeline(
+             // The save's commit SHA (null off Git). Threads the proposer->author + approver->committer
+             // attribution from the apply call site through [WriteIntent]; a plain PUT leaves them null (server identity).
+             val commit = historyHook.commit(intent.root, intent.path, intent.bytes, intent.author, intent.committer)
+-            // Targeted O(1); THROWS on a vanished save-path page. Addressed by the LOCATION the CAS just wrote
++            // Targeted reindex; THROWS on a vanished save-path page. Addressed by the LOCATION the CAS just wrote
+             // to - never by the page id, which a concurrent rebuild can make AMBIGUOUS by admitting that same id
+             // under another root between the CAS and this call, sending the reindex at a file these bytes never
+             // touched.
+diff --git a/server/src/main/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepository.kt b/server/src/main/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepository.kt
+index 55536ae..769b9dd 100644
+--- a/server/src/main/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepository.kt
++++ b/server/src/main/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepository.kt
+@@ -131,6 +131,56 @@ class SqlDelightIdMapRepository(
+             BindOutcome.Bound
+         }
+ 
++    override fun confirmUnchangedBindings(expected: List<IdBinding>): Boolean {
++        val copied = expected.toList()
++        if (!validConfirmationInput(copied)) return false
++        val root = copied.first().path.root
++        val expectedCount = copied.size.toLong()
++        val expectedByPath = copied.associateBy { it.path.path }
++        return db.transactionWithResult {
++            val epochRow = observations.selectConfirmationEpoch(root).executeAsOneOrNull()
++                ?: return@transactionWithResult false
++            val epoch = checkConfirmationEpoch(epochRow.binding_epoch, epochRow.binding_epoch_type, root, expectedCount)
++            val rows = queries.selectRootBindingsForConfirmation(root = root, limit = expectedCount + 1L).executeAsList()
++            if (rows.size != copied.size || rows.any { it.tombstone_id != null }) return@transactionWithResult false
++            val actualByPath = rows.associate { row ->
++                row.path to IdBinding(RootedPath(root, row.path), row.id, row.materialized)
++            }
++            if (actualByPath != expectedByPath) return@transactionWithResult false
++            check(
++                observations.advanceBindingEpochIfCurrent(
++                    expectedEpoch = epoch,
++                    increment = expectedCount,
++                    root = root,
++                ).value == 1L,
++            ) {
++                "unchanged binding confirmation lost root '$root' epoch $epoch before its guarded update"
++            }
++            true
++        }
++    }
++
++    private fun validConfirmationInput(expected: List<IdBinding>): Boolean {
++        if (expected.isEmpty() || expected.any { !it.materialized }) return false
++        val root = expected.first().path.root
++        return expected.all { it.path.root == root } &&
++            expected.map { it.path.path }.size == expected.map { it.path.path }.toSet().size &&
++            expected.map { it.id }.size == expected.map { it.id }.toSet().size
++    }
++
++    private fun checkConfirmationEpoch(epoch: Long, type: String, root: RootName, count: Long): Long {
++        check(type == "integer") {
++            "cannot confirm unchanged bindings for root '$root': binding_epoch has SQLite type '$type'"
++        }
++        check(epoch >= 0L) {
++            "cannot confirm unchanged bindings for root '$root': binding_epoch $epoch is negative"
++        }
++        check(epoch <= Long.MAX_VALUE - count) {
++            "cannot confirm unchanged bindings for root '$root': binding_epoch $epoch overflows by $count"
++        }
++        return epoch
++    }
++
+     override fun markMaterialized(path: RootedPath) {
+         queries.markMaterialized(materialized = true, root = path.root, path = path.path)
+     }
+diff --git a/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/IdMap.sq b/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/IdMap.sq
+index 81b7a5b..dcd9fec 100644
+--- a/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/IdMap.sq
++++ b/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/IdMap.sq
+@@ -103,6 +103,17 @@ SELECT *
+ FROM id_map
+ WHERE root = :root AND path = :path;
+ 
++-- One bounded rooted set read for CREATE-only unchanged-binding confirmation. The LEFT JOIN detects a matching
++-- tombstone without a second tombstone scan; the caller limits this to expected-count + 1 to distinguish an exact set
++-- from a root with extra durable rows.
++selectRootBindingsForConfirmation:
++SELECT m.path, m.id, m.materialized, rb.id AS tombstone_id
++FROM id_map m
++LEFT JOIN retired_binding rb ON rb.root = m.root AND rb.id = m.id
++WHERE m.root = :root
++ORDER BY m.path
++LIMIT :limit;
++
+ -- The bare-id resolver's LIVE claimant list (Option B). Index-served by the id-leading UNIQUE(id, root). Shaped
+ -- List<RootName> for the C5 multiplicity the One/Ambiguous/None contract models - post-flip it is 0..N rows, one
+ -- per root holding the id live.
+diff --git a/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/RootObservation.sq b/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/RootObservation.sq
+index 809a8e1..570dc74 100644
+--- a/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/RootObservation.sq
++++ b/server/src/main/sqldelight/com/plainbase/frameworks/sqldelight/RootObservation.sq
+@@ -18,9 +18,10 @@ import com.plainbase.domain.root.RootName;
+ 
+ -- binding_epoch is the SECOND, orthogonal freshness stamp (C5, revoke-before-stamp). observation_id gates epoch
+ -- CONTINUITY (a break, restart or unmount mints a new one and kills every live epoch); binding_epoch is a per-root,
+--- monotonic, never-reset counter that ONLY a successful bind advances, so a restore's re-bind revokes an in-flight
+--- inferred proof (minted under the old epoch value) WITHOUT touching observation_id and so WITHOUT collapsing the
+--- epoch. applyProofs compares BOTH tokens, exact-equality, fail-closed. upsertObservation deliberately leaves
++-- monotonic, never-reset counter that a successful bind or unchanged confirmation advances. A restore's re-bind
++-- revokes an in-flight inferred proof (minted under the old epoch value) WITHOUT touching observation_id and so
++-- WITHOUT collapsing the epoch. applyProofs compares BOTH tokens, exact-equality, fail-closed. upsertObservation
++-- deliberately leaves
+ -- binding_epoch alone: observation churn must not reset it.
+ CREATE TABLE root_observation (
+   root TEXT AS RootName NOT NULL PRIMARY KEY,
+@@ -39,6 +40,15 @@ SELECT observation_id, binding_epoch
+ FROM root_observation
+ WHERE root = :root;
+ 
++-- The confirmation path needs the SQLite storage class before it can trust the numeric value. A malformed REAL/TEXT
++-- value is returned as a harmless sentinel so the adapter can reject it before comparing or advancing the epoch.
++selectConfirmationEpoch:
++SELECT
++  CASE WHEN typeof(binding_epoch) = 'integer' THEN binding_epoch ELSE 0 END AS binding_epoch,
++  typeof(binding_epoch) AS binding_epoch_type
++FROM root_observation
++WHERE root = :root;
++
+ selectAllObservations:
+ SELECT *
+ FROM root_observation;
+@@ -48,10 +58,16 @@ INSERT INTO root_observation(root, observation_id)
+ VALUES (:root, :observationId)
+ ON CONFLICT(root) DO UPDATE SET observation_id = excluded.observation_id;
+ 
+--- Advances ONLY binding_epoch, in bind()'s existing transaction on the Bound path. A no-op when no row exists yet,
++-- Advances ONLY binding_epoch, in bind()'s existing transaction on the Bound path or a successful unchanged
++-- confirmation. A no-op when no row exists yet,
+ -- which is exactly when no proof can be outstanding for the root: every proof producer mints a token (observation()
+ -- / the epoch open's revoke()) first, and that upserts the row before any proof it stamps could be applied.
+ incrementBindingEpoch:
+ UPDATE root_observation
+ SET binding_epoch = binding_epoch + 1
+ WHERE root = :root;
++
++advanceBindingEpochIfCurrent:
++UPDATE root_observation
++SET binding_epoch = binding_epoch + :increment
++WHERE root = :root AND binding_epoch = :expectedEpoch;
+diff --git a/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/BindRevokesProofNativeTest.kt b/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/BindRevokesProofNativeTest.kt
+index 89b5084..919b64d 100644
+--- a/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/BindRevokesProofNativeTest.kt
++++ b/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/BindRevokesProofNativeTest.kt
+@@ -2,6 +2,7 @@ package com.plainbase.frameworks.sqldelight
+ 
+ import com.plainbase.domain.content.TreePath
+ import com.plainbase.domain.page.PageId
++import com.plainbase.domain.repository.IdBinding
+ import com.plainbase.domain.root.AbsenceProof
+ import com.plainbase.domain.root.BindingRef
+ import com.plainbase.domain.root.InferredProofMint
+@@ -11,6 +12,7 @@ import com.plainbase.domain.root.RootedPath
+ import org.junit.jupiter.api.Tag
+ import java.nio.file.Files
+ import kotlin.test.Test
++import kotlin.test.assertEquals
+ import kotlin.test.assertNotNull
+ import kotlin.test.assertTrue
+ 
+@@ -33,6 +35,48 @@ import kotlin.test.assertTrue
+ @Tag("native")
+ class BindRevokesProofNativeTest {
+ 
++    @OptIn(InferredProofMint::class)
++    @Test
++    fun `unchanged confirmation revokes an epoch proof without changing observation or recovery state`() {
++        val dir = Files.createTempDirectory("pb-native-confirmation-revoke")
++        try {
++            val dbPath = dir.resolve("plainbase.db")
++            DatabaseFactory.createDriver(dbPath).use { driver ->
++                val db = DatabaseFactory.createDatabase(driver)
++                val idMap = SqlDelightIdMapRepository(db)
++                val retirements = SqlDelightRetirementRepository(db)
++                val root = RootName.PRIMARY
++                val path = RootedPath(root, TreePath.require("guides/unchanged.md"))
++                val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5d")
++
++                idMap.bind(path, id, materialized = true)
++                db.dirtyPageQueries.upsert(id = id, root = root, path = path.path, expectedHash = "sha256:recovery", stage = "WRITING")
++                val observation = retirements.observation(root)
++                val proof = AbsenceProof.inferred(
++                    root = root,
++                    source = ProofSource.EPOCH,
++                    observationId = observation,
++                    bindingEpoch = retirements.bindingEpoch(root),
++                    covers = setOf(BindingRef(path.path, id)),
++                )
++
++                assertTrue(idMap.confirmUnchangedBindings(listOf(IdBinding(path, id, materialized = true))))
++
++                val retired = retirements.applyProofs(listOf(proof), witnessed = emptySet(), unavailableNow = { emptySet() })
++                assertTrue(retired.isEmpty(), "the stale confirmation proof reaped $retired")
++                assertEquals(observation, retirements.observation(root))
++                assertEquals(1L, retirements.bindingEpoch(root).value)
++                assertNotNull(idMap.bindingInRoot(root, id), "the confirmed binding was tombstoned by its stale proof")
++                assertNotNull(
++                    db.dirtyPageQueries.selectByRootId(root = root, id = id).executeAsOneOrNull(),
++                    "the dirty_page recovery row was destroyed by a stale confirmation proof",
++                )
++            }
++        } finally {
++            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
++        }
++    }
++
+     @OptIn(InferredProofMint::class)
+     @Test
+     fun `a re-bind revokes a proof minted before it - the re-created binding and its dirty_page recovery row survive`() {
+diff --git a/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/IdMapClaimantQueriesNativeTest.kt b/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/IdMapClaimantQueriesNativeTest.kt
+index d6d3d13..21505d3 100644
+--- a/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/IdMapClaimantQueriesNativeTest.kt
++++ b/server/src/nativeTest/kotlin/com/plainbase/frameworks/sqldelight/IdMapClaimantQueriesNativeTest.kt
+@@ -2,6 +2,7 @@ package com.plainbase.frameworks.sqldelight
+ 
+ import com.plainbase.domain.content.TreePath
+ import com.plainbase.domain.page.PageId
++import com.plainbase.domain.repository.BindOutcome
+ import com.plainbase.domain.root.RootName
+ import com.plainbase.domain.root.RootedPath
+ import org.junit.jupiter.api.Tag
+@@ -26,6 +27,58 @@ import kotlin.test.assertNull
+ @Tag("native")
+ class IdMapClaimantQueriesNativeTest {
+ 
++    @Test
++    fun `same binding preserves state while every bound bind advances the epoch in-image`() {
++        val dir = Files.createTempDirectory("pb-native-id-map-guard")
++        try {
++            DatabaseFactory.createDriver(dir.resolve("plainbase.db")).use { driver ->
++                val db = DatabaseFactory.createDatabase(driver)
++                val repo = SqlDelightIdMapRepository(db)
++                val root = RootName.PRIMARY
++                val path = RootedPath(root, TreePath.require("guides/a.md"))
++                val newPath = RootedPath(root, TreePath.require("guides/new.md"))
++                val id = PageId.require("01010101-0101-0101-0101-010101010101")
++                val newRowId = PageId.require("02020202-0202-0202-0202-020202020202")
++                val replacementId = PageId.require("03030303-0303-0303-0303-030303030303")
++
++                db.rootObservationQueries.upsertObservation(root = root, observationId = 41L)
++                val initial = db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne()
++                assertEquals(41L, initial.observation_id)
++                assertEquals(0L, initial.binding_epoch)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = true))
++                val beforeRepeat = db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne()
++                assertEquals(1L, beforeRepeat.binding_epoch)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = true))
++                val afterRepeat = db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne()
++                assertEquals(41L, afterRepeat.observation_id)
++                assertEquals(beforeRepeat.binding_epoch + 1L, afterRepeat.binding_epoch)
++                assertEquals(id, assertNotNull(repo.find(path)).id)
++                assertEquals(true, assertNotNull(repo.find(path)).materialized)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = false))
++                assertEquals(false, assertNotNull(repo.find(path)).materialized)
++                assertEquals(3L, db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne().binding_epoch)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, id, materialized = true))
++                assertEquals(true, assertNotNull(repo.find(path)).materialized)
++                assertEquals(4L, db.rootObservationQueries.selectObservationAndEpoch(root).executeAsOne().binding_epoch)
++
++                assertEquals(BindOutcome.Bound, repo.bind(newPath, newRowId, materialized = false))
++                assertEquals(newRowId, assertNotNull(repo.find(newPath)).id)
++
++                assertEquals(BindOutcome.Bound, repo.bind(path, replacementId, materialized = true))
++                assertEquals(replacementId, assertNotNull(repo.find(path)).id)
++                val tombstone = assertNotNull(repo.retiredAt(root, id))
++                assertEquals(id, tombstone.id)
++                assertEquals(path, tombstone.path)
++            }
++        } finally {
++            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
++        }
++    }
++
+     @Test
+     fun `rootsHoldingId, retiredRootsHoldingId and retiredAt round-trip in-image`() {
+         val dir = Files.createTempDirectory("pb-native-claimants")
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/AbsenceInterleavingHarnessTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/AbsenceInterleavingHarnessTest.kt
+index 94850fd..4ae990a 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/AbsenceInterleavingHarnessTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/AbsenceInterleavingHarnessTest.kt
+@@ -11,6 +11,7 @@ import com.plainbase.domain.history.Commit
+ import com.plainbase.domain.history.CommitIdentity
+ import com.plainbase.domain.history.FileDiff
+ import com.plainbase.domain.history.HistoryProvider
++import com.plainbase.domain.page.PageId
+ import com.plainbase.domain.repository.DirtyPage
+ import com.plainbase.domain.repository.IdBinding
+ import com.plainbase.domain.repository.IdMapRepository
+@@ -18,8 +19,10 @@ import com.plainbase.domain.repository.RetirementRepository
+ import com.plainbase.domain.repository.Stage
+ import com.plainbase.domain.root.AbsenceProof
+ import com.plainbase.domain.root.BindingEpoch
++import com.plainbase.domain.root.BindingRef
+ import com.plainbase.domain.root.BreakCause
+ import com.plainbase.domain.root.GitCheckpointAdvance
++import com.plainbase.domain.root.InferredProofMint
+ import com.plainbase.domain.root.RootName
+ import com.plainbase.domain.root.RootedPageId
+ import com.plainbase.domain.root.RootedPath
+@@ -30,6 +33,8 @@ import com.plainbase.frameworks.filesystem.LocalContentStore
+ import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
+ import io.kotest.assertions.withClue
+ import io.kotest.core.spec.style.FunSpec
++import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
++import io.kotest.matchers.collections.shouldHaveSize
+ import io.kotest.matchers.shouldBe
+ import org.slf4j.LoggerFactory
+ 
+@@ -84,6 +89,85 @@ class AbsenceInterleavingHarnessTest : FunSpec({
+     val extra = RootName.require("extra")
+     val rollback = TreePath.require("notes/rollback.md")
+ 
++    test("C5.1 confirmation advances freshness before stale proof apply, with a positive reap control") {
++        fun runScenario(confirm: Boolean): ConfirmationScenario = withAbsenceTrees { mainDir, extraDir ->
++            val firstId = PageId.require("01010101-0101-0101-0101-010101010101")
++            val secondId = PageId.require("02020202-0202-0202-0202-020202020202")
++            writePage(mainDir, "guides/deploy.md", "---\nid: $firstId\ntitle: Deploy\n---\n\n# Deploy\n\nbody\n")
++            writePage(
++                extraDir,
++                "notes/rollback.md",
++                "---\nid: $secondId\ntitle: Rollback\n---\n\n# Rollback\n\nrollback-unique-term\n",
++            )
++            writePage(
++                extraDir,
++                "notes/keep.md",
++                "---\nid: 03030303-0303-0303-0303-030303030303\ntitle: Keep\n---\n\n# Keep\n\nkeep\n",
++            )
++            AbsenceWorld(mainDir, extraDir).use { world ->
++                world.observe("extra")
++                val snapshot = world.builder(mainDir, world.extraStore(extraDir), world.indexer).rebuild()
++                val expected = snapshot.section(extra).pages.map { page ->
++                    IdBinding(RootedPath(extra, page.path), page.id, materialized = true)
++                }
++                expected shouldContainExactlyInAnyOrder world.idMap.bindings().filter { it.path.root == extra }
++                expected.forEach { binding ->
++                    world.dirtyPages.mark(binding.id, binding.path, "sha256:recovery", Stage.WRITING)
++                }
++                val beforeEpoch = world.retirements.bindingEpoch(extra)
++                val observation = world.retirements.observation(extra)
++                val proof = inferredProof(extra, observation, beforeEpoch, expected)
++                val beforeCheckpoint = world.checkpoints.load()
++                val beforeSearch = world.engine.search(SearchQuery("rollback-unique-term", limit = 20, offset = 0))
++
++                val confirmed = if (confirm) world.idMap.confirmUnchangedBindings(expected) else false
++                val retired = world.retirements.applyProofs(
++                    proofs = listOf(proof),
++                    witnessed = emptySet(),
++                    unavailableNow = { emptySet() },
++                )
++                if (!confirm) world.indexer.sync(snapshot)
++
++                ConfirmationScenario(
++                    confirmed = confirmed,
++                    beforeEpoch = beforeEpoch,
++                    afterEpoch = world.retirements.bindingEpoch(extra),
++                    observation = observation,
++                    actualObservation = world.retirements.observation(extra),
++                    retired = retired,
++                    bindings = world.idMap.bindings().filter { it.path.root == extra },
++                    tombstones = world.idMap.retiredBindings().filter { it.path.root == extra },
++                    dirty = world.dirtyPages.all().filter { it.path.root == extra },
++                    checkpoints = world.checkpoints.load().filterKeys { it.root == extra },
++                    search = world.engine.search(SearchQuery("rollback-unique-term", limit = 20, offset = 0)),
++                    beforeCheckpoint = beforeCheckpoint.filterKeys { it.root == extra },
++                    beforeSearchTotal = beforeSearch.total,
++                )
++            }
++        }
++
++        val confirmed = runScenario(confirm = true)
++        confirmed.confirmed shouldBe true
++        confirmed.afterEpoch.value shouldBe confirmed.beforeEpoch.value + 2L
++        confirmed.actualObservation shouldBe confirmed.observation
++        confirmed.retired shouldBe emptySet()
++        confirmed.bindings shouldHaveSize 2
++        confirmed.tombstones shouldBe emptyList()
++        confirmed.dirty shouldHaveSize 2
++        confirmed.checkpoints shouldBe confirmed.beforeCheckpoint
++        confirmed.search.total shouldBe confirmed.beforeSearchTotal
++
++        val control = runScenario(confirm = false)
++        control.confirmed shouldBe false
++        control.afterEpoch shouldBe control.beforeEpoch
++        control.retired shouldHaveSize 2
++        control.bindings shouldBe emptyList()
++        control.tombstones shouldHaveSize 2
++        control.dirty shouldBe emptyList()
++        control.checkpoints shouldBe emptyMap()
++        control.search.total shouldBe 0L
++    }
++
+     /**
+      * Drives one pass to the point of reaping `(extra, notes/rollback.md)` under [source]'s authority, firing [event] at
+      * [boundary] - or, when both are null, firing nothing at all (the control). Returns what survived.
+@@ -289,6 +373,36 @@ class AbsenceInterleavingHarnessTest : FunSpec({
+     }
+ })
+ 
++private data class ConfirmationScenario(
++    val confirmed: Boolean,
++    val beforeEpoch: BindingEpoch,
++    val afterEpoch: BindingEpoch,
++    val observation: com.plainbase.domain.root.ObservationId,
++    val actualObservation: com.plainbase.domain.root.ObservationId,
++    val retired: Set<RootedPageId>,
++    val bindings: List<IdBinding>,
++    val tombstones: List<com.plainbase.domain.root.RetiredBinding>,
++    val dirty: List<DirtyPage>,
++    val checkpoints: Map<RootedPageId, TreePath?>,
++    val search: com.plainbase.domain.search.SearchResults,
++    val beforeCheckpoint: Map<RootedPageId, TreePath?>,
++    val beforeSearchTotal: Long,
++)
++
++@OptIn(InferredProofMint::class)
++private fun inferredProof(
++    root: RootName,
++    observation: com.plainbase.domain.root.ObservationId,
++    epoch: BindingEpoch,
++    bindings: List<IdBinding>,
++): AbsenceProof = AbsenceProof.inferred(
++    root = root,
++    source = com.plainbase.domain.root.ProofSource.EPOCH,
++    observationId = observation,
++    bindingEpoch = epoch,
++    covers = bindings.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) },
++)
++
+ /**
+  * Which proof source's authority is under test. They fail differently and BOTH are needed: an early break stops EPOCH
+  * from minting at all (so its observation stamp is only load-bearing between mint and apply), while GIT mints with no
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/IndexBuilderReindexTargetedTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/IndexBuilderReindexTargetedTest.kt
+index bbcf0be..146429d 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/IndexBuilderReindexTargetedTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/IndexBuilderReindexTargetedTest.kt
+@@ -31,12 +31,13 @@ import java.nio.file.Path
+ import java.util.concurrent.ConcurrentHashMap
+ 
+ /**
+- * PB-WRITE-1 named tests 8, 9, 10 — the targeted reindex is O(changed-page) END-TO-END and never
+- * silently no-ops. The three correctness guards: render count = 1, search work = single-page (no
+- * corpus diff), checkpoint writes = 0; plus the vanished-page throw (MUST-FIX 4).
++ * PB-WRITE-1 named tests 8, 9, 10; the targeted reindex updates one page and never silently no-ops.
++ * The three correctness guards: render count = 1, search work = single-page (no corpus diff),
++ * checkpoint writes = 0; plus the vanished-page throw (MUST-FIX 4). These guards do not establish
++ * end-to-end constant cost for the published snapshot.
+  *
+  * Built with explicit spy collaborators (a counting renderer, a counting [SearchProvider], a counting
+- * [PageCheckpointRepository]) so each O(changed-page) claim is asserted independently of corpus size.
++ * [PageCheckpointRepository]) so each targeted-work claim is asserted independently of corpus size.
+  */
+ class IndexBuilderReindexTargetedTest : FunSpec({
+ 
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/IndexCollaboratorAuthorityTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/IndexCollaboratorAuthorityTest.kt
+index 8abb772..178ddbb 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/IndexCollaboratorAuthorityTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/IndexCollaboratorAuthorityTest.kt
+@@ -1286,6 +1286,7 @@ class IndexCollaboratorAuthorityTest : FunSpec({
+                 "java.util.Set<com.plainbase.domain.root.RootName>",
+                 "java.util.Set<com.plainbase.domain.root.RootName>",
+                 "java.util.List<com.plainbase.domain.model.IdentityIssue>",
++                "boolean",
+             )
+             if (resolve.parameterTypes.toList() != listOf(
+                     Class.forName("java.util.List"),
+@@ -1293,6 +1294,7 @@ class IndexCollaboratorAuthorityTest : FunSpec({
+                     Class.forName("java.util.Set"),
+                     Class.forName("java.util.Set"),
+                     Class.forName("java.util.List"),
++                    java.lang.Boolean.TYPE,
+                 )
+             ) {
+                 violations += "resolve parameters=${resolve.parameterTypes.toList()}"
+@@ -1328,7 +1330,8 @@ class IndexCollaboratorAuthorityTest : FunSpec({
+             "witnessed", ":", "Map", "<", "RootedPath", ",", "Witness", ">", ",",
+             "scannedRoots", ":", "Set", "<", "RootName", ">", ",",
+             "registeredRoots", ":", "Set", "<", "RootName", ">", ",",
+-            "raised", ":", "MutableList", "<", "IdentityIssue", ">", ",", ")", ":", "Map", "<",
++            "raised", ":", "MutableList", "<", "IdentityIssue", ">", ",",
++            "allowUnchangedConfirmation", ":", "Boolean", ",", ")", ":", "Map", "<",
+             "RootedPath", ",", "Identity", ">",
+         )
+         sourceUnit.readerSourceSchemaViolations(
+@@ -1352,6 +1355,7 @@ class IndexCollaboratorAuthorityTest : FunSpec({
+                     scannedRoots: Set<RootName>,
+                     registeredRoots: Set<RootName>,
+                     raised: MutableList<IdentityIssue>,
++                    allowUnchangedConfirmation: Boolean,
+                 ): Map<RootedPath, Identity> = TODO()
+             }
+         """.trimIndent()
+@@ -2794,20 +2798,25 @@ private fun Class<*>.authorityLabel(forbiddenTypes: Map<String, String> = FORBID
+ 
+ private fun Method.isAdmittedIdMapBindDefaultReceiver(): Boolean =
+     declaringClass == IdMapRepository::class.java &&
+-        name == "bind\$default" &&
+         Modifier.isPublic(modifiers) &&
+         Modifier.isStatic(modifiers) &&
+         isSynthetic &&
+-        parameterTypes.toList() == listOf(
+-            IdMapRepository::class.java,
+-            RootedPath::class.java,
+-            PageId::class.java,
+-            java.lang.Boolean.TYPE,
+-            Supersession::class.java,
+-            java.lang.Integer.TYPE,
+-            Any::class.java,
+-        ) &&
+-        returnType == BindOutcome::class.java
++        when (name) {
++            "bind\$default" -> parameterTypes.toList() == listOf(
++                IdMapRepository::class.java,
++                RootedPath::class.java,
++                PageId::class.java,
++                java.lang.Boolean.TYPE,
++                Supersession::class.java,
++                java.lang.Integer.TYPE,
++                Any::class.java,
++            ) && returnType == BindOutcome::class.java
++            "access\$confirmUnchangedBindings\$jd" -> parameterTypes.toList() == listOf(
++                IdMapRepository::class.java,
++                List::class.java,
++            ) && returnType == java.lang.Boolean.TYPE
++            else -> false
++        }
+ 
+ private fun Method.authorityGenericParameterTypes(): List<Type> =
+     genericParameterTypes.drop(if (isAdmittedIdMapBindDefaultReceiver()) 1 else 0)
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/IndexHarness.kt b/server/src/test/kotlin/com/plainbase/domain/service/IndexHarness.kt
+index 542f206..68d648d 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/IndexHarness.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/IndexHarness.kt
+@@ -1,10 +1,12 @@
+ package com.plainbase.domain.service
+ 
++import app.cash.sqldelight.db.SqlDriver
+ import com.plainbase.domain.content.ContentStore
+ import com.plainbase.domain.history.HistoryProvider
+ import com.plainbase.domain.page.FrontmatterParser
+ import com.plainbase.domain.page.PageIndexView
+ import com.plainbase.domain.render.MarkdownRenderer
++import com.plainbase.domain.repository.IdMapRepository
+ import com.plainbase.domain.repository.NoTopology
+ import com.plainbase.domain.repository.replaceFrom
+ import com.plainbase.domain.root.BindingLatch
+@@ -44,12 +46,13 @@ import kotlin.time.Clock
+ 
+ /**
+  * The chunk-5 integration harness: a real [IndexBuilder] over a real tree ([LocalContentStore]),
+- * real rendering ([FlexmarkRenderer]), and real persistence (in-memory SQLite repos) — the same
++ * real rendering ([FlexmarkRenderer]), and real persistence (SQLite repos) — the same
+  * wiring `indexModule` produces, minus HTTP. One harness = one DATA_DIR lifetime, so successive
+  * [IndexBuilder.rebuild]s exercise rescan semantics (move aliases, issue accumulation) for real.
+  *
+  * [contentStore], [frontmatterParser], and [rendererFactory] are injectable so the one-pass
+- * counting test can wrap them.
++ * counting test can wrap them. The [decorateIdMap] seam keeps that decoration on the same
++ * repository instance every consumer receives.
+  */
+ class IndexHarness(
+     root: Path,
+@@ -66,13 +69,17 @@ class IndexHarness(
+     sources: List<IndexBuilder.Source>? = null,
+     /** C4: the availability holder the builder probes/marks through. Empty (every root serving) by default. */
+     val availability: RootAvailability = RootAvailability(Clock.System),
++    /** Allows corpus tests to inject an isolated file-backed SQL driver. */
++    driverFactory: () -> SqlDriver = DatabaseFactory::createInMemoryDriver,
++    /** Allows performance tests to decorate the one real SQLDelight identity repository. */
++    decorateIdMap: (IdMapRepository) -> IdMapRepository = { it },
+ ) : AutoCloseable {
+ 
+-    private val driver = DatabaseFactory.createInMemoryDriver()
++    private val driver = driverFactory()
+     private val database = DatabaseFactory.createDatabase(driver)
+     private val citations = CitationFactory()
+ 
+-    val idMap = SqlDelightIdMapRepository(database)
++    val idMap = decorateIdMap(SqlDelightIdMapRepository(database))
+     val aliases = SqlDelightUrlAliasRepository(database)
+     val registry = UrlAliasRegistry(aliases)
+     val checkpoints = SqlDelightPageCheckpointRepository(database)
+@@ -85,7 +92,7 @@ class IndexHarness(
+      */
+     val retirements = SqlDelightRetirementRepository(database)
+ 
+-    // A3 auth substrate over the SAME in-memory DB (the schema includes subject_role/audit_log via 5.sqm). The
++    // A3 auth substrate over the SAME SQLite DB (the schema includes subject_role/audit_log via 5.sqm). The
+     // route-test harnesses build a PolicyService over these + seed a role; ApiTokenService mints test bearers.
+     val roleRepository = SqlDelightRoleRepository(database)
+     val auditRepository = SqlDelightAuditRepository(database)
+@@ -93,7 +100,7 @@ class IndexHarness(
+     val proposalRepository = SqlDelightProposalRepository(database)
+     val apiTokens = ApiTokenService(minter = ApiTokenMinter(), hasher = TokenHasher(), tokens = apiTokenRepository, clock = Clock.System)
+ 
+-    // A4a human-auth substrate over the SAME in-memory DB (the v7 schema includes users/sessions/setup_tokens).
++    // A4a human-auth substrate over the SAME SQLite DB (the v7 schema includes users/sessions/setup_tokens).
+     val userRepository = SqlDelightUserRepository(database)
+     val sessionRepository = SqlDelightSessionRepository(database)
+     val setupTokenRepository = SqlDelightSetupTokenRepository(database)
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/IndexIdentityAssignmentsTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/IndexIdentityAssignmentsTest.kt
+index fc5775b..c09a3cb 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/IndexIdentityAssignmentsTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/IndexIdentityAssignmentsTest.kt
+@@ -358,6 +358,7 @@ class IndexIdentityAssignmentsTest : FunSpec({
+                         scannedRoots = setOf(RootName.PRIMARY),
+                         registeredRoots = setOf(RootName.PRIMARY),
+                         raised = raised,
++                        allowUnchangedConfirmation = false,
+                     )
+ 
+                 raised shouldContainExactly listOf(scanIssue, firstDuplicate, secondDuplicate)
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/MultiRootCorpusPerfTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/MultiRootCorpusPerfTest.kt
+index 8bc37ef..6396791 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/MultiRootCorpusPerfTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/MultiRootCorpusPerfTest.kt
+@@ -63,8 +63,8 @@ class MultiRootCorpusPerfTest : FunSpec({
+         report("rebuild median ms", single.rebuildMedian, singleAgain.rebuildMedian, triple.rebuildMedian)
+         report("create median ms", single.createMedian, singleAgain.createMedian, triple.createMedian)
+         report("render p95 ms", single.renderP95, singleAgain.renderP95, triple.renderP95)
+-        // No ratio: an O(1) reindex does not scale with the root count, and a ratio over single-digit
+-        // milliseconds reports the scheduler, not the topology. Recorded because it is a gated tripwire.
++        // No ratio: single-digit-millisecond differences report scheduler noise more than topology.
++        // Recorded because it is a gated tripwire.
+         println(
+             "multiroot-perf: solo-save median ms 1-root %d / 3-root %d (tripwire only)"
+                 .format(single.soloMedian, triple.soloMedian),
+@@ -78,7 +78,7 @@ class MultiRootCorpusPerfTest : FunSpec({
+     }
+ })
+ 
+-/** One shape's numbers. [createMin] is the write-path tripwire's second leg; [soloMedian] its O(1) contrast. */
++/** One shape's numbers. [createMin] is the write-path tripwire's second leg; [soloMedian] is its solo-save comparison. */
+ private class Metrics(
+     val rebuildMedian: Long,
+     val createMedian: Long,
+@@ -134,7 +134,7 @@ private fun measure(slices: List<Pair<String, IntRange>>): Metrics = withSeededT
+             val renderP95 = renderP95(snapshot)
+ 
+             val pipeline = harness.writePipeline()
+-            // The O(1) contrast, on a page that lives in MAIN under both shapes. Append-only edits, so the
++            // The single-page reindex contrast, on a page that lives in MAIN under both shapes. Append-only edits, so the
+             // materialized frontmatter (id included) never changes and classifyEdit stays green.
+             val target = TreePath.require("section-00/page-000.md")
+             val saves = (0 until 20).map { round ->
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/WritePathCorpusPerfTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/WritePathCorpusPerfTest.kt
+index dec9ae5..e113599 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/WritePathCorpusPerfTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/WritePathCorpusPerfTest.kt
+@@ -26,8 +26,8 @@ import kotlin.concurrent.thread
+ import kotlin.system.measureTimeMillis
+ 
+ /**
+- * C2 item 4 — MEASURE the O(corpus) full-rebuild-per-create (WritePipeline.create runs a FULL
+- * `indexBuilder.rebuild()` + the targeted O(1) `reindex()`, both under the pipeline monitor every
++ * C2 item 4: MEASURE the full-rebuild-per-create (WritePipeline.create runs a FULL
++ * `indexBuilder.rebuild()` + a targeted reindex, both under the pipeline monitor every
+  * save serializes on). The `write-perf:` printed numbers are the deliverable — the tripwire asserts
+  * are generous regression bounds (3-30x headroom), NOT the contract; the pre-committed 8 s
+  * defer-vs-escalate rule is applied to the recorded numbers at chunk verification, never here.
+@@ -80,7 +80,7 @@ class WritePathCorpusPerfTest : FunSpec({
+                     // (a) Create end-to-end: full rebuild + targeted reindex under the monitor, distinct folders.
+                     val createTimes = (0 until 5).map { i -> timedCreate(pipeline, "perf-%02d/created.md".format(i)) }.sorted()
+ 
+-                    // (b) The O(1) contrast: 20 saves of one page, fresh baseHash each round (append-only edits
++                    // (b) The single-page reindex contrast: 20 saves of one page, fresh baseHash each round (append-only edits
+                     // so the materialized frontmatter — id included — never changes and classifyEdit stays green).
+                     val target = TreePath.require("section-00/page-000.md")
+                     val saveTimes = (0 until 20).map { round ->
+diff --git a/server/src/test/kotlin/com/plainbase/domain/service/WritePipelineTest.kt b/server/src/test/kotlin/com/plainbase/domain/service/WritePipelineTest.kt
+index ae2c2ef..a6557a0 100644
+--- a/server/src/test/kotlin/com/plainbase/domain/service/WritePipelineTest.kt
++++ b/server/src/test/kotlin/com/plainbase/domain/service/WritePipelineTest.kt
+@@ -8,6 +8,10 @@ import com.plainbase.domain.model.WriteOutcome
+ import com.plainbase.domain.page.PageId
+ import com.plainbase.domain.principal.createGrantForTests
+ import com.plainbase.domain.principal.grantForTests
++import com.plainbase.domain.repository.BindOutcome
++import com.plainbase.domain.repository.IdBinding
++import com.plainbase.domain.repository.IdMapRepository
++import com.plainbase.domain.repository.Supersession
+ import com.plainbase.domain.root.RootName
+ import com.plainbase.domain.root.RootedPageId
+ import com.plainbase.domain.root.RootedPath
+@@ -354,6 +358,57 @@ class WritePipelineTest : FunSpec({
+             }
+         }
+     }
++
++    test("only an eligible CREATE uses unchanged confirmation; ordinary rebuild stays on bind path") {
++        withTempTree({}) { root ->
++            lateinit var recording: RecordingConfirmationIdMap
++            IndexHarness(
++                root,
++                decorateIdMap = { delegate -> RecordingConfirmationIdMap(delegate).also { recording = it } },
++            ).use { harness ->
++                harness.observe()
++                harness.builder.rebuild()
++                recording.confirmationCalls shouldBe 0
++
++                val pageId = PageId.require("01900000-0000-7000-8000-0000000000e1")
++                val bytes = "---\nid: ${pageId.value}\ntitle: Confirmed\n---\n\n# Confirmed\n\nbody.\n".toByteArray()
++                harness.writePipeline().create(
++                    createGrantForTests(),
++                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("confirmed.md"), bytes),
++                ).shouldBeInstanceOf<WriteOutcome.Written>()
++
++                recording.confirmationCalls shouldBe 1
++                // The CREATE's initial durable bind is the only per-page bind; rebuild's resolver confirmed the set.
++                recording.bindCalls shouldBe 1
++            }
++        }
++    }
++
++    test("a declined CREATE confirmation falls back to the original ordered binds") {
++        withTempTree({}) { root ->
++            lateinit var recording: RecordingConfirmationIdMap
++            IndexHarness(
++                root,
++                decorateIdMap = { delegate ->
++                    RecordingConfirmationIdMap(delegate, forcedConfirmationResult = false).also { recording = it }
++                },
++            ).use { harness ->
++                harness.observe()
++                harness.builder.rebuild()
++                val pageId = PageId.require("01900000-0000-0000-0000-0000000000e2")
++                val bytes = "---\nid: ${pageId.value}\ntitle: Fallback\n---\n\n# Fallback\n\nbody.\n".toByteArray()
++
++                harness.writePipeline().create(
++                    createGrantForTests(),
++                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("fallback.md"), bytes),
++                ).shouldBeInstanceOf<WriteOutcome.Written>()
++
++                recording.confirmationCalls shouldBe 1
++                // Initial CREATE bind plus the resolver's ordinary bind after the confirmation declined.
++                recording.bindCalls shouldBe 2
++            }
++        }
++    }
+ })
+ 
+ /**
+@@ -378,3 +433,21 @@ private class TogglingSearchProvider : SearchProvider {
+ 
+ /** A real LocalContentStore over [root] — the delegate behind a CAS-failing test stand-in. */
+ private fun realStoreDelegate(root: Path): ContentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root)
++
++private class RecordingConfirmationIdMap(
++    private val delegate: IdMapRepository,
++    private val forcedConfirmationResult: Boolean? = null,
++) : IdMapRepository by delegate {
++    var bindCalls = 0
++    var confirmationCalls = 0
++
++    override fun bind(path: RootedPath, id: PageId, materialized: Boolean, supersession: Supersession): BindOutcome {
++        bindCalls++
++        return delegate.bind(path, id, materialized, supersession)
++    }
++
++    override fun confirmUnchangedBindings(expected: List<IdBinding>): Boolean {
++        confirmationCalls++
++        return forcedConfirmationResult ?: delegate.confirmUnchangedBindings(expected)
++    }
++}
+diff --git a/server/src/test/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepositoryTest.kt b/server/src/test/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepositoryTest.kt
+index 1416cf7..8bcc693 100644
+--- a/server/src/test/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepositoryTest.kt
++++ b/server/src/test/kotlin/com/plainbase/frameworks/sqldelight/SqlDelightIdMapRepositoryTest.kt
+@@ -1,5 +1,6 @@
+ package com.plainbase.frameworks.sqldelight
+ 
++import app.cash.sqldelight.Transacter
+ import app.cash.sqldelight.db.QueryResult
+ import app.cash.sqldelight.db.SqlDriver
+ import app.cash.sqldelight.db.SqlPreparedStatement
+@@ -45,6 +46,13 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
+             block(SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver)), driver)
+         }
+ 
++    fun <T> withConfirmationRepo(block: (SqlDelightIdMapRepository, PlainbaseDb, ConfirmationCountingDriver) -> T): T =
++        DatabaseFactory.createInMemoryDriver().use { real ->
++            val driver = ConfirmationCountingDriver(real)
++            val database = DatabaseFactory.createDatabase(driver)
++            block(SqlDelightIdMapRepository(database), database, driver)
++        }
++
+     val main = RootName.PRIMARY
+     val extra = RootName.require("extra")
+     val pathA = RootedPath(main, TreePath.require("guides/a.md"))
+@@ -59,6 +67,192 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
+         registeredRoots = setOf(main, extra),
+     )
+     val idY = PageId.require("f47ac10b-58cc-4372-a567-0e02b2c3d479")
++    val pathC = RootedPath(main, TreePath.require("archive/c.md"))
++    val idZ = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5c")
++
++    test("unchanged confirmation advances only the root binding epoch, once, with no per-page writes") {
++        withConfirmationRepo { repo, database, driver ->
++            database.rootObservationQueries.upsertObservation(root = main, observationId = 41L).value
++            repo.bind(pathA, idX, materialized = true)
++            repo.bind(pathB, idY, materialized = true)
++            val expected = listOf(repo.find(pathA), repo.find(pathB)).map { requireNotNull(it) }
++            val bindingsBefore = repo.bindings()
++            val tombstonesBefore = repo.retiredBindings()
++            val observationBefore = driver.queryLong("SELECT observation_id FROM root_observation WHERE root = '${main.value}'")
++            val epochBefore = driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'")
++
++            driver.resetConfirmationCounters()
++            repo.confirmUnchangedBindings(expected) shouldBe true
++
++            driver.transactionCount shouldBe 1
++            driver.executedSql.none { it.contains("id_map") } shouldBe true
++            driver.executedSql.count { it.contains("UPDATE root_observation") } shouldBe 1
++            driver.queryLong("SELECT observation_id FROM root_observation WHERE root = '${main.value}'") shouldBe observationBefore
++            driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe
++                epochBefore + expected.size
++            repo.bindings() shouldContainExactlyInAnyOrder bindingsBefore
++            repo.retiredBindings() shouldContainExactly tombstonesBefore
++        }
++    }
++
++    test("invalid confirmation input returns false without opening a transaction") {
++        withConfirmationRepo { repo, _, driver ->
++            val invalid = listOf(
++                emptyList(),
++                listOf(IdBinding(pathA, idX, materialized = false)),
++                listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathA, idY, materialized = true)),
++                listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathB, idX, materialized = true)),
++                listOf(
++                    IdBinding(pathA, idX, materialized = true),
++                    IdBinding(RootedPath(extra, pathB.path), idY, materialized = true),
++                ),
++            )
++
++            invalid.forEach { expected ->
++                repo.confirmUnchangedBindings(expected) shouldBe false
++            }
++            driver.transactionCount shouldBe 0
++        }
++    }
++
++    test("a missing root observation returns false without touching its live bindings") {
++        withConfirmationRepo { repo, _, driver ->
++            repo.bind(pathA, idX, materialized = true)
++            val bindingsBefore = repo.bindings()
++            driver.resetConfirmationCounters()
++
++            repo.confirmUnchangedBindings(listOf(IdBinding(pathA, idX, materialized = true))) shouldBe false
++
++            driver.transactionCount shouldBe 1
++            repo.bindings() shouldContainExactly bindingsBefore
++        }
++    }
++
++    test("set mismatches, an extra row, and a matching tombstone fail closed without changing state") {
++        fun assertUnchanged(
++            expected: List<IdBinding>,
++            prepare: (SqlDelightIdMapRepository, SqlDriver) -> Unit = { _, _ -> },
++        ) {
++            withConfirmationRepo { repo, database, driver ->
++                database.rootObservationQueries.upsertObservation(root = main, observationId = 73L).value
++                repo.bind(pathA, idX, materialized = true)
++                repo.bind(pathB, idY, materialized = true)
++                prepare(repo, driver)
++                val bindingsBefore = repo.bindings()
++                val tombstonesBefore = repo.retiredBindings()
++                val observationBefore = driver.queryLong("SELECT observation_id FROM root_observation WHERE root = '${main.value}'")
++                val epochBefore = driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'")
++
++                repo.confirmUnchangedBindings(expected) shouldBe false
++
++                repo.bindings() shouldContainExactlyInAnyOrder bindingsBefore
++                repo.retiredBindings() shouldContainExactly tombstonesBefore
++                driver.queryLong("SELECT observation_id FROM root_observation WHERE root = '${main.value}'") shouldBe observationBefore
++                driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe epochBefore
++            }
++        }
++
++        assertUnchanged(
++            listOf(IdBinding(pathA, idY, materialized = true), IdBinding(pathB, idX, materialized = true)),
++        )
++        assertUnchanged(
++            listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathB, idY, materialized = true)),
++            prepare = { repo, _ -> repo.bind(pathC, idZ, materialized = true) },
++        )
++        assertUnchanged(
++            listOf(IdBinding(pathA, idX, materialized = true), IdBinding(pathB, idY, materialized = true)),
++            prepare = { _, driver ->
++                driver.execute(
++                    identifier = null,
++                    sql = "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES (?, ?, ?, ?, ?)",
++                    parameters = 5,
++                    binders = {
++                        bindBytes(0, PageIdColumnAdapter.encode(idX))
++                        bindString(1, main.value)
++                        bindString(2, pathA.path.value)
++                        bindLong(3, 1L)
++                        bindLong(4, 99L)
++                    },
++                )
++            },
++        )
++    }
++
++    test("confirmation is root-scoped across live and retired claims in another root") {
++        withConfirmationRepo { repo, database, _ ->
++            database.rootObservationQueries.upsertObservation(root = main, observationId = 11L).value
++            repo.bind(pathA, idX, materialized = true)
++            val otherRootPath = RootedPath(extra, TreePath.require("foreign.md"))
++            repo.bind(otherRootPath, idX, materialized = true)
++            repo.bind(otherRootPath, idY, materialized = true, supersession = witnessedAll)
++
++            repo.confirmUnchangedBindings(listOf(IdBinding(pathA, idX, materialized = true))) shouldBe true
++            repo.find(pathA) shouldBe IdBinding(pathA, idX, materialized = true)
++            repo.retiredAt(extra, idX) shouldNotBe null
++        }
++    }
++
++    test("malformed, negative, and overflowing binding epochs throw before any confirmation write") {
++        withConfirmationRepo { repo, database, driver ->
++            database.rootObservationQueries.upsertObservation(root = main, observationId = 19L).value
++            repo.bind(pathA, idX, materialized = true)
++            val expected = listOf(IdBinding(pathA, idX, materialized = true))
++
++            driver.execute(
++                identifier = null,
++                sql = "UPDATE root_observation SET binding_epoch = ? WHERE root = ?",
++                parameters = 2,
++                binders = {
++                    bindString(0, "not-an-integer")
++                    bindString(1, main.value)
++                },
++            )
++            shouldThrowAny { repo.confirmUnchangedBindings(expected) }
++
++            driver.execute(
++                identifier = null,
++                sql = "UPDATE root_observation SET binding_epoch = ? WHERE root = ?",
++                parameters = 2,
++                binders = {
++                    bindLong(0, -1L)
++                    bindString(1, main.value)
++                },
++            )
++            shouldThrowAny { repo.confirmUnchangedBindings(expected) }
++
++            driver.execute(
++                identifier = null,
++                sql = "UPDATE root_observation SET binding_epoch = ? WHERE root = ?",
++                parameters = 2,
++                binders = {
++                    bindLong(0, Long.MAX_VALUE - 1L)
++                    bindString(1, main.value)
++                },
++            )
++            repo.confirmUnchangedBindings(expected) shouldBe true
++            driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe Long.MAX_VALUE
++            shouldThrowAny { repo.confirmUnchangedBindings(expected) }
++            driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe Long.MAX_VALUE
++        }
++    }
++
++    test("a failure in the guarded epoch update rolls the confirmation transaction back") {
++        DatabaseFactory.createInMemoryDriver().use { real ->
++            val driver = ConfirmationCountingDriver(real)
++            val database = DatabaseFactory.createDatabase(driver)
++            val repo = SqlDelightIdMapRepository(database)
++            database.rootObservationQueries.upsertObservation(root = main, observationId = 23L).value
++            repo.bind(pathA, idX, materialized = true)
++            val bindingsBefore = repo.bindings()
++            val epochBefore = driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'")
++
++            driver.failEpochUpdate = true
++            shouldThrowAny { repo.confirmUnchangedBindings(listOf(IdBinding(pathA, idX, materialized = true))) }
++
++            repo.bindings() shouldContainExactly bindingsBefore
++            driver.queryLong("SELECT binding_epoch FROM root_observation WHERE root = '${main.value}'") shouldBe epochBefore
++        }
++    }
+ 
+     test("bind/find round-trip, including the materialized flag and the live rooted path") {
+         withRepo { repo, _ ->
+@@ -426,3 +620,34 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
+         }
+     }
+ })
++
++private class ConfirmationCountingDriver(
++    private val delegate: SqlDriver,
++) : SqlDriver by delegate {
++    var transactionCount = 0
++    var failEpochUpdate = false
++    val executedSql = mutableListOf<String>()
++
++    override fun newTransaction(): QueryResult<Transacter.Transaction> {
++        transactionCount++
++        return delegate.newTransaction()
++    }
++
++    override fun execute(
++        identifier: Int?,
++        sql: String,
++        parameters: Int,
++        binders: (SqlPreparedStatement.() -> Unit)?,
++    ): QueryResult<Long> {
++        executedSql += sql
++        if (failEpochUpdate && sql.contains("binding_epoch = binding_epoch + ?")) {
++            error("injected failure before confirmation epoch commit")
++        }
++        return delegate.execute(identifier, sql, parameters, binders)
++    }
++
++    fun resetConfirmationCounters() {
++        transactionCount = 0
++        executedSql.clear()
++    }
++}

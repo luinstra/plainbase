@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.BindOutcome
+import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.RootName
@@ -29,6 +30,7 @@ internal class IndexIdentityAssignments(
         registeredRoots: Set<RootName>,
         // Accumulate this pass's issues for [IndexBuilder.rebuild]; do not decode the legacy `idMap.issues()` rows here.
         raised: MutableList<IdentityIssue>,
+        allowUnchangedConfirmation: Boolean,
     ): Map<RootedPath, Identity> {
         // Share one [Supersession] between resolution and binding. Proofs are applied before this call, so their
         // bindings are gone; that ordering also lets the tombstone arm see this pass's retirements.
@@ -66,6 +68,17 @@ internal class IndexIdentityAssignments(
 
         // Check uniqueness before binding. Earlier coordinator effects may remain; no rollback is promised.
         requireDistinctIds(resolved.mapValues { (_, assignment) -> assignment.id })
+
+        val confirmed = allowUnchangedConfirmation &&
+            resolved.values.all { assignment ->
+                assignment.source == PageIdentityService.Source.FRONTMATTER && assignment.issue == null
+            } &&
+            idMap.confirmUnchangedBindings(
+                resolved.map { (path, assignment) -> IdBinding(path, assignment.id, materialized = true) },
+            )
+        if (confirmed) {
+            return resolved.mapValues { (_, assignment) -> Identity(assignment.id, materialized = true) }
+        }
 
         val identities = HashMap<RootedPath, Identity>()
         for ((path, assignment) in resolved) {

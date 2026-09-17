@@ -31,12 +31,13 @@ import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * PB-WRITE-1 named tests 8, 9, 10 — the targeted reindex is O(changed-page) END-TO-END and never
- * silently no-ops. The three correctness guards: render count = 1, search work = single-page (no
- * corpus diff), checkpoint writes = 0; plus the vanished-page throw (MUST-FIX 4).
+ * PB-WRITE-1 named tests 8, 9, 10; the targeted reindex updates one page and never silently no-ops.
+ * The three correctness guards: render count = 1, search work = single-page (no corpus diff),
+ * checkpoint writes = 0; plus the vanished-page throw (MUST-FIX 4). These guards do not establish
+ * end-to-end constant cost for the published snapshot.
  *
  * Built with explicit spy collaborators (a counting renderer, a counting [SearchProvider], a counting
- * [PageCheckpointRepository]) so each O(changed-page) claim is asserted independently of corpus size.
+ * [PageCheckpointRepository]) so each targeted-work claim is asserted independently of corpus size.
  */
 class IndexBuilderReindexTargetedTest : FunSpec({
 

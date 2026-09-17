@@ -14,6 +14,29 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md).
 ./gradlew :server:nativeCompile          # native binary (requires CE 25.3.4.1 / JDK 25.0.4.1 on JAVA_HOME/GRAALVM_HOME)
 ```
 
+The bounded backend performance worker is opt-in and is not part of `check` or
+`build`; its fast deterministic lifecycle check is included in both:
+
+```sh
+./gradlew :server:performanceScreenLifecycleTest
+./gradlew :server:performanceScreen -PperformanceRun=<run-id>
+```
+
+It writes observations, manifests, and per-run source snapshots to
+`docs/reports/data/backend-performance/<run-id>/`. See the [bounded backend
+operating envelope](reports/backend-operating-envelope.md) for retained
+screening results and limitations. Use the diagnostic
+`-PperformanceScreenAllowCoverage` flag only with the explicit performance
+worker and a fresh run ID, for example
+`./gradlew :server:performanceScreen -PperformanceRun=<run-id> -PperformanceScreenAllowCoverage`;
+the probe must refuse the resulting instrumentation and that nonzero run is
+not performance evidence. Do not pass this flag to general `build` or `check`
+invocations.
+
+A refused or failed run may leave its evidence, fixture, or staging directory
+behind, and the run ID is not reusable. Preserve the files for diagnosis and
+choose a fresh run ID for another attempt.
+
 Requirements: JDK 25+ (the build auto-provisions the 25 toolchain for
 bytecode). Node is downloaded by the Gradle build - no local install needed.
 
