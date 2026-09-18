@@ -31,8 +31,9 @@ private const val SQLITE_BUSY_BINDER_THREAD_NAME = "sqlite-busy-binder"
  * real writer, and a failed BEGIN leaving the same thread's next transaction clean.
  *
  * It lives in `nativeTest` rather than `src/test` because this is the xerial JDBC/JNI seam, and because that source set
- * is folded into the JVM `test` task (see server/build.gradle.kts), so these rows run on the JVM AND in the native
- * image. That fold is what makes a single copy sufficient; the JVM duplicates were deleted rather than kept in step.
+ * is folded into the JVM `test` task (see
+ * `buildSrc/src/main/kotlin/com/plainbase/buildlogic/TestSourceSets.kt`), so these rows run on the JVM AND in the
+ * native image. That fold is what makes a single copy sufficient; the JVM duplicates were deleted rather than kept in step.
  *
  * `SqliteBusyBeginImmediateTest` holds only the differential STOCK-driver control, which cannot live here: the stock
  * driver is `testImplementation` and is deliberately off the native classpath. The two harnesses are independent by

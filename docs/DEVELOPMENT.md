@@ -17,25 +17,32 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md).
 Requirements: JDK 25+ (the build auto-provisions the 25 toolchain for
 bytecode). Node is downloaded by the Gradle build - no local install needed.
 
-The Linux-only PID1 regression gates are separate from ordinary test discovery:
+The platform-neutral runner self-test and Linux-only PID1 regression gates are separate from ordinary test discovery:
 
 ```sh
+./gradlew :server:gitChildProcessCleanupRunnerTest  # platform-neutral runner validators
 ./gradlew :server:gitZombieJvmPid1       # Java 25 JVM launcher
 ./gradlew :server:gitZombieNativePid1    # GraalVM nativeTestCompile executable
 ./gradlew :server:gitZombieForcedTimeoutPid1
 ```
 
-CI runs the JVM and native positive tasks; the forced-timeout task verifies watchdog escalation and cleanup for checkpoint acceptance.
+The JVM and native tasks use the Java 25 source runner. The forced-timeout task is a separate checkpoint that verifies
+TERM observation, timeout exit, and termination of captured process identities; it does not prove that every namespace
+process was observed and is not an always-on CI campaign.
 
-They require Linux permissions/capabilities to create the privileged PID, mount, and network namespaces used by
+The runner self-test is platform-neutral, uses the same validators as the gates, and is wired into the server
+`check` task (and therefore `build`).
+
+The Linux PID1 tasks require permissions/capabilities to create the privileged PID, mount, and network namespaces used by
 the launcher. Separately, they require noninteractive `sudo -n` and trusted executable `sudo`; `unshare` and
 `setpriv` are from util-linux, while `timeout` and `id` are from coreutils, all in `/usr/bin` or `/bin`. No
 separate `kill` helper is a prerequisite. The fixtures also require executable `/bin/sh` and `sleep` with
 fractional-second support on `PATH`. The JVM gate uses Java 25; the native gate uses the
-documented GraalVM toolchain below. CI gives its JVM and native PID1 steps a five-minute ceiling. Run reports and retained
-evidence are under `server/build/reports/g3z/jvm/<run-id>/`, `server/build/reports/g3z/native/<run-id>/`, or
-`server/build/reports/g3z/forced/<run-id>/`,
-with preparation/staging material under `server/build/g3z/`. On non-Linux hosts, ordinary test discovery may
+documented GraalVM toolchain below. CI gives its JVM and native PID1 steps a five-minute ceiling. Fresh run reports are
+under `server/build/reports/g3z/jvm/<run-id>/`, `server/build/reports/g3z/native/<run-id>/`, or
+`server/build/reports/g3z/forced/<run-id>/`. Successful validation removes runner-owned home/tmp/staging paths;
+failed runs retain those paths locally for diagnosis, while CI uploads only command, exit, stdout/stderr, summary,
+and native XML diagnostics. On non-Linux hosts, ordinary test discovery may
 report a topology-required skip/abort, but that is distinct from the required one-body PID1 successes.
 
 For native builds, use GraalVM CE 25.3.4.1 (JDK 25.0.4.1) from the

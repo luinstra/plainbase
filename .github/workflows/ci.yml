@@ -31,39 +31,23 @@ jobs:
       - name: Build (backend + embedded frontend) and run tests
         run: ./gradlew build --console=plain
 
-      - name: GitExecutor G3z JVM PID1 regression
+      - name: Git child-process cleanup (JVM)
+        id: g3z_jvm_gate
         timeout-minutes: 5
         run: ./gradlew :server:gitZombieJvmPid1 --console=plain
 
-      - name: Upload G3z JVM evidence
-        id: upload_g3z_jvm_evidence
-        if: always()
+      - name: Upload JVM child-process diagnostics
+        if: always() && (steps.g3z_jvm_gate.outcome == 'failure' || steps.g3z_jvm_gate.outcome == 'cancelled')
         uses: actions/upload-artifact@v7
         with:
           name: g3z-jvm-evidence
-          if-no-files-found: error
+          if-no-files-found: warn
           path: |
-            server/build/reports/g3z/jvm/
-            server/build/g3z/jvm-preparation/
-            server/build/g3z/jvm-work/
-
-      - name: Clean G3z JVM evidence
-        if: always() && steps.upload_g3z_jvm_evidence.outcome == 'success'
-        run: |
-          complete=1
-          found=0
-          for report in server/build/reports/g3z/jvm/*; do
-            [ -d "$report" ] || continue
-            found=1
-            if [ ! -f "$report/cleanup-completed.txt" ] || ! grep -qx 'true' "$report/cleanup-completed.txt"; then
-              complete=0
-            fi
-          done
-          if [ "$found" = "1" ] && [ "$complete" = "1" ]; then
-            rm -rf server/build/reports/g3z/jvm server/build/g3z/jvm-preparation server/build/g3z/jvm-work
-          else
-            echo 'Retaining G3z JVM paths because completion was not confirmed.'
-          fi
+            server/build/reports/g3z/jvm/**/command.argv
+            server/build/reports/g3z/jvm/**/exit.txt
+            server/build/reports/g3z/jvm/**/stderr.log
+            server/build/reports/g3z/jvm/**/stdout.log
+            server/build/reports/g3z/jvm/**/summary.txt
 
       - name: Generate Kover XML report
         run: ./gradlew koverXmlReport --console=plain
@@ -237,39 +221,24 @@ jobs:
       - name: Run test suite as native image
         run: ./gradlew :server:nativeTest --console=plain
 
-      - name: GitExecutor G3z native PID1 regression
+      - name: Git child-process cleanup (native)
+        id: g3z_native_gate
         timeout-minutes: 5
         run: ./gradlew :server:gitZombieNativePid1 --console=plain
 
-      - name: Upload G3z native evidence
-        id: upload_g3z_native_evidence
-        if: always()
+      - name: Upload native child-process diagnostics
+        if: always() && (steps.g3z_native_gate.outcome == 'failure' || steps.g3z_native_gate.outcome == 'cancelled')
         uses: actions/upload-artifact@v7
         with:
           name: g3z-native-evidence
-          if-no-files-found: error
+          if-no-files-found: warn
           path: |
-            server/build/reports/g3z/native/
-            server/build/g3z/native/
-            server/build/g3z/native-work/
-
-      - name: Clean G3z native evidence
-        if: always() && steps.upload_g3z_native_evidence.outcome == 'success'
-        run: |
-          complete=1
-          found=0
-          for report in server/build/reports/g3z/native/*; do
-            [ -d "$report" ] || continue
-            found=1
-            if [ ! -f "$report/cleanup-completed.txt" ] || ! grep -qx 'true' "$report/cleanup-completed.txt"; then
-              complete=0
-            fi
-          done
-          if [ "$found" = "1" ] && [ "$complete" = "1" ]; then
-            rm -rf server/build/reports/g3z/native server/build/g3z/native server/build/g3z/native-work
-          else
-            echo 'Retaining G3z native paths because completion was not confirmed.'
-          fi
+            server/build/reports/g3z/native/**/command.argv
+            server/build/reports/g3z/native/**/exit.txt
+            server/build/reports/g3z/native/**/stderr.log
+            server/build/reports/g3z/native/**/stdout.log
+            server/build/reports/g3z/native/**/summary.txt
+            server/build/reports/g3z/native/**/xml/**/*.xml
 
       - name: Run full-stack dependency spike against the native binary (9/9 hard gate)
         run: ./server/build/native/nativeCompile/plainbase spike

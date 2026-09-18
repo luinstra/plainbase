@@ -1,5 +1,5 @@
 # Keep the Docker build context lean. The Dockerfile only COPYs:
-#   gradlew, gradlew.bat, settings.gradle.kts, build.gradle.kts, gradle/,
+#   gradlew, gradlew.bat, settings.gradle.kts, build.gradle.kts, gradle/, buildSrc/,
 #   server/, frontend/
 # Everything below is either regenerated inside the build stage or never
 # needed in the image.
@@ -9,6 +9,8 @@
 .github
 .gradle
 .kotlin
+**/.gradle
+**/.kotlin
 .idea
 .crew
 .claude

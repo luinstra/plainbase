@@ -27,7 +27,9 @@ kotlinter {
 val kotlinFormattingSources =
     fileTree(rootDir) {
         include("*.gradle.kts")
+        include("buildSrc/*.gradle.kts")
         include("server/*.gradle.kts")
+        include("buildSrc/src/**/*.kt")
         include("server/src/**/*.kt")
         exclude("**/build/**")
     }
