@@ -8,32 +8,31 @@ import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.DenyReason
+import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ProposeOutcome
+import com.plainbase.domain.service.ReadFacade
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.domain.service.SearchService
 import com.plainbase.frameworks.config.PlainbaseConfig
-import com.plainbase.frameworks.ktor.RouteContext
-import com.plainbase.frameworks.ktor.dto.ChangeDetail
-import com.plainbase.frameworks.ktor.dto.ErrorBody
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
-import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
-import com.plainbase.frameworks.ktor.dto.ListChangesResponse
-import com.plainbase.frameworks.ktor.dto.McpAmbiguousCandidate
-import com.plainbase.frameworks.ktor.dto.McpAmbiguousResponse
-import com.plainbase.frameworks.ktor.dto.PageMetadataResponse
-import com.plainbase.frameworks.ktor.dto.PageResponse
-import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
-import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
-import com.plainbase.frameworks.ktor.dto.ProposeChangeResponse
-import com.plainbase.frameworks.ktor.dto.RestJson
-import com.plainbase.frameworks.ktor.dto.SearchResponse
-import com.plainbase.frameworks.ktor.dto.ValidateLinksResponse
-import com.plainbase.frameworks.ktor.dto.toDto
-import com.plainbase.frameworks.ktor.dto.toMetadataDto
-import com.plainbase.frameworks.ktor.routes.CANONICAL_PAGE_ID
-import com.plainbase.frameworks.ktor.routes.CANONICAL_PROPOSAL_ID
-import com.plainbase.frameworks.ktor.routes.ProposeCommandParse
-import com.plainbase.frameworks.ktor.routes.parseProposeCommand
+import com.plainbase.frameworks.protocol.CANONICAL_PAGE_ID
+import com.plainbase.frameworks.protocol.CANONICAL_PROPOSAL_ID
+import com.plainbase.frameworks.protocol.ChangeDetail
+import com.plainbase.frameworks.protocol.ErrorBody
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.ErrorEnvelope
+import com.plainbase.frameworks.protocol.ListChangesResponse
+import com.plainbase.frameworks.protocol.PageMetadataResponse
+import com.plainbase.frameworks.protocol.PageResponse
+import com.plainbase.frameworks.protocol.ProposalStatusWire
+import com.plainbase.frameworks.protocol.ProposeChangeRequest
+import com.plainbase.frameworks.protocol.ProposeChangeResponse
+import com.plainbase.frameworks.protocol.ProposeCommandParse
+import com.plainbase.frameworks.protocol.RestJson
+import com.plainbase.frameworks.protocol.SearchResponse
+import com.plainbase.frameworks.protocol.ValidateLinksResponse
+import com.plainbase.frameworks.protocol.parseProposeCommand
+import com.plainbase.frameworks.protocol.toDto
+import com.plainbase.frameworks.protocol.toMetadataDto
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
@@ -50,16 +49,21 @@ import kotlinx.serialization.json.jsonPrimitive
 private val logger = KotlinLogging.logger {}
 
 /**
- * The per-connection MCP [Server] factory (P3): given the connect-time-authenticated [principal] and the shared
- * [RouteContext], register the seven §2.6 tools — each a THIN adapter over the EXISTING guarded facades
- * `ctx.read`/`ctx.proposals`, closing the principal over the handler so the A3 choke point (`policy.check*`) runs
+ * The per-connection MCP [Server] factory (P3): given the connect-time-authenticated [principal], the existing guarded
+ * [read] and [proposals] facades, and the configured [roots], register the seven §2.6 tools — each a THIN adapter over
+ * those facades, closing the principal over the handler so the A3 choke point (`policy.check*`) runs
  * ONCE inside each facade method exactly as the REST routes invoke it. No second authz path, no new wire DTO: the
  * tools reuse the frozen PB-* DTO mappers + the scoped [RestJson], so the six read/list/get tools are byte-identical
  * to their REST endpoints and `propose_change` is structural-parity (its only divergence is the freshly minted id).
  * Every handler returns through [toolResult]/[catchingErrors]/[errorResult] so NO exception can escape an open SSE
  * stream (a throw after the header flush can't become a clean error).
  */
-fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Server {
+fun buildPlainbaseMcpServer(
+    principal: Principal.Agent,
+    read: ReadFacade,
+    proposals: ProposalFacade,
+    roots: Set<RootName>,
+): Server {
     val server = Server(
         Implementation(name = "plainbase", version = PlainbaseConfig.VERSION),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = false))),
@@ -68,7 +72,7 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
     server.addTool(McpTools.SEARCH, SEARCH_DESCRIPTION, searchSchema) { request ->
         catchingErrors {
             val args = request.arguments
-            when (val outcome = ctx.read.search(principal, args?.stringArg("q"), args?.stringArg("limit"), args?.stringArg("offset"))) {
+            when (val outcome = read.search(principal, args?.stringArg("q"), args?.stringArg("limit"), args?.stringArg("offset"))) {
                 is SearchService.Outcome.Results -> jsonResult(SearchResponse.serializer(), outcome.payload.toDto())
                 is SearchService.Outcome.InvalidQuery -> errorResult("invalid_query", outcome.message)
             }
@@ -78,24 +82,24 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
     server.addTool(McpTools.READ_PAGE, READ_PAGE_DESCRIPTION, readPageSchema) { request ->
         catchingErrors {
             val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId(request.arguments?.stringArg("id"))
-            val root = request.rootArgOrError(ctx.roots) { return@catchingErrors it }
-            toolResult(PageResponse.serializer()) { ctx.read.pageById(principal, id, root)?.toDto() }
+            val root = request.rootArgOrError(roots) { return@catchingErrors it }
+            toolResult(PageResponse.serializer()) { read.pageById(principal, id, root)?.toDto() }
         }
     }
 
     server.addTool(McpTools.GET_PAGE_METADATA, GET_PAGE_METADATA_DESCRIPTION, getPageMetadataSchema) { request ->
         catchingErrors {
             val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId(request.arguments?.stringArg("id"))
-            val root = request.rootArgOrError(ctx.roots) { return@catchingErrors it }
-            toolResult(PageMetadataResponse.serializer()) { ctx.read.pageMetadata(principal, id, root)?.toMetadataDto() }
+            val root = request.rootArgOrError(roots) { return@catchingErrors it }
+            toolResult(PageMetadataResponse.serializer()) { read.pageMetadata(principal, id, root)?.toMetadataDto() }
         }
     }
 
     server.addTool(McpTools.VALIDATE_LINKS, VALIDATE_LINKS_DESCRIPTION, validateLinksSchema) { request ->
         catchingErrors {
             val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId(request.arguments?.stringArg("id"))
-            val root = request.rootArgOrError(ctx.roots) { return@catchingErrors it }
-            toolResult(ValidateLinksResponse.serializer()) { ctx.read.validateLinks(principal, id, root)?.toDto() }
+            val root = request.rootArgOrError(roots) { return@catchingErrors it }
+            toolResult(ValidateLinksResponse.serializer()) { read.validateLinks(principal, id, root)?.toDto() }
         }
     }
 
@@ -109,11 +113,11 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
                     "Request must be {operation, page_id?, base_hash?, target_path?, proposed_content, rationale}",
                 )
             }
-            when (val parse = parseProposeCommand(decoded, ctx.roots)) {
+            when (val parse = parseProposeCommand(decoded, roots)) {
                 // parse.code, never a hardcoded string: an unknown root must answer `invalid_root` here exactly as
                 // it does on REST, or the two propose surfaces drift.
                 is ProposeCommandParse.Invalid -> errorResult(parse.code, parse.message)
-                is ProposeCommandParse.Ok -> when (val outcome = ctx.proposals.propose(principal, parse.command)) {
+                is ProposeCommandParse.Ok -> when (val outcome = proposals.propose(principal, parse.command)) {
                     is ProposeOutcome.Created -> jsonResult(
                         ProposeChangeResponse.serializer(),
                         ProposeChangeResponse(
@@ -137,7 +141,7 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
     }
 
     server.addTool(McpTools.LIST_CHANGES, LIST_CHANGES_DESCRIPTION, listChangesSchema) { _ ->
-        toolResult(ListChangesResponse.serializer()) { ListChangesResponse(proposals = ctx.proposals.list(principal).map { it.toDto() }) }
+        toolResult(ListChangesResponse.serializer()) { ListChangesResponse(proposals = proposals.list(principal).map { it.toDto() }) }
     }
 
     server.addTool(McpTools.GET_CHANGE, GET_CHANGE_DESCRIPTION, getChangeSchema) { request ->
@@ -148,7 +152,7 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
                 // (`invalid_propose_request`), quoting the raw id like REST does — NOT a divergent `invalid_proposal_id`.
                 return@catchingErrors errorResult("invalid_propose_request", "Not a canonical-shape UUID: '${raw.orEmpty()}'")
             }
-            toolResult(ChangeDetail.serializer()) { ctx.proposals.get(principal, ProposalId.require(raw))?.toDto() }
+            toolResult(ChangeDetail.serializer()) { proposals.get(principal, ProposalId.require(raw))?.toDto() }
         }
     }
 
@@ -215,7 +219,7 @@ private fun <T> jsonResult(serializer: KSerializer<T>, dto: T): CallToolResult =
  * [RootUnavailable] BEFORE the catch-all, or a downed root would misreport as `internal`; then a generic net (cause
  * to the log, NEVER on the wire).
  */
-private inline fun <T> toolResult(serializer: KSerializer<T>, body: () -> T?): CallToolResult =
+internal fun <T> toolResult(serializer: KSerializer<T>, body: () -> T?): CallToolResult =
     runCatching {
         body()?.let { jsonResult(serializer, it) } ?: errorResult("not_found", "No such resource")
     }.getOrElse(::mcpFailureResult)

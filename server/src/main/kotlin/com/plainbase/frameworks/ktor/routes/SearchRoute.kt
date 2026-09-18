@@ -3,9 +3,9 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.SearchService
 import com.plainbase.frameworks.ktor.RouteContext
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
-import com.plainbase.frameworks.ktor.dto.SearchResponse
-import com.plainbase.frameworks.ktor.dto.toDto
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.SearchResponse
+import com.plainbase.frameworks.protocol.toDto
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLDecodeException
 import io.ktor.http.decodeURLQueryComponent

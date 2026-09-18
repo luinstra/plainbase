@@ -179,6 +179,7 @@ fun IndexHarness.testRouteContext(
      * construction rather than reading the real rootsHoldingId and answering 404.
      */
     absence: com.plainbase.domain.service.AbsenceClassifier = this.absence,
+    proposalRepository: com.plainbase.domain.repository.ProposalRepository = this.proposalRepository,
 ): RouteContext {
     val policy = PolicyService(
         roles = roleRepository,

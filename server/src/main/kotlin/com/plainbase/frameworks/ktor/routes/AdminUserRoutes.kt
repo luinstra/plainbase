@@ -6,10 +6,10 @@ import com.plainbase.domain.service.CreateUserOutcome
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.CreateUserRequest
 import com.plainbase.frameworks.ktor.dto.CreatedUserResponse
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.SessionRevokeRequest
 import com.plainbase.frameworks.ktor.dto.UserListResponse
 import com.plainbase.frameworks.ktor.dto.UserResponse
+import com.plainbase.frameworks.protocol.ErrorCodes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get

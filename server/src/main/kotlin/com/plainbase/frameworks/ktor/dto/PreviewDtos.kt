@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.dto
 
+import com.plainbase.frameworks.protocol.HeadingDto
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -9,7 +10,7 @@ import kotlinx.serialization.Serializable
  * so neither frozen file grows a field: preview is PRIVATE / non-contractual (the markup is the
  * renderer's evolving output; only the wire keys are stable-by-convention) and the asset shapes are
  * non-frozen PB-* surfaces governed like `RescanResponse`. NEITHER registers a `ForeverApiGoldenSuite`
- * row. Both encode through the scoped [RestJson].
+ * row. Both encode through the scoped RestJson.
  */
 
 /**

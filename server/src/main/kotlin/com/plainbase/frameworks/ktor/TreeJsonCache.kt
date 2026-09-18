@@ -7,10 +7,10 @@ import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.TreeBuilder
-import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.RootTreeDto
 import com.plainbase.frameworks.ktor.dto.TreeResponse
 import com.plainbase.frameworks.ktor.dto.toDto
+import com.plainbase.frameworks.protocol.RestJson
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 

@@ -4,9 +4,9 @@ import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.git.UnknownRevisionException
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.DiffResponse
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.HistoryResponse
 import com.plainbase.frameworks.ktor.dto.toDto
+import com.plainbase.frameworks.protocol.ErrorCodes
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall

@@ -2,8 +2,10 @@ package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.ProposeCommand
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
-import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.ProposeChangeRequest
+import com.plainbase.frameworks.protocol.ProposeCommandParse
+import com.plainbase.frameworks.protocol.parseProposeCommand
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -125,6 +127,77 @@ class ProposeCommandParserTest : FunSpec({
         invalidMessage(req(operation = "create", baseHash = validBaseHash, targetPath = "x.md")) shouldBe
             "a new page has no base; base_hash is contradictory"
         invalidMessage(req(operation = "create", targetPath = null)) shouldBe "a create requires target_path"
+    }
+
+    test("validation precedence preserves the first invalid field and exact code/message") {
+        val cases = listOf(
+            Triple(
+                req(operation = "delete", proposedContent = "   ", rationale = "   "),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "proposed_content must not be empty",
+            ),
+            Triple(
+                req(operation = "delete", rationale = "   "),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "rationale must not be blank",
+            ),
+            Triple(
+                req(operation = "delete", pageId = "bad", baseHash = "bad", targetPath = "../escape.md"),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "operation must be one of edit, create",
+            ),
+            Triple(
+                req(pageId = null, baseHash = null, targetPath = "../escape.md", root = "Not A Root"),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "an edit requires page_id",
+            ),
+            Triple(
+                req(pageId = "not-a-uuid", baseHash = "deadbeef"),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "page_id is not a valid UUID",
+            ),
+            Triple(
+                req(pageId = validPageId, baseHash = null, targetPath = "../escape.md", root = "Not A Root"),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "an edit requires base_hash",
+            ),
+            Triple(
+                req(pageId = validPageId, baseHash = "deadbeef", targetPath = "../escape.md", root = "Not A Root"),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "base_hash must be the sha256:<64-hex> form",
+            ),
+            Triple(
+                req(pageId = validPageId, baseHash = validBaseHash, targetPath = "../escape.md", root = "Not A Root"),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "target_path is not a valid content-relative path: '../escape.md'",
+            ),
+            Triple(
+                req(operation = "create", pageId = "", baseHash = "", root = null, targetPath = "new.md"),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "a create has no existing page; page_id is contradictory",
+            ),
+            Triple(
+                req(operation = "create", pageId = null, baseHash = "", root = null, targetPath = "new.md"),
+                ErrorCodes.INVALID_PROPOSE_REQUEST,
+                "a new page has no base; base_hash is contradictory",
+            ),
+            Triple(
+                req(operation = "create", root = null, targetPath = null),
+                ErrorCodes.INVALID_ROOT,
+                "a create requires root",
+            ),
+            Triple(
+                req(operation = "create", root = "ghost", targetPath = "../escape.md"),
+                ErrorCodes.INVALID_ROOT,
+                "Unknown root: 'ghost'",
+            ),
+        )
+
+        for ((request, code, message) in cases) {
+            val invalid = parse(request).shouldBeInstanceOf<ProposeCommandParse.Invalid>()
+            invalid.code shouldBe code
+            invalid.message shouldBe message
+        }
     }
 
     test("Invalid target_path rows reject traversal / absolute / empty-segment for BOTH edit and create") {

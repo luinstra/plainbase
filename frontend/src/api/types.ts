@@ -1,9 +1,10 @@
 /**
- * The server wire shapes mirrored client-side — transcribed from the six server DTO families
- * (server: frameworks/ktor/dto/): RestDtos.kt (PB-REST-1, frozen), SearchDtos.kt (PB-SEARCH-1,
- * frozen), WriteDtos.kt (PB-WRITE-1, frozen) + PreviewDtos.kt (PreviewResponse, non-frozen),
- * HistoryDtos.kt (non-frozen), AuthDtos.kt, ProposalDtos.kt (PB-PROPOSE-1, frozen) — each section
- * header below names its source. The SPA consumes `id`/`path`/`url` verbatim; URL semantics are
+ * The server wire shapes mirrored client-side — shared protocol owners live under
+ * `server: frameworks/protocol/`; retained HTTP DTOs live under `server: frameworks/ktor/dto/`.
+ * `frameworks/protocol/ErrorDtos.kt`, `RestDtos.kt`, `SearchDtos.kt`, and `ProposalDtos.kt` (frozen shared shapes),
+ * `frameworks/ktor/dto/RestDtos.kt`, `ProposalDtos.kt`, and `WriteDtos.kt` (retained HTTP shapes),
+ * plus HTTP PreviewDtos.kt (non-frozen), HistoryDtos.kt (non-frozen), and AuthDtos.kt
+ * are represented here. Each section header below names its source. The SPA consumes `id`/`path`/`url` verbatim; URL semantics are
  * never re-derived client-side. Every shape here is pinned against the server by the shared wire
  * golden (`src/api/__fixtures__/wire-golden.json`, asserted from both sides).
  */
@@ -134,7 +135,7 @@ export interface ErrorEnvelope {
 
 /**
  * PB-SEARCH-1 §A2 wire shapes (frozen) — transcribed from the server DTO
- * (server: frameworks/ktor/dto/SearchDtos.kt). Present-null fields are typed `| null`.
+ * (server: frameworks/protocol/SearchDtos.kt). Present-null fields are typed `| null`.
  * The SPA consumes `url`/`heading_id`/`heading_text`/`heading_path`/`snippet`/`highlights`
  * verbatim — no client re-derivation (§A4).
  */

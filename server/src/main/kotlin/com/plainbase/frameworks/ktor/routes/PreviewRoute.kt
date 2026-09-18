@@ -4,9 +4,9 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PreviewResponse
-import com.plainbase.frameworks.ktor.dto.toDto
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.toDto
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall

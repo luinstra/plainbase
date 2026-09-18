@@ -1,6 +1,11 @@
 package com.plainbase.frameworks.ktor.dto
 
 import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.frameworks.protocol.ErrorBody
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.ErrorEnvelope
+import com.plainbase.frameworks.protocol.RestJson
+import com.plainbase.frameworks.protocol.WriteConflictReason
 import io.ktor.http.HttpStatusCode
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
@@ -50,7 +55,7 @@ data class WriteWarning(val code: String, val message: String)
  * 202 Accepted: an agent COMMIT write fell OUTSIDE `agentDirectCommit.globs` and was degraded to a proposal. A
  * NEW shape — NEVER a field on the frozen two-key [WrittenResponse] (`encodeDefaults=true` would emit any added field
  * on EVERY PUT-200, breaking the golden corpus + the frontend type). [degraded] is always true — the discriminator a
- * client checks before treating a PUT response as an applied write. [status] is always [ProposalStatusWire.PENDING];
+ * client checks before treating a PUT response as an applied write. The status is always `PENDING`;
  * [unifiedDiff] is NON-NULL (`ProposeOutcome.Created.unifiedDiff` is always populated).
  */
 @Serializable
@@ -126,23 +131,6 @@ data class AmbiguousPageIdEnvelope(val error: AmbiguousPageIdBody)
 @Serializable
 data class AmbiguousPageIdBody(val code: String, val message: String, val candidates: List<AmbiguousCandidate>)
 
-/** The MCP twin of [AmbiguousCandidate]: an agent retries the tool with `root`, so the candidate carries (root, id). */
-@Serializable
-data class McpAmbiguousCandidate(val root: String, val id: String)
-
-/**
- * The MCP twin of [AmbiguousPageIdEnvelope], and deliberately NOT wrapped in one: an MCP result carries its
- * error-ness in `isError`, not in a body key, so there is nothing for an `error` envelope to mean here. It keeps a
- * top-level [id] the REST body drops, because an agent retries by naming a root rather than by following a url.
- */
-@Serializable
-data class McpAmbiguousResponse(
-    val code: String,
-    val id: String,
-    val candidates: List<McpAmbiguousCandidate>,
-    val message: String,
-)
-
 /** 409 drift envelope (kept distinct from the frozen [ErrorEnvelope] — it grows `reason` + `current_*`). */
 @Serializable
 data class WriteConflictEnvelope(val error: WriteConflictBody)
@@ -205,22 +193,6 @@ data class PageExistsEnvelope(val error: PageExistsBody)
 
 @Serializable
 data class PageExistsBody(val code: String, val message: String, val path: String)
-
-/**
- * The frozen drift-only `reason` enum (PB-WRITE-1): the set is `{content_changed, page_moved,
- * page_deleted}` and only ever grows (additive). `page_moved` is PRODUCER-RESERVED — no §H mover
- * emits it yet, but the value is pinned so a future producer adds no new vocabulary. **`id_changed`
- * is deliberately NOT a member** (the debate's sharpest fix): id/slug/redirect_from rejections are
- * 422 + code + field, never a drift discriminator.
- */
-object WriteConflictReason {
-    const val CONTENT_CHANGED: String = "content_changed"
-    const val PAGE_MOVED: String = "page_moved"
-    const val PAGE_DELETED: String = "page_deleted"
-
-    /** The frozen reason set (additive-only). Pinned by the golden suite's reason-enum assertion. */
-    val ALL: Set<String> = setOf(CONTENT_CHANGED, PAGE_MOVED, PAGE_DELETED)
-}
 
 /**
  * The frozen PB-WRITE-1 warning vocabulary — distinct from [ErrorCodes] (a warning rides a 200, not

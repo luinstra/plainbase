@@ -10,13 +10,13 @@ import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.AuditEntryResponse
 import com.plainbase.frameworks.ktor.dto.AuditListResponse
 import com.plainbase.frameworks.ktor.dto.CreatedTokenResponse
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.GrantRoleRequest
 import com.plainbase.frameworks.ktor.dto.MintTokenRequest
 import com.plainbase.frameworks.ktor.dto.RoleListResponse
 import com.plainbase.frameworks.ktor.dto.RoleResponse
 import com.plainbase.frameworks.ktor.dto.TokenListResponse
 import com.plainbase.frameworks.ktor.dto.TokenMetaResponse
+import com.plainbase.frameworks.protocol.ErrorCodes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get

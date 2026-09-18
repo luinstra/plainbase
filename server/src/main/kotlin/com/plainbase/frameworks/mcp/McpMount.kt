@@ -1,13 +1,16 @@
 package com.plainbase.frameworks.mcp
 
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.ServerTopLevel
+import com.plainbase.domain.service.ProposalFacade
+import com.plainbase.domain.service.ReadFacade
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.extractPrincipal
 import com.plainbase.frameworks.ktor.routes.respondError
 import com.plainbase.frameworks.ktor.routes.respondTransportInsecure
+import com.plainbase.frameworks.protocol.ErrorCodes
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCallPipeline
@@ -20,6 +23,7 @@ import io.ktor.server.routing.route
 import io.ktor.server.sse.sse
 import io.ktor.util.AttributeKey
 import io.modelcontextprotocol.kotlin.sdk.server.DnsRebindingProtection
+import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
@@ -53,7 +57,12 @@ internal val McpPrincipalKey: AttributeKey<Principal.Agent> = AttributeKey("plai
  * gate is method-discriminated to fire on the SSE GET ONLY — the sessionId-bound POST-back (an unguessable v4 UUID
  * minted only after the SSE authenticated) carries no bearer and MUST NOT be 401'd. CSRF-exempt (bearer, no cookie).
  */
-fun Route.plainbaseMcp(ctx: RouteContext) {
+fun Route.plainbaseMcp(ctx: RouteContext) = plainbaseMcp(ctx, ::buildPlainbaseMcpServer)
+
+internal fun Route.plainbaseMcp(
+    ctx: RouteContext,
+    buildServer: (Principal.Agent, ReadFacade, ProposalFacade, Set<RootName>) -> Server,
+) {
     // One transport per open SSE stream, keyed by the SseServerTransport's unguessable random v4 sessionId (the
     // capability the POST-back presents). CIO + the transport own the connection lifecycle; we only track the map.
     val transports = ConcurrentHashMap<String, SseServerTransport>()
@@ -104,7 +113,7 @@ fun Route.plainbaseMcp(ctx: RouteContext) {
                 ?: throw IllegalStateException("MCP SSE reached without an authenticated agent (gate bypassed)")
             val transport = SseServerTransport(MCP_PATH, this)
             transports[transport.sessionId] = transport
-            val server = buildPlainbaseMcpServer(principal, ctx)
+            val server = buildServer(principal, ctx.read, ctx.proposals, ctx.roots)
             server.onClose { transports.remove(transport.sessionId) }
             try {
                 server.createSession(transport) // starts the transport (sends the endpoint event) + runs the session

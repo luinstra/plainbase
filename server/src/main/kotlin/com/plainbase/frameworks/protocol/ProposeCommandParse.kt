@@ -1,7 +1,6 @@
-package com.plainbase.frameworks.ktor.routes
+package com.plainbase.frameworks.protocol
 
 import com.plainbase.domain.service.ProposeCommand
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
 
 /**
  * The shared `ProposeChangeRequest` -> `ProposeCommand` validation result (the F4 malformed-shape matrix), used by

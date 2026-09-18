@@ -1,9 +1,9 @@
 package com.plainbase.frameworks.mcp
 
-import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
-import com.plainbase.frameworks.ktor.dto.ProposeChangeResponse
-import com.plainbase.frameworks.ktor.dto.RestJson
-import com.plainbase.frameworks.ktor.routes.CANONICAL_PROPOSAL_ID
+import com.plainbase.frameworks.protocol.CANONICAL_PROPOSAL_ID
+import com.plainbase.frameworks.protocol.ProposeChangeRequest
+import com.plainbase.frameworks.protocol.ProposeChangeResponse
+import com.plainbase.frameworks.protocol.RestJson
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.shouldBe
@@ -138,6 +138,49 @@ class McpSurfaceTest : FunSpec({
                 )
                 stale.isErr() shouldBe true
                 stale.text() shouldContain "stale_base"
+            }
+        }
+    }
+
+    test("propose parser precedence stays identical through real REST and MCP adapters") {
+        val cases = listOf(
+            Triple(
+                mapOf<String, Any?>(
+                    "operation" to "edit",
+                    "page_id" to "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+                    "base_hash" to "sha256:${"a".repeat(64)}",
+                    "proposed_content" to " ",
+                    "rationale" to " ",
+                ),
+                """
+                    {"operation":"edit","page_id":"0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a","base_hash":"sha256:${"a".repeat(64)}","proposed_content":" ","rationale":" "}
+                """.trimIndent(),
+                "{\"error\":{\"code\":\"invalid_propose_request\",\"message\":\"proposed_content must not be empty\"}}",
+            ),
+            Triple(
+                mapOf<String, Any?>(
+                    "operation" to "create",
+                    "root" to "ghost",
+                    "target_path" to "../escape.md",
+                    "proposed_content" to "# New",
+                    "rationale" to "because",
+                ),
+                """
+                    {"operation":"create","root":"ghost","target_path":"../escape.md","proposed_content":"# New","rationale":"because"}
+                """.trimIndent(),
+                "{\"error\":{\"code\":\"invalid_root\",\"message\":\"Unknown root: 'ghost'\"}}",
+            ),
+        )
+
+        McpHarness().use { harness ->
+            for ((mcpArgs, restJson, expected) in cases) {
+                val mcp = harness.session(harness.proposeBearer) { client ->
+                    client.call("propose_change", mcpArgs)
+                }
+                val rest = harness.restPost("/api/v1/changes", harness.proposeBearer, restJson)
+                mcp.isErr() shouldBe true
+                mcp.text() shouldBe expected
+                rest shouldBe expected
             }
         }
     }

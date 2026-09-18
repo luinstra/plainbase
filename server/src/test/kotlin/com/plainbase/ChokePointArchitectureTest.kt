@@ -1,9 +1,8 @@
 package com.plainbase
 
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
-import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.shouldBe
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.extension
@@ -11,33 +10,73 @@ import kotlin.io.path.isRegularFile
 import kotlin.io.path.name
 import kotlin.io.path.readText
 
+private val EXPECTED_FILES_BY_ROOT = mapOf(
+    "frameworks/ktor/routes" to setOf(
+        "AdminRoute.kt",
+        "AdminTokenRoutes.kt",
+        "AdminUserRoutes.kt",
+        "ApiFallbackRoute.kt",
+        "AssetRoute.kt",
+        "AuthRoutes.kt",
+        "BrowseRedirectRoute.kt",
+        "CreateDocumentComposer.kt",
+        "FrontendStaticRoute.kt",
+        "HealthRoute.kt",
+        "HistoryRoutes.kt",
+        "PageCreateRoutes.kt",
+        "PageRoutes.kt",
+        "PageWriteRoutes.kt",
+        "PermalinkRoute.kt",
+        "PreviewRoute.kt",
+        "ProposalRoutes.kt",
+        "RootContentRoute.kt",
+        "RouteBoundarySupport.kt",
+        "RouteSupport.kt",
+        "SearchRoute.kt",
+        "SessionRoutes.kt",
+        "SetupRoutes.kt",
+        "SpaShellRoute.kt",
+        "TreeRoute.kt",
+    ),
+    "frameworks/mcp" to setOf(
+        "McpAmbiguousDtos.kt",
+        "McpTools.kt",
+        "McpMount.kt",
+        "PlainbaseMcpServer.kt",
+    ),
+    "frameworks/protocol" to setOf(
+        "ErrorDtos.kt",
+        "ProposalDtos.kt",
+        "ReadDtos.kt",
+        "RestDtos.kt",
+        "RestJson.kt",
+        "SearchDtos.kt",
+        "WriteConflictReason.kt",
+        "CanonicalIds.kt",
+        "ProposeCommandParse.kt",
+        "ProposeCommandParser.kt",
+    ),
+)
+
 /**
- * The A3 choke-point structural floor (the synthesis's hand-rolled source-scan, NOT ArchUnit — no new dep),
- * extending [DomainPurityTest]'s idiom. Two guarantees a route-walk cannot make and the compiler cannot fully
- * make (the test-only mint factories are PUBLIC in src/main):
+ * The A3 choke-point structural floor, extended to the registered route, MCP, and shared-protocol roots.
  *
- *  1. **Routes touch ONLY the guarded facades.** No file under `frameworks/ktor/routes/` or `frameworks/mcp/`
- *     references a raw mutator TYPE (`WritePipeline`/`ContentStore`/`IndexBuilder`) NOR a
- *     facade IMPL (`GuardedReadFacade`/`GuardedMutatingFacade`) NOR `RestServices`'s old bundle — only the
- *     `ReadFacade`/`MutatingFacade` interfaces via the `RouteContext`. This makes "check() precedes the call"
- *     MOOT: there is no raw mutator call site in a route to mis-order.
- *  2. **No route forges a grant.** No route constructs a grant (`EditGrant(`/`CreateGrant(`/`ManageGrant(`) NOR
- *     calls the `grantForTests*` factories. (The broader "no PRODUCTION mint outside PolicyService" scan is
- *     [GrantUnforgeabilityTest].)
+ * Routes and MCP must not name raw mutators, facade implementations, or grant mints. The protocol root shares the
+ * raw-authority ban so a neutral file cannot become a new choke-point escape hatch.
  */
 class ChokePointArchitectureTest : FunSpec({
 
-    // The choke-point guarantee covers both registered route-facing surfaces, `frameworks/ktor/routes` and
-    // `frameworks/mcp` (KDoc §1), so the scan walks this fixed LIST of roots.
-    val roots = routeFacingSourceRoots()
     val mainRoot = mainSourceRoot()
-    val files = roots.flatMap { root ->
+    val walkedRoots = routeMcpAndProtocolSourceRoots()
+    val walked = walkedRoots.associateBy { mainRoot.relativize(it).slashPath() }
+
+    val filesByRoot = walked.mapValues { (_, root) ->
         Files.walk(root).use { stream ->
             stream.filter { it.isRegularFile() && it.extension == "kt" }.toList()
         }
     }
+    val files = filesByRoot.values.flatten()
 
-    // Raw mutator TYPES + facade IMPLs a route must never name; plus the grant-forgery patterns.
     val forbiddenReferences = listOf(
         "WritePipeline",
         "ContentStore",
@@ -57,74 +96,56 @@ class ChokePointArchitectureTest : FunSpec({
         "approveGrantForTests",
     )
 
-    test("the scan sees every registered route file (anti-vacuous floor)") {
-        // The route source files registered in KtorServer.plainbaseModule (the route fns + RouteSupport glue);
-        // A4a added AuthRoutes/SessionRoutes/SetupRoutes/AdminUserRoutes; A4b adds AdminTokenRoutes, so the floor rises.
-        files.size shouldBeGreaterThanOrEqual 20
-        val names = files.map { it.name }.toSet()
-        names.containsAll(
-            setOf(
-                "PageRoutes.kt", "PageWriteRoutes.kt", "PageCreateRoutes.kt", "AdminRoute.kt",
-                "AssetRoute.kt", "PermalinkRoute.kt", "BrowseRedirectRoute.kt", "RootContentRoute.kt",
-                "HistoryRoutes.kt", "SearchRoute.kt", "TreeRoute.kt", "PreviewRoute.kt",
-                "AuthRoutes.kt", "SessionRoutes.kt", "SetupRoutes.kt", "AdminUserRoutes.kt",
-                "AdminTokenRoutes.kt", "ProposalRoutes.kt",
-                // Commit 6: the static mount was replaced by explicit routes, so the bundle and the
-                // SPA's own top-level paths are route SOURCE now and belong under the same scan.
-                "FrontendStaticRoute.kt", "SpaShellRoute.kt",
-            ),
-        ).shouldBeTrue()
+    test("the scan sees every expected file in every registered root") {
+        walkedRoots.size shouldBe walked.size
+        walked.keys shouldBe EXPECTED_FILES_BY_ROOT.keys
+        val missing = EXPECTED_FILES_BY_ROOT.flatMap { (rootKey, expectedNames) ->
+            val actualNames = filesByRoot.getValue(rootKey).map { it.name }.toSet()
+            (expectedNames - actualNames).map { rootKey + "/" + it }
+        }
+        missing.shouldBeEmpty()
     }
 
-    test("no route references a raw mutator type, a facade impl, or a grant mint") {
+    test("no route-facing source references a raw mutator type, facade impl, or grant mint") {
         val violations = files.flatMap { file ->
             val text = file.readText()
             forbiddenReferences.filter { token -> referencesToken(text, token) }
-                .map { "${mainRoot.relativize(file)}: forbidden reference to '$it'" }
+                .map { mainRoot.relativize(file).slashPath() + ": forbidden reference to '" + it + "'" }
         }
         violations.shouldBeEmpty()
     }
 })
 
 /**
- * Whether [text] REFERENCES [token] as code (not merely in a comment/KDoc). Comments are stripped first — line
- * (`//`) and block (`/* … */`, incl. single-line `/** … */`) — so a KDoc `[WritePipeline.write]` or a `mirrors
- * `LocalContentStore.…`` note is not a false positive. The token is matched at an identifier BOUNDARY so
- * `LocalContentStore` does NOT match `ContentStore` while `ContentStore.read` does (a `(` suffix token like
- * `EditGrant(` matches literally — it already ends at a non-identifier char).
+ * Whether text references [token] as code, excluding line and block comments. Identifier tokens use boundaries so
+ * LocalContentStore does not match ContentStore; a suffix call marker remains a literal call-site check.
  */
 internal fun referencesToken(text: String, token: String): Boolean {
     val code = stripComments(text)
     return if (token.endsWith("(")) {
         code.contains(token)
     } else {
-        // Identifier boundary: the char before must not be an identifier char (so `Local`+`ContentStore` fails).
         Regex("(?<![A-Za-z0-9_])" + Regex.escape(token) + "(?![A-Za-z0-9_])").containsMatchIn(code)
     }
 }
 
-/** Removes line (`//`) and block (`/* … */`) comments so only CODE remains (a tiny, sufficient stripper). */
+/** Removes line and block comments so only code remains for this bounded architecture scan. */
 internal fun stripComments(text: String): String {
     val noBlock = text.replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), " ")
     return noBlock.lineSequence().joinToString("\n") { it.substringBefore("//") }
 }
 
-/** Locates `server/src/main/kotlin/com/plainbase/frameworks/ktor/routes` by walking up from the test CWD. */
-internal fun routesSourceRoot(): Path = mainSourceRoot().resolve("frameworks/ktor/routes")
-
-/**
- * Every route-facing source root the choke-point scan must cover: `frameworks/ktor/routes` always, plus
- * `frameworks/mcp`; both are listed explicitly so the scan cannot silently omit either surface.
- */
-internal fun routeFacingSourceRoots(): List<Path> {
+/** Every root covered by the choke-point inventory: routes, MCP, and shared protocol. */
+internal fun routeMcpAndProtocolSourceRoots(): List<Path> {
     val main = mainSourceRoot()
     return listOf(
         main.resolve("frameworks/ktor/routes"),
         main.resolve("frameworks/mcp"),
+        main.resolve("frameworks/protocol"),
     )
 }
 
-/** Locates `server/src/main/kotlin/com/plainbase` by walking up from the test CWD (the Fixtures pattern). */
+/** Locates server/src/main/kotlin/com/plainbase by walking up from the test CWD. */
 internal fun mainSourceRoot(): Path {
     var dir: Path? = Path.of(System.getProperty("user.dir")).toAbsolutePath()
     while (dir != null) {
@@ -134,5 +155,7 @@ internal fun mainSourceRoot(): Path {
         }
         dir = dir.parent
     }
-    error("Could not locate the main source tree from ${System.getProperty("user.dir")}")
+    error("Could not locate the Plainbase main source tree from " + System.getProperty("user.dir"))
 }
+
+private fun Path.slashPath(): String = toString().replace(java.io.File.separatorChar, '/')

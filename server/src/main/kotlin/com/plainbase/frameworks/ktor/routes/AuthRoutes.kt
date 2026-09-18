@@ -6,9 +6,9 @@ import com.plainbase.domain.service.LoginOutcome
 import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.SESSION_COOKIE_NAME
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.LoginRequest
 import com.plainbase.frameworks.ktor.dto.LoginResponse
+import com.plainbase.frameworks.protocol.ErrorCodes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.routing.Route

@@ -2,10 +2,6 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.TransportSecurityPolicy
-import com.plainbase.frameworks.ktor.dto.ErrorBody
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
-import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
-import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.routes.ExtractedPrincipal
 import com.plainbase.frameworks.ktor.routes.RECEIVE_BODY_ENTRY_OBSERVER
 import com.plainbase.frameworks.ktor.routes.ShortRequestBodyException
@@ -37,6 +33,10 @@ import com.plainbase.frameworks.ktor.routes.spaShellRoutes
 import com.plainbase.frameworks.ktor.routes.treeRoute
 import com.plainbase.frameworks.lifecycle.CompletionWait
 import com.plainbase.frameworks.mcp.plainbaseMcp
+import com.plainbase.frameworks.protocol.ErrorBody
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.ErrorEnvelope
+import com.plainbase.frameworks.protocol.RestJson
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
