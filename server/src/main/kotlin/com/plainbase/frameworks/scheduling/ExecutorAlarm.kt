@@ -17,6 +17,8 @@ internal class ExecutorAlarm(private val threadName: String = "plainbase-rebuild
     private val executor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, threadName).apply { isDaemon = true }
     }
+    private var shutdownGraceMillis = SHUTDOWN_GRACE_SECONDS * 1_000
+    private var onGraceExhausted: () -> Unit = {}
 
     override fun after(delayMillis: Long, action: () -> Unit) {
         executor.schedule(action, delayMillis, TimeUnit.MILLISECONDS)
@@ -25,25 +27,40 @@ internal class ExecutorAlarm(private val threadName: String = "plainbase-rebuild
     override fun close() {
         CompletionWait.run {
             executor.shutdownNow()
-            if (awaitTerminated(SHUTDOWN_GRACE_SECONDS)) return@run
+            if (awaitTerminated()) return@run
             executor.shutdownNow()
-            if (awaitTerminated(SHUTDOWN_GRACE_SECONDS)) return@run
+            if (awaitTerminated()) return@run
             logger.warn {
-                "$threadName did not terminate within ${2 * SHUTDOWN_GRACE_SECONDS}s of shutdown; " +
+                "$threadName did not terminate within ${formatDuration(2 * shutdownGraceMillis)} of shutdown; " +
                     "waiting for the scheduled action to finish"
             }
+            var callbackInvoked = false
             awaitForever(
-                await = { executor.awaitTermination(it, TimeUnit.MILLISECONDS) },
+                await = {
+                    if (!callbackInvoked) {
+                        callbackInvoked = true
+                        onGraceExhausted()
+                    }
+                    executor.awaitTermination(it, TimeUnit.MILLISECONDS)
+                },
                 completed = executor::isTerminated,
             )
         }
     }
 
+    /** Configure before the close thread starts. */
+    internal fun configureShutdownWaitForTest(graceMillis: Long, onGraceExhausted: () -> Unit) {
+        require(graceMillis > 0L) { "graceMillis must be positive" }
+        check(!executor.isShutdown) { "cannot configure a closed alarm" }
+        shutdownGraceMillis = graceMillis
+        this.onGraceExhausted = onGraceExhausted
+    }
+
     internal fun isTerminatedForTest(): Boolean = executor.isTerminated
 
-    /** Retains each real 30-second threshold, then waits for actual executor termination. */
-    private fun CompletionWait.awaitTerminated(graceSeconds: Long): Boolean {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(graceSeconds)
+    /** Retains each configured grace threshold, then waits for actual executor termination. */
+    private fun CompletionWait.awaitTerminated(): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(shutdownGraceMillis)
         return awaitUntil(
             deadlineNanos = deadline,
             await = { nanos -> executor.awaitTermination(nanos, TimeUnit.NANOSECONDS) },
@@ -55,7 +72,10 @@ internal class ExecutorAlarm(private val threadName: String = "plainbase-rebuild
         private val logger = KotlinLogging.logger {}
         private const val SHUTDOWN_GRACE_SECONDS = 30L
 
-        /** Forecast emitted after the two real grace waits; close still waits for actual termination. */
+        /** Forecast for two default grace waits; close may wait longer for actual termination. */
         const val CLOSE_BOUND_MILLIS: Long = 2 * SHUTDOWN_GRACE_SECONDS * 1_000
+
+        private fun formatDuration(millis: Long): String =
+            if (millis % 1_000L == 0L) "${millis / 1_000}s" else "${millis}ms"
     }
 }

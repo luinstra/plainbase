@@ -20,7 +20,7 @@ import kotlin.test.assertFalse
  * repositories under the closed-world image.
  *
  * @Tag("native") + kotlin.test only — this source set compiles INTO the native test image, so
- * Kotest/MockK must never appear here (see the test-stack split in build.gradle.kts).
+ * Kotest/MockK must never appear here (see the test-stack split in buildSrc/src/main/kotlin/com/plainbase/buildlogic/TestSourceSets.kt).
  */
 @Tag("native")
 class AdoptCommandNativeTest {

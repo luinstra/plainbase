@@ -18,6 +18,7 @@ COPY gradlew settings.gradle.kts build.gradle.kts ./
 COPY gradle/ gradle/
 RUN ./gradlew --version --no-daemon
 
+COPY buildSrc/ buildSrc/
 COPY server/ server/
 COPY frontend/ frontend/
 RUN ./gradlew :server:installDist --no-daemon ${RELEASE_VERSION:+-PreleaseVersion=$RELEASE_VERSION}

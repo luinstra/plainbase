@@ -28,8 +28,9 @@ private const val SQLITE_BUSY_BINDER_THREAD_NAME = "sqlite-busy-binder"
  *
  * The positive rows (a file-backed bind waiting out a real writer, and a failed BEGIN leaving the thread's next
  * transaction clean) live in `SqliteBusyBeginImmediateNativeTest`. That source set is folded into the JVM `test` task
- * (see server/build.gradle.kts), so those rows ALREADY run on both the JVM and the native image; duplicating them here
- * would buy nothing and add two harnesses to keep in step.
+ * (see
+ * `buildSrc/src/main/kotlin/com/plainbase/buildlogic/TestSourceSets.kt`), so those rows ALREADY run on both the JVM and the
+ * native image; duplicating them here would buy nothing and add two harnesses to keep in step.
  *
  * This row is the differential half. The same race on the STOCK SQLDelight driver returns SQLITE_BUSY without waiting,
  * because a deferred read-to-write promotion skips the busy handler. It proves the harness can OBSERVE the defect, so a

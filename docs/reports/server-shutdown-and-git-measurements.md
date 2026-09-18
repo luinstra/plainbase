@@ -69,9 +69,6 @@ capacity, bundle throughput, shutdown duration, or concurrent production content
 The shutdown hook fixture now names its parent-side observation key
 `signal_to_shutdown_entry_observed_ms`. It is not the child owner-entry timestamp. The historical raw receipt
 key `signal_to_shutdown_entry_ms=109` remains byte-identical and must not be added to the 1,026 ms owner value.
-The separate G3z JVM PID1 regression launcher receipt uses `xml=synthesized-from-launcher-summary`; it is not a
-historical benchmark receipt. The native G3z reporter XML is a distinct genuine native result.
-
 Raw CSV, XML, logs, source snapshots, and receipts remain in the local ignored review archive and were not
 rewritten:
 
