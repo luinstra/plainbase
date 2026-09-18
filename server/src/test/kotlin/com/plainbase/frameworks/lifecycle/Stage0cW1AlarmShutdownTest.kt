@@ -30,13 +30,14 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
-/** W1: the real alarm's two 30s waits, actual rebuild termination, and an independent DATA_DIR lock probe. */
+/** W1: the real alarm's two grace waits, actual rebuild termination, and an independent DATA_DIR lock probe. */
 class Stage0cW1AlarmShutdownTest : FunSpec({
 
-    test("W1: a real 70s rebuild remains live through both alarm waits and retains DATA_DIR ownership") {
+    test("W1: a real rebuild remains live through both alarm waits and retains DATA_DIR ownership") {
         val parent = Stage0cParentDeadline(PARENT_WATCHDOG_MILLIS)
         withEmptyListEndpoint { endpoint ->
             withOwnershipFixture(
@@ -56,7 +57,11 @@ class Stage0cW1AlarmShutdownTest : FunSpec({
                 val queryRelease = CountDownLatch(1)
                 val queryCompleted = CountDownLatch(1)
                 val scheduledCompleted = CountDownLatch(1)
+                val graceExhausted = CountDownLatch(1)
                 val initialRebuilds = AtomicInteger()
+                val graceExhaustedInvocations = AtomicInteger()
+                val graceExhaustedAtNanos = AtomicLong()
+                val heldWorkReleasedAtNanos = AtomicLong()
                 val scheduledThread = AtomicReference<Thread?>()
                 val scheduledFailure = AtomicReference<Throwable?>()
                 val queryFailure = AtomicReference<Throwable?>()
@@ -76,6 +81,10 @@ class Stage0cW1AlarmShutdownTest : FunSpec({
                 val cleanupFailures = IdentitySafeFailureAccumulator()
                 val cleanupFailureLock = Any()
                 var outerInterrupted = false
+                fun releaseHeldWork() {
+                    heldWorkReleasedAtNanos.compareAndSet(0L, System.nanoTime())
+                    queryRelease.countDown()
+                }
                 fun recordCleanupFailure(failure: Throwable?) {
                     synchronized(cleanupFailureLock) {
                         cleanupFailures.add(failure)
@@ -123,7 +132,13 @@ class Stage0cW1AlarmShutdownTest : FunSpec({
                                 createScheduler = { builder ->
                                     val actualAlarm = RecordingAlarm(
                                         events = closeEvents,
-                                        delegate = ExecutorAlarm("plainbase-stage0c-w1-alarm"),
+                                        delegate = ExecutorAlarm("plainbase-stage0c-w1-alarm").also { delegate ->
+                                            delegate.configureShutdownWaitForTest(TEST_GRACE_MILLIS) {
+                                                graceExhaustedAtNanos.set(System.nanoTime())
+                                                graceExhaustedInvocations.incrementAndGet()
+                                                graceExhausted.countDown()
+                                            }
+                                        },
                                     )
                                     val actualScheduler = RebuildScheduler(
                                         rebuild = {
@@ -162,7 +177,7 @@ class Stage0cW1AlarmShutdownTest : FunSpec({
                                         "W1 observer",
                                         observerRef,
                                         close = {
-                                            queryRelease.countDown()
+                                            releaseHeldWork()
                                             startRelease.countDown()
                                             observerRef.get()?.interrupt()
                                         },
@@ -183,7 +198,7 @@ class Stage0cW1AlarmShutdownTest : FunSpec({
                                                 "W1 hook helper",
                                                 shutdownRef,
                                                 close = {
-                                                    queryRelease.countDown()
+                                                    releaseHeldWork()
                                                     startRelease.countDown()
                                                     shutdownRef.get()?.interrupt()
                                                 },
@@ -193,7 +208,20 @@ class Stage0cW1AlarmShutdownTest : FunSpec({
                                             parent.await(actualAlarm.closeEntered, "W1 scheduler drain entry", 30_000) shouldBe true
                                             val alarmStartedAt = actualAlarm.closeStartedAtNanos.get()
                                             check(alarmStartedAt > 0L) { "W1 alarm close entry was not recorded" }
-                                            parent.waitUntilElapsed(alarmStartedAt, FIRST_OBSERVATION_MILLIS, "W1 first observation")
+                                            check(
+                                                parent.await(
+                                                    graceExhausted,
+                                                    "W1 alarm grace exhaustion",
+                                                    SHUTDOWN_LATCH_TIMEOUT_MILLIS,
+                                                ),
+                                            ) {
+                                                "W1 alarm did not reach its indefinite wait"
+                                            }
+                                            val graceExhaustedAt = graceExhaustedAtNanos.get()
+                                            check(
+                                                graceExhaustedAt - alarmStartedAt >=
+                                                    TimeUnit.MILLISECONDS.toNanos(2L * TEST_GRACE_MILLIS),
+                                            ) { "W1 alarm grace callback fired before both grace periods elapsed" }
                                             thresholdShutdownPending.set(shutdown.isAlive)
                                             thresholdLock.set(probeDataDirLock(data, parent, fixture))
                                             thresholdDriverOpen.set(!requireNotNull(activeQueryConnection.get()).isClosed)
@@ -203,11 +231,14 @@ class Stage0cW1AlarmShutdownTest : FunSpec({
                                             check(!closeEvents.contains("object")) { "object closed before scheduled rebuild completion" }
                                             check(!closeEvents.contains("search")) { "search closed before scheduled rebuild completion" }
                                             check(!closeEvents.contains("driver")) { "driver closed before scheduled rebuild completion" }
-
-                                            parent.waitUntilElapsed(alarmStartedAt, HOLD_MILLIS, "W1 actual 70s hold")
-                                            queryRelease.countDown()
+                                            check(!actualAlarm.isClosedForTest()) { "W1 alarm terminated before held work was released" }
+                                            releaseHeldWork()
                                             parent.join(shutdown, "W1 shutdown hook", 30_000) shouldBe true
                                             check(actualAlarm.isClosedForTest()) { "delegated scheduler alarm did not terminate" }
+                                            graceExhaustedInvocations.get() shouldBe 1
+                                            check(
+                                                actualAlarm.closeCompletedAtNanos.get() > heldWorkReleasedAtNanos.get(),
+                                            ) { "W1 scheduler close completed before held work was released" }
                                         } catch (failure: Throwable) {
                                             if (failure is InterruptedException) {
                                                 observerInterrupted = true
@@ -215,7 +246,7 @@ class Stage0cW1AlarmShutdownTest : FunSpec({
                                             }
                                             recordObserverFailure(failure)
                                         } finally {
-                                            queryRelease.countDown()
+                                            releaseHeldWork()
                                             startRelease.countDown()
                                             val joined = shutdown?.let {
                                                 try {
@@ -297,7 +328,7 @@ class Stage0cW1AlarmShutdownTest : FunSpec({
                     }
                     recordCleanupFailure(failure)
                 } finally {
-                    queryRelease.countDown()
+                    releaseHeldWork()
                     startRelease.countDown()
                     val joined = observer?.let {
                         try {
@@ -482,6 +513,6 @@ object DataDirLockProbe {
     }
 }
 
-private const val FIRST_OBSERVATION_MILLIS = 60_500L
-private const val HOLD_MILLIS = 70_000L
+private const val TEST_GRACE_MILLIS = 100L
+private const val SHUTDOWN_LATCH_TIMEOUT_MILLIS = 5_000L
 private const val PARENT_WATCHDOG_MILLIS = 180_000L

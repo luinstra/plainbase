@@ -80,6 +80,8 @@ class GitBundleDr(
     private var everShipped = false
     private var consecutiveShipFailures = 0
     private var closed = false
+    private var shutdownGraceMillis = SHIP_SHUTDOWN_GRACE_SECONDS * 1_000
+    private var onGraceExhausted: () -> Unit = {}
 
     // G2: at most ONE ship worker at a time. Without it, every commit during a slow first ship makes
     // recordCommit() return true again (firstEver stays true until the upload completes) and the caller
@@ -561,22 +563,31 @@ class GitBundleDr(
     /** Stop the owned [shipExecutor] and join it before the final flush. */
     private fun CompletionWait.drainShipExecutor() {
         shipExecutor.shutdown()
-        if (awaitShipExecutor(SHIP_SHUTDOWN_GRACE_SECONDS)) return
-        logger.warn { "a bundle ship worker did not finish within ${SHIP_SHUTDOWN_GRACE_SECONDS}s of shutdown; interrupting it" }
+        if (awaitShipExecutor()) return
+        logger.warn {
+            "a bundle ship worker did not finish within ${formatDuration(shutdownGraceMillis)} of shutdown; interrupting it"
+        }
         shipExecutor.shutdownNow()
-        if (awaitShipExecutor(SHIP_SHUTDOWN_GRACE_SECONDS)) return
+        if (awaitShipExecutor()) return
         logger.warn {
             "a bundle ship worker is still running after interrupt; waiting for actual termination before the final flush"
         }
+        var callbackInvoked = false
         awaitForever(
-            await = { millis -> shipExecutor.awaitTermination(millis, TimeUnit.MILLISECONDS) },
+            await = { millis ->
+                if (!callbackInvoked) {
+                    callbackInvoked = true
+                    onGraceExhausted()
+                }
+                shipExecutor.awaitTermination(millis, TimeUnit.MILLISECONDS)
+            },
             completed = shipExecutor::isTerminated,
         )
     }
 
-    /** Each close forecast retains a real 30-second wait; close then waits for actual termination. */
-    private fun CompletionWait.awaitShipExecutor(graceSeconds: Long): Boolean {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(graceSeconds)
+    /** Each configured grace wait precedes the final actual-termination wait. */
+    private fun CompletionWait.awaitShipExecutor(): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(shutdownGraceMillis)
         return awaitUntil(
             deadlineNanos = deadline,
             await = { nanos -> shipExecutor.awaitTermination(nanos, TimeUnit.NANOSECONDS) },
@@ -586,6 +597,16 @@ class GitBundleDr(
 
     internal fun isClosedForTest(): Boolean =
         shipExecutor.isTerminated && (alarm as? ExecutorAlarm)?.isTerminatedForTest() != false
+
+    /** Configure before the close thread starts. */
+    internal fun configureShutdownWaitForTest(graceMillis: Long, onGraceExhausted: () -> Unit) {
+        require(graceMillis > 0L) { "graceMillis must be positive" }
+        synchronized(cadenceLock) {
+            check(!closed) { "cannot configure a closed DR" }
+            shutdownGraceMillis = graceMillis
+            this.onGraceExhausted = onGraceExhausted
+        }
+    }
 
     // ---- internals ----------------------------------------------------------------------------
 
@@ -758,8 +779,8 @@ class GitBundleDr(
          */
         private const val BUNDLE_GIT_TIMEOUT_SECONDS = 600L
 
-        /** R1: the initial grace forecast for [close] to drain the owned ship executor before the final flush;
-         *  on expiry close escalates to shutdownNow() and then waits for actual termination. */
+        /** R1: each configured grace wait drains the owned ship executor before the final flush; expiry escalates
+         *  to shutdownNow() and then waits for actual termination. */
         private const val SHIP_SHUTDOWN_GRACE_SECONDS = 30L
 
         /**
@@ -771,6 +792,9 @@ class GitBundleDr(
             2 * SHIP_SHUTDOWN_GRACE_SECONDS * 1_000 +
                 BUNDLE_GIT_TIMEOUT_SECONDS * 1_000 +
                 ObjectContentStore.BUNDLE_TRANSFER_TIMEOUT_MILLIS
+
+        private fun formatDuration(millis: Long): String =
+            if (millis % 1_000L == 0L) "${millis / 1_000}s" else "${millis}ms"
 
         /** `git count-objects -v` lines (G4): `count: <loose>` and `in-pack: <packed>`. */
         private val OBJECT_COUNT_LINE = Regex("(?m)^count: (\\d+)$")

@@ -55,7 +55,7 @@ import kotlin.concurrent.thread
 /** W3 controls for real cadence/ship workers, final flush ordering, and repeated-interrupt preservation. */
 class Stage0cW3DrShutdownTest : FunSpec({
 
-    test("W3: a real ship held for 70s is joined before the final PUT and before transport close") {
+    test("W3: a real ship is joined before the final PUT and before transport close") {
         val parent = Stage0cParentDeadline(PARENT_WATCHDOG_MILLIS)
         withOwnershipFixture(
             runTimeoutMillis = PARENT_WATCHDOG_MILLIS,
@@ -120,6 +120,10 @@ class Stage0cW3DrShutdownTest : FunSpec({
             fixture.track("W3 DATA_DIR lock", lock, ::closeLock) { lockClosed.get() }
 
             val release = CountDownLatch(1)
+            val graceExhausted = CountDownLatch(1)
+            val graceExhaustedInvocations = AtomicInteger()
+            val graceExhaustedAtNanos = AtomicLong()
+            val heldWorkReleasedAtNanos = AtomicLong()
             val shipWorkerRef = AtomicReference<Thread?>()
             val executorShutdownEntered = CountDownLatch(1)
             val executorShutdownAtNanos = AtomicLong()
@@ -130,6 +134,10 @@ class Stage0cW3DrShutdownTest : FunSpec({
             val shipTaskCompleted = CountDownLatch(1)
             val shipTaskFailure = AtomicReference<Throwable?>()
             val shipTaskEnteredAfterExecuteInterrupted = AtomicBoolean(false)
+            fun releaseHeldWork() {
+                heldWorkReleasedAtNanos.compareAndSet(0L, System.nanoTime())
+                release.countDown()
+            }
             val underlyingExecutor = object : ThreadPoolExecutor(
                 1,
                 1,
@@ -175,7 +183,7 @@ class Stage0cW3DrShutdownTest : FunSpec({
                 "W3 ship executor",
                 underlyingExecutor,
                 close = {
-                    release.countDown()
+                    releaseHeldWork()
                     allowExecutorTermination.countDown()
                     recordingExecutor.shutdown()
                     while (!underlyingExecutor.isTerminated) {
@@ -288,12 +296,19 @@ class Stage0cW3DrShutdownTest : FunSpec({
                 locks = locks,
                 shipExecutor = recordingExecutor,
             )
+            bundleDr.configureShutdownWaitForTest(TEST_GRACE_MILLIS) {
+                graceExhaustedAtNanos.set(System.nanoTime())
+                graceExhaustedInvocations.incrementAndGet()
+                graceExhausted.countDown()
+            }
             val drClosed = AtomicBoolean(false)
+            val drCloseCompletedAtNanos = AtomicLong()
             val drFailure = AtomicReference<Throwable?>()
             fun closeDr() {
                 events += "dr-close-enter"
                 try {
                     bundleDr.close()
+                    drCloseCompletedAtNanos.set(System.nanoTime())
                 } catch (failure: Throwable) {
                     drFailure.compareAndSet(null, failure)
                     throw failure
@@ -324,7 +339,20 @@ class Stage0cW3DrShutdownTest : FunSpec({
                         check(parent.await(executorShutdownEntered, "W3 ship executor shutdown entry", 10_000)) {
                             "W3 ship executor shutdown did not enter"
                         }
-                        parent.waitUntilElapsed(executorShutdownAtNanos.get(), FIRST_OBSERVATION_MILLIS, "W3 ship 60s observation")
+                        check(
+                            parent.await(
+                                graceExhausted,
+                                "W3 ship executor grace exhaustion",
+                                SHUTDOWN_LATCH_TIMEOUT_MILLIS,
+                            ),
+                        ) {
+                            "W3 ship executor did not reach its indefinite wait"
+                        }
+                        val graceExhaustedAt = graceExhaustedAtNanos.get()
+                        check(
+                            graceExhaustedAt - executorShutdownAtNanos.get() >=
+                                TimeUnit.MILLISECONDS.toNanos(2L * TEST_GRACE_MILLIS),
+                        ) { "W3 ship executor grace callback fired before both grace periods elapsed" }
                         closeWorker.isAlive.shouldBeTrue()
                         realClient.transportActiveForTest().shouldBeTrue()
                         events.contains("object-transport-close-enter").shouldBeFalse()
@@ -334,8 +362,7 @@ class Stage0cW3DrShutdownTest : FunSpec({
                         requireNotNull(firstBundleBytes.get()).isNotEmpty().shouldBeTrue()
                         probeDataDirLock(data, parent, fixture) shouldBe "HELD"
 
-                        parent.waitUntilElapsed(executorShutdownAtNanos.get(), HOLD_MILLIS, "W3 admitted ship hold")
-                        release.countDown()
+                        releaseHeldWork()
                         check(parent.await(firstDelegateCompleted, "W3 delegated history.bundle PUT completion")) {
                             "W3 delegated history.bundle PUT did not complete"
                         }
@@ -349,6 +376,10 @@ class Stage0cW3DrShutdownTest : FunSpec({
                         check(parent.join(closeWorker, "W3 owner close", parent.remainingMillis())) {
                             "W3 owner close did not terminate"
                         }
+                        graceExhaustedInvocations.get() shouldBe 1
+                        check(drCloseCompletedAtNanos.get() > heldWorkReleasedAtNanos.get()) {
+                            "W3 DR close completed before held work was released"
+                        }
                         probeDataDirLock(data, parent, fixture) shouldBe "AVAILABLE"
                     } catch (failure: Throwable) {
                         if (failure is InterruptedException) {
@@ -357,7 +388,7 @@ class Stage0cW3DrShutdownTest : FunSpec({
                         }
                         cleanupFailures.add(failure)
                     } finally {
-                        release.countDown()
+                        releaseHeldWork()
                         allowExecutorTermination.countDown()
                         if (!ownerCloseStarted.get()) startOwnerClose()
                         closeWorker = ownerCloseThread.get()
@@ -391,7 +422,7 @@ class Stage0cW3DrShutdownTest : FunSpec({
                 }
                 failures.add(failure)
             } finally {
-                release.countDown()
+                releaseHeldWork()
                 allowExecutorTermination.countDown()
                 if (!ownerCloseStarted.get()) startOwnerClose()
                 val closeWorker = ownerCloseThread.get()
@@ -447,14 +478,23 @@ class Stage0cW3DrShutdownTest : FunSpec({
         }
     }
 
-    test("W3: the real cadence callback drains for 70s before final flush and transport close") {
+    test("W3: the real cadence callback drains before final flush and transport close") {
         val parent = Stage0cParentDeadline(PARENT_WATCHDOG_MILLIS)
         withOwnershipFixture(
             runTimeoutMillis = PARENT_WATCHDOG_MILLIS,
             joinTimeoutMillis = PARENT_WATCHDOG_MILLIS,
             parentDeadlineNanos = parent.deadlineNanos,
         ) { content, data ->
-            val alarm = W3HoldingAlarm(ExecutorAlarm(threadName = "plainbase-stage0c-w3-cadence"))
+            val graceExhausted = CountDownLatch(1)
+            val graceExhaustedInvocations = AtomicInteger()
+            val graceExhaustedAtNanos = AtomicLong()
+            val realAlarm = ExecutorAlarm(threadName = "plainbase-stage0c-w3-cadence")
+            realAlarm.configureShutdownWaitForTest(TEST_GRACE_MILLIS) {
+                graceExhaustedAtNanos.set(System.nanoTime())
+                graceExhaustedInvocations.incrementAndGet()
+                graceExhausted.countDown()
+            }
+            val alarm = W3HoldingAlarm(realAlarm)
             val graph = W3RealGraph(content, data, parent, alarm, holdFirstPut = false)
             val failures = IdentitySafeFailureAccumulator()
             var interrupted = false
@@ -480,7 +520,19 @@ class Stage0cW3DrShutdownTest : FunSpec({
                     "W3 delegated cadence alarm close did not enter"
                 }
                 val closeEntry = alarm.closeEnteredAtNanos.get()
-                parent.waitUntilElapsed(closeEntry, FIRST_OBSERVATION_MILLIS, "W3 cadence 60s observation")
+                check(
+                    parent.await(
+                        graceExhausted,
+                        "W3 cadence alarm grace exhaustion",
+                        SHUTDOWN_LATCH_TIMEOUT_MILLIS,
+                    ),
+                ) {
+                    "W3 cadence alarm did not reach its indefinite wait"
+                }
+                val graceExhaustedAt = graceExhaustedAtNanos.get()
+                check(
+                    graceExhaustedAt - closeEntry >= TimeUnit.MILLISECONDS.toNanos(2L * TEST_GRACE_MILLIS),
+                ) { "W3 cadence alarm grace callback fired before both grace periods elapsed" }
 
                 alarm.requestedDelayMillis.get() shouldBe GitBundleDr.SHIP_MAX_LATENCY_MILLIS
                 alarm.delegatedDelayMillis.get() shouldBe 0L
@@ -496,13 +548,16 @@ class Stage0cW3DrShutdownTest : FunSpec({
                 graph.events.contains("data-dir-lock-close-enter").shouldBeFalse()
                 graph.probe() shouldBe "HELD"
 
-                parent.waitUntilElapsed(closeEntry, HOLD_MILLIS, "W3 cadence callback drain")
-                alarm.release.countDown()
+                alarm.releaseHeldWork()
                 check(parent.await(alarm.callbackCompleted, "W3 supplied cadence callback completion")) {
                     "W3 supplied cadence callback did not complete"
                 }
                 check(parent.await(alarm.closeCompleted, "W3 real cadence alarm termination")) {
                     "W3 real cadence alarm close did not complete"
+                }
+                graceExhaustedInvocations.get() shouldBe 1
+                check(alarm.closeCompletedAtNanos.get() > alarm.heldWorkReleasedAtNanos.get()) {
+                    "W3 cadence alarm close completed before held work was released"
                 }
                 alarm.callbackInvocations.get() shouldBe 1
                 alarm.callbackFailure.get() shouldBe null
@@ -541,7 +596,7 @@ class Stage0cW3DrShutdownTest : FunSpec({
                     }
                     failures.add(failure)
                 } finally {
-                    alarm.release.countDown()
+                    alarm.releaseHeldWork()
                     graph.allowExecutorTermination.countDown()
                     try {
                         graph.startOwnerClose()
@@ -687,8 +742,8 @@ class Stage0cW3DrShutdownTest : FunSpec({
     }
 })
 
-private const val FIRST_OBSERVATION_MILLIS = 60_500L
-private const val HOLD_MILLIS = 70_000L
+private const val TEST_GRACE_MILLIS = 100L
+private const val SHUTDOWN_LATCH_TIMEOUT_MILLIS = 5_000L
 private const val PARENT_WATCHDOG_MILLIS = 180_000L
 private const val INTERRUPT_WATCHDOG_MILLIS = 45_000L
 private const val HISTORY_BUNDLE_SUFFIX = "/.plainbase/history.bundle"
@@ -785,6 +840,13 @@ private class W3HoldingAlarm(val real: ExecutorAlarm) : RebuildScheduler.Alarm, 
     val closeEntered = CountDownLatch(1)
     val closeCompleted = CountDownLatch(1)
     val closeEnteredAtNanos = AtomicLong()
+    val closeCompletedAtNanos = AtomicLong()
+    val heldWorkReleasedAtNanos = AtomicLong()
+
+    fun releaseHeldWork() {
+        heldWorkReleasedAtNanos.compareAndSet(0L, System.nanoTime())
+        release.countDown()
+    }
 
     override fun after(delayMillis: Long, action: () -> Unit) {
         check(suppliedAction.compareAndSet(null, action)) { "W3 cadence alarm was armed more than once" }
@@ -824,6 +886,7 @@ private class W3HoldingAlarm(val real: ExecutorAlarm) : RebuildScheduler.Alarm, 
         closeEntered.countDown()
         try {
             real.close()
+            closeCompletedAtNanos.set(System.nanoTime())
         } finally {
             closeCompleted.countDown()
         }

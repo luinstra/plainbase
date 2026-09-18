@@ -1203,6 +1203,7 @@ internal class RecordingAlarm(
     val closeReturned = AtomicInteger()
     val closeEntered = CountDownLatch(1)
     val closeStartedAtNanos = AtomicLong()
+    val closeCompletedAtNanos = AtomicLong()
 
     override fun after(delayMillis: Long, action: () -> Unit) = delegate.after(delayMillis, action)
 
@@ -1213,6 +1214,7 @@ internal class RecordingAlarm(
         closeEntered.countDown()
         beforeClose()
         delegate.close()
+        closeCompletedAtNanos.compareAndSet(0L, System.nanoTime())
         closeReturned.incrementAndGet()
         events?.add("scheduler")
     }
