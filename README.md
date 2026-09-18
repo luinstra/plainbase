@@ -14,23 +14,29 @@ Agents search, read, and **propose** changes; humans review and approve them
 in a built-in queue. Your content never stops being a plain tree of Markdown
 files.
 
+The maintained [backend architecture map](docs/backend-architecture.md) records current authority, recovery,
+transport and release-gate behavior.
+
 ## Why Plainbase
 
 - **Agent-native, not agent-bolted-on.** In-binary MCP over SSE with scoped,
-  revocable tokens - seven tools, byte-identical to the REST API. Connect
+  revocable tokens - seven tools over the same guarded services as REST, with
+  shared successful response shapes and intentional transport-specific errors. Connect
   Claude Code (or any MCP client) to your team's docs in minutes.
-- **Humans stay in charge.** Agents open change proposals with diffs and
-  rationale; nothing lands without a human approving it in the review UI.
+- **Humans stay in charge of proposals.** Agents open change proposals with
+  diffs and rationale for human review; operator-authorized COMMIT tokens can
+  direct-write only within configured REST globs, and otherwise degrade to a proposal.
 - **No lock-in, structurally.** Your docs are a plain tree you can always walk
-  away with, and Plainbase never keeps a second copy of them. Local deploy: the
+  away with. Local deploy: the
   `CONTENT_DIR` directory IS the authority - or, with a `roots {}` block, *every*
   configured root's directory is (each is a plain tree in its own right, and each
   one is content you back up) - manage them with `plainbase root add/remove/list`
   (see [Configuration](docs/configuration.md#the-cli-and-the-two-files)). Cloud
   deploy: an S3-compatible bucket IS the authority (a plain tree of objects any
-  S3 tool can read). Git is an optional layer, every index is derived and
-  rebuildable. Leaving Plainbase is copying those directories or syncing the
-  bucket.
+  S3 tool can read); the local object mirror is a derived cache. Git is optional
+  history, and the search index is rebuildable. Leaving with your content means
+  copying those directories or syncing the bucket; preserve `plainbase.db` to
+  retain database-only identity bindings, retirement history, security and proposals.
 - **One binary, no fleet.** A single native executable (no JRE, no database
   server, no Node) with embedded SQLite + FTS5 search and sub-second cold
   start. `docker compose up` if you'd rather run a container.
@@ -111,12 +117,12 @@ not routed through the logger.
 
 ## Your data (hard rule)
 
-- `CONTENT_DIR` - canonical, portable, user-owned (local mode). Reinstall
-  Plainbase anywhere against the same tree and nothing is lost.
+- `CONTENT_DIR` - canonical, portable, user-owned content (local mode).
+  Database-only identities and application state also require `plainbase.db`.
 - Object mode (`storage.backend=object`) - the S3-compatible **bucket** is
   canonical instead; `CONTENT_DIR` is ignored and `DATA_DIR/mirror` is a
   derived, deletable cache. One authority per deployment, never two.
-- `DATA_DIR` - app-owned workflow/security state. Never canonical content.
+- `DATA_DIR` - app-owned identity, workflow and security state. Never canonical content.
 - Search indexes - fully derived; delete them any time and rebuild.
 
 ## Docs
@@ -129,6 +135,7 @@ not routed through the logger.
 - [Connect your agent (MCP)](docs/connect-your-agent.md) - mint a token, point an MCP client at the
   server, a worked search → read → propose session.
 - [Design summary](docs/DESIGN_SUMMARY.md) - architecture & product framing.
+- [Backend architecture map](docs/backend-architecture.md) - current authority, transport and release behavior.
 - [Development](docs/DEVELOPMENT.md) - building, the CI gates, the native dependency spike,
   architecture rules.
 

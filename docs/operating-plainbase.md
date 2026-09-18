@@ -390,8 +390,9 @@ directory.** Which stores those are depends on `storage.backend`:
   entirely (the Object-storage subsection below covers that case). Object mode is single-root today: a
   `roots {}` block cannot be combined with `storage.backend=object` (ADR-0011 D10).
 
-Back up `DATA_DIR/plainbase.db` too, in EITHER mode, if users, agent tokens, proposals, roles, or the audit
-log matter to you - it's the one piece of `DATA_DIR` holding *real*, non-derived state. `DATA_DIR/search.db`
+Back up `DATA_DIR/plainbase.db` too, in EITHER mode: it holds durable identity bindings, retirement history and
+aliases as well as users, agent tokens, proposals, roles, sessions and the audit log - the one piece of `DATA_DIR`
+holding *real*, non-derived state. `DATA_DIR/search.db`
 needs no backup at all: it's fully [derived state](#searchdb-is-derived-state), rebuildable from the
 authoritative content at any time with `plainbase reindex` (and in object mode `DATA_DIR/mirror` /
 `DATA_DIR/mirror-state` are likewise derived and need none).
@@ -401,7 +402,7 @@ authoritative content at any time with `plainbase reindex` (and in object mode `
 In object mode the S3-compatible **bucket** is the canonical content store - back IT up, the same way
 you'd back up the content root locally. `DATA_DIR/mirror` and `DATA_DIR/mirror-state` are derived, deletable
 cache (delete them and they self-heal from the bucket on the next boot), so they need no backup; `plainbase.db`
-still holds real state and still wants one.
+still holds durable identity, retirement, security and workflow state and still wants one.
 
 **Consistency requirement.** Object mode needs a bucket with **strong read-after-write AND strong LIST
 consistency** - R2 and AWS S3 both provide this. On an eventually-consistent-LIST S3-compatible backend a
@@ -501,8 +502,8 @@ your store, sized to how much history you want:
 - **Local (`storage.backend=local`):** the existing guidance above -
   [back up EVERY configured root's directory](#backups) (`CONTENT_DIR` with no `roots {}` block; otherwise
   `roots.docs.path` **and every extra root's `path`** - each root is an independent content authority and
-  nothing else in the deployment holds a copy of it; plus `DATA_DIR/plainbase.db` if users/tokens/proposals
-  matter). Unchanged otherwise.
+  nothing else in the deployment holds a copy of it; plus `DATA_DIR/plainbase.db` for durable identity,
+  retirement, security and workflow state). Unchanged otherwise.
 - **AWS S3 (or any versioning-capable store):** enable bucket
   [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) plus a
   **noncurrent-version lifecycle rule** for near-free point-in-time restore. **Same-bucket caveat:**
@@ -572,8 +573,8 @@ bucket on the next boot). The authoritative content is the source of truth, so m
   `DATA_DIR` alone, which is the exact loss this command exists to prevent. If it refuses, restore the
   missing path and re-run: adopt is idempotent.
 - back up **every configured root's directory** (`CONTENT_DIR` with no `roots {}` block; otherwise
-  `roots.docs.path` and each extra root's `path`) always; back up `DATA_DIR/plainbase.db` too if users,
-  tokens, or proposals matter.
+  `roots.docs.path` and each extra root's `path`) always; back up `DATA_DIR/plainbase.db` too for durable
+  identity, retirement, security and workflow state.
 - on a multi-root install, back up `DATA_DIR/plainbase.conf` and `DATA_DIR/roots.conf` too. Neither is
   reconstructable from the content trees: they're the only record of *which* directories are roots,
   under what names, with what `editable`/`history` settings, and **in what ORDER** - and the order is

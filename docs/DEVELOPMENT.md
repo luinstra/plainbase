@@ -2,7 +2,8 @@
 
 Contributor-facing internals: building, the CI gates, the native dependency
 spike, and the architecture rules. For contribution mechanics (DCO sign-off,
-commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md).
+commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md). The current-state backend map is
+[here](backend-architecture.md).
 
 ## Building
 
@@ -70,14 +71,16 @@ metadata only and is not evidence that the binary ran on macOS 14.
 
 ## What CI checks
 
-Five jobs gate `main` (`.github/workflows/ci.yml`):
+The always-run `ci-gate` aggregate in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) depends on six jobs.
+That source fact does not establish live branch protection:
 
 - **`build-test`** - the JVM universal-JAR floor: `./gradlew build`, the positive `gitZombieJvmPid1`
   control, and the full-stack dependency spike.
 - **`enforced-auth-smoke`** - the builtin auth/CSRF matrix on loopback (anon `401`, bootstrap, CSRF
-  present/absent/cross-origin, a PB-WRITE-1 save, an agent-bearer read + REST revoke). Every other
-  job here boots `auth.mode=off` by default, so this is the one job that actually exercises
-  enforced-mode auth.
+  present/absent/cross-origin, a PB-WRITE-1 save, an agent-bearer read + REST revoke). The builtin lane
+  is the focused enforced-mode matrix; Docker, frontend and native lanes also exercise their own
+  enforced/proxy paths.
+- **`multi-root-smoke`** - the JVM-distribution multi-root topology smoke, separate from the native artifact lane.
 - **`docker-image`** - the compose-tier image build plus a non-loopback proxy/transport smoke (a
   `421` transport refusal and the full proxy CSRF path - only reachable from outside loopback).
 - **`native-gate` (linux-x64)** - `nativeCompile` → `nativeTest` → the positive `gitZombieNativePid1`
@@ -148,15 +151,18 @@ stub handshake, the in-binary MCP SSE-on-CIO handshake, and offline SigV4
 signing vectors. It prints PASS/FAIL per check and exits non-zero on failure.
 CI runs it on the JVM **and** against the native binary (the native gate). All
 9 checks pass on the JVM and inside the native binary; CI gates linux-x64 on
-every push. If a
-dependency ever fails irreparably under native-image, the documented escape
-hatch is: ship JVM-only and move native to the next release - the JAR is
-always the release floor.
+every push. If a dependency ever fails irreparably under native-image, the
+documented escape hatch remains: ship JVM-only and move native to the next
+release - the JAR is always the release floor. Current release automation does
+not support that escape hatch: assembly also requires linux-x64, linux-arm64,
+macos-arm64 and the image to succeed. See the [backend map](backend-architecture.md#verification-artifacts-and-deferred-policy).
 
 The reachability metadata that makes flexmark (BitFieldSet enum universes),
-JGit (config enums), the MCP SDK (polymorphic JSONRPC serializers), and
-kotlinx DTO lookups work under native-image lives in
+the MCP SDK (polymorphic JSONRPC serializers), and kotlinx DTO lookups work
+under native-image lives in
 `server/src/main/resources/META-INF/native-image/`.
+Production Git uses the system `git` binary; JGit is JVM-test-only (see
+[ADR-0006](decisions/0006-git-via-system-binary-not-jgit.md)).
 
 Native startup (cold exec → first `200 /healthz`, against an empty content
 dir): ~467 ms measured local median - see
@@ -169,9 +175,12 @@ window, not cold-start).
 Hexagonal, two top-level packages under `com.plainbase` (see the design
 summary, §5.8):
 
-- `domain/` - models, ports (`XxxProvider`, `ContentStore`), services. Depends on nothing.
+- `domain/` - framework-free models, ports (`XxxProvider`, `ContentStore`), and services.
 - `frameworks/` - adapters grouped by technology (`ktor/`, `sqldelight/`, `git/`,
   `markdown/`, `koin/`, `config/`, `security/`, `spike/`).
+
+Build implementation lives in [`buildSrc`](../buildSrc/src/main/kotlin/com/plainbase/buildlogic/);
+the server Gradle file retains product and dependency settings.
 
 Native-image constraints are load-bearing stack choices, not preferences:
 Ktor **CIO** (never Netty), **kotlinx.serialization** only (no Jackson/Gson),
@@ -217,6 +226,4 @@ separate from that availability state. The safety rule remains that only explici
 EPOCH, OBJECT_LIST, GIT, or accepted OPERATOR authority can retire an absent
 binding. See [ADR-0011](decisions/0011-multi-root-document-directories.md) and
 [ADR-0012](decisions/0012-per-root-page-identity.md) for tracked rationale;
-the local/gitignored absence-authority plan
-`../.crew/plans/draft-implementation-plans-to-get-plainbase-design.md` and phase
-records under `.crew/reports/` are supplemental execution context.
+the [backend architecture map](backend-architecture.md) for the maintained current summary.

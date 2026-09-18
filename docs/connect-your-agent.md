@@ -2,8 +2,9 @@
 
 Plainbase ships an **in-binary MCP server** - the same single native binary that serves the web UI also
 speaks the [Model Context Protocol](https://modelcontextprotocol.io) over SSE. An agent (Claude Code, the MCP
-inspector, or any MCP client) connects with an app-issued `pb_` token and gets exactly **seven tools** that are
-byte-for-byte the same contract as the REST API: same auth, same outcomes. Agents *propose*; humans *approve*.
+inspector, or any MCP client) connects with an app-issued `pb_` token and gets exactly **seven tools** over the same
+guarded services as REST. Tests compare shared successful response bytes; authentication/session
+and error handling retain intentional transport differences. Agents *propose*; humans *approve* proposals.
 
 ## 1. Mint an agent token
 
@@ -137,10 +138,13 @@ always safe; retrying a write into either is not going to change the outcome unt
 
 ## Parity with the REST API
 
-Every MCP tool is a thin transport adapter over the same guarded service the REST routes use - there is no
-second authorization path and no divergent behavior. The six read/list/get tools return byte-identical JSON to
-their REST endpoints (`GET /api/v1/search`, `/pages/{id}`, `/pages/{id}/metadata`, `/pages/{id}/validate-links`,
-`/changes`, `/changes/{id}`); `propose_change` is `POST /api/v1/changes`. Every MCP tool has a REST equivalent you
+Every MCP tool is a thin transport adapter over the same guarded facades the REST routes use, with policy rechecked per
+call. The six read/list/get tools have shared successful JSON contracts with their REST endpoints (`GET /api/v1/search`,
+`/pages/{id}`, `/pages/{id}/metadata`, `/pages/{id}/validate-links`, `/changes`, `/changes/{id}`), while authentication,
+session and error envelopes remain transport-specific; `propose_change` is `POST /api/v1/changes`. Separately executed
+proposal creates mint independent IDs even though their response structure is shared. Every MCP tool has a REST equivalent you
 can drive with the same `pb_` bearer. The reverse is not total: a few write paths are REST-only (the
 `PUT /api/v1/pages/{id}` direct commit for an in-glob COMMIT token, and direct page creation), with no MCP tool -
 over MCP you propose instead.
+
+See the [transport differences table](backend-architecture.md#rest-and-mcp-ownership) for the intentional error distinctions.

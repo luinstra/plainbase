@@ -15,16 +15,12 @@ import com.plainbase.domain.root.BreakCause
 interface ContentStore {
 
     /**
-     * Whether the backing tree exists and is traversable RIGHT NOW - the ONE liveness probe (ADR-0011 D5).
+     * Whether the backing tree is currently available to serve reads.
      *
-     * A local store answers the same three-predicate check the config's one-probe rule uses (a readable,
-     * searchable directory); an object store answers `true` unconditionally - the bucket is the authority
-     * and transport failures have their own error paths, so availability is a LOCAL-path concept in v1 (D10).
-     *
-     * Deliberately NOT a write-capability check: a READ-ONLY remounted root exists, is readable and serves
-     * every byte correctly, so calling it "unavailable" would be false on its face - and availability is
-     * sticky-until-restart, which is the wrong remediation for a condition `mount -o remount,rw` fixes. A
-     * read-only root is a WRITE fault, and the mutation surfaces' own `Unreadable` arms already say so.
+     * Local stores probe their readable, searchable root. Object-backed stores answer `true` before a mirror probe is
+     * bound; afterwards they require local mirror reachability and reject a blank mirror when the latest published
+     * bucket LIST held pages. This is local mirror reachability/identity, not a network-health or write-capability
+     * check; a read-only mirror remains available.
      */
     fun available(): Boolean
 
