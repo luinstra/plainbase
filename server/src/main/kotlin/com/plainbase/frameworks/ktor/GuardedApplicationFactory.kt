@@ -50,6 +50,7 @@ internal fun buildGuardedApplication(
         absence = rooted.absence,
         stores = rooted.stores,
         histories = rooted.histories,
+        policies = rooted.policies,
     )
     lateinit var proposalsFacade: ProposalFacade
     val mutate = GuardedMutatingFacade(
@@ -63,6 +64,7 @@ internal fun buildGuardedApplication(
         proposals = { proposalsFacade },
         agentDirectCommitGlobs = mutation.agentDirectCommitGlobs,
         proposalLabeler = mutation.proposalLabeler,
+        policies = rooted.policies,
     )
     val proposals = GuardedProposalFacade(
         policy = securityInputs.policy,
@@ -74,6 +76,7 @@ internal fun buildGuardedApplication(
         resolver = rooted.resolver,
         availability = rooted.availability,
         absence = rooted.absence,
+        policies = rooted.policies,
     )
     proposalsFacade = proposals
     return RouteContext(
@@ -111,6 +114,7 @@ private class RootedContentInputs(serving: ServingRuntime) {
     val absence: AbsenceClassifier = serving.absence
     val stores: (RootName) -> ContentStore = serving.index.stores::get
     val histories: (RootName) -> HistoryProvider = serving.index.histories::get
+    val policies = serving.index.policies
 }
 
 private class PublishedReadInputs(serving: ServingRuntime) {

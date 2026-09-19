@@ -2,10 +2,12 @@
 
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.IndexedPage
@@ -108,6 +110,7 @@ class GuardedMutatingFacade(
     // DirectCommit path requires it (it is only ever reached with globs configured, where the production wiring + the
     // testRouteContext harness both thread it in via buildGuardedApplication).
     private val proposalLabeler: ProposalAuthorLabeler? = null,
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) : MutatingFacade {
 
     /**
@@ -388,7 +391,7 @@ class GuardedMutatingFacade(
         return when (outcome) {
             is ProposeOutcome.Created -> SaveResult.DegradedToProposal(outcome.id, outcome.unifiedDiff)
             ProposeOutcome.StaleBase -> SaveResult.DegradeStaleBase
-            ProposeOutcome.InvalidRequest -> error("degrade passes no client target_path; InvalidRequest is impossible")
+            is ProposeOutcome.InvalidRequest -> error("degrade passes no client target_path; InvalidRequest is impossible")
             is ProposeOutcome.InvalidCreateContent -> error("an edit degrade files ProposeCommand.Edit; InvalidCreateContent is impossible")
         }
     }
@@ -397,13 +400,14 @@ class GuardedMutatingFacade(
         // C1: the create twin of save()'s agent direct-commit-vs-degrade gate. Human/Anonymous ALWAYS, and the
         // PROPOSAL_APPLY caller REGARDLESS of principal (an off-mode agent can drive approve - finding #11), take the
         // strict direct path: the bypass is the WriteOrigin discriminator the apply caller sets, never an assumption
-        // about the approver's principal type (the save() invariant). An approved out-of-glob create MUST land here.
+        // about the approver's principal type (the save() invariant). Policy membership still applies at execution.
         // A create's root comes from the REQUEST and the route has already validated it against the registry (400
         // `invalid_root`), so `checkCreate` never sees a null root and needs no unrooted arm.
         val resource = RootedResource(intent.root, intent.path.value)
         if (principal !is Principal.Agent || origin == WriteOrigin.PROPOSAL_APPLY) {
             val grant = policy.checkCreate(principal, WriteClass.PageCreate, resource)
             requireAvailable(intent.root)
+            if (!policies.allowsFile(RootedPath(intent.root, intent.path))) return excludedCreate()
             return CreateOutcome.DirectCreated(writePipeline.create(grant, intent))
         }
 
@@ -422,6 +426,7 @@ class GuardedMutatingFacade(
                 val identity = agentCommitIdentity(principal)
                 val grant = policy.checkCreate(principal, WriteClass.PageCreate, resource)
                 requireAvailable(intent.root)
+                if (!policies.allowsFile(RootedPath(intent.root, intent.path))) return excludedCreate()
                 CreateOutcome.DirectCreated(
                     writePipeline.create(grant, intent.copy(author = identity, committer = identity)),
                 )
@@ -453,9 +458,12 @@ class GuardedMutatingFacade(
             is ProposeOutcome.Created -> CreateOutcome.DegradedToProposal(outcome.id, outcome.unifiedDiff)
             is ProposeOutcome.InvalidCreateContent -> CreateOutcome.InvalidContent(outcome.message)
             ProposeOutcome.StaleBase -> error("a create degrade has no base; StaleBase is impossible")
-            ProposeOutcome.InvalidRequest -> error("a create degrade passes a server-derived path; InvalidRequest is impossible")
+            is ProposeOutcome.InvalidRequest -> CreateOutcome.DirectCreated(WriteOutcome.InvalidLocation(outcome.message))
         }
     }
+
+    private fun excludedCreate(): CreateOutcome =
+        CreateOutcome.DirectCreated(WriteOutcome.InvalidLocation("target_path is excluded by the root content policy."))
 
     override fun writeAsset(
         principal: Principal,

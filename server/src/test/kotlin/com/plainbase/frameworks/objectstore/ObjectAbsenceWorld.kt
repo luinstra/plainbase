@@ -130,6 +130,7 @@ internal class ObjectAbsenceWorld : AutoCloseable {
         retirements = retirements,
         limbo = limbo,
         bindings = BindingLatch(topology),
+        policies = com.plainbase.domain.service.allowAllPolicies(),
     )
 
     /** Main's durable rows + binding_epoch - the same boundary `createContentModule` wires as the LIST's `rowsAtStart`

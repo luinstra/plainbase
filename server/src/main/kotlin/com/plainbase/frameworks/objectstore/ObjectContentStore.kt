@@ -815,7 +815,7 @@ class ObjectContentStore(
      */
     private fun applyConfirmedWrite(path: TreePath, bytes: ByteArray, etag: String): String? {
         val failure = synchronized(applyLock) {
-            val failed = mirrorWriteFailure { mirror.write(path, bytes) }
+            val failed = mirrorWriteFailure { mirror.writeMirror(path, bytes) }
             if (failed == null) {
                 state.recordConfirmed(path, etag)
             } else {
@@ -887,7 +887,7 @@ class ObjectContentStore(
      */
     private fun healMirror(path: TreePath, fetched: FetchedObject) {
         synchronized(applyLock) {
-            val failed = mirrorWriteFailure { mirror.write(path, fetched.bytes) }
+            val failed = mirrorWriteFailure { mirror.writeMirror(path, fetched.bytes) }
             if (failed == null) {
                 state.recordConfirmed(path, fetched.etag)
             } else {

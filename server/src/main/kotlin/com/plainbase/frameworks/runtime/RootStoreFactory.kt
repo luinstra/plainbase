@@ -24,6 +24,7 @@ internal object RootStoreFactory {
             rootName = inputs.rootName,
             onRootUnavailable = inputs.onRootUnavailable,
             onIdentityRebind = inputs.onIdentityRebind,
+            policy = inputs.policy,
         )
 
     fun objectStore(

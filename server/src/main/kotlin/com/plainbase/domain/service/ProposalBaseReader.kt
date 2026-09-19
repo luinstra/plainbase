@@ -18,7 +18,7 @@ import com.plainbase.domain.root.RootedPath
  * Every target is a [RootedPath] — a rooted PAIR, never a loose `(root, path)` — so an untrusted root can never be
  * smuggled in beside a path that does not belong to it. Every call is reached from a SNAPSHOT-derived target with
  * exactly ONE exception (`recoverApplyingRow`'s CREATE arm, whose path comes from a durable ROW rather than the
- * snapshot), and that one consults the row's root status before it reads.
+ * snapshot), and that one consults the row's root status and shared proposal eligibility before it reads.
  */
 interface ProposalBaseReader {
 

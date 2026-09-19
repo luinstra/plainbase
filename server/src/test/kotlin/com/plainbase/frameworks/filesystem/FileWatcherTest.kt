@@ -6,6 +6,7 @@ import ch.qos.logback.core.read.ListAppender
 import com.plainbase.IdentitySafeFailureAccumulator
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.BreakCause
+import com.plainbase.domain.service.localRoot
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.lifecycle.Stage0cParentDeadline
@@ -82,6 +83,66 @@ class FileWatcherTest : FunSpec({
         }
     }
 
+    test("watch registration excludes a nested DATA_DIR spelled through a root alias") {
+        val base = Files.createTempDirectory("pb-watch-data-alias")
+        try {
+            val real = Files.createDirectories(base.resolve("real"))
+            val alias = base.resolve("alias")
+            try {
+                Files.createSymbolicLink(alias, real)
+            } catch (_: IOException) {
+                return@test
+            }
+            Files.createDirectories(real.resolve("state"))
+            val docs = Files.createDirectories(real.resolve("docs"))
+            val registrations = ConcurrentLinkedQueue<Path>()
+
+            FileWatcher(
+                root = real,
+                ignoreRules = IgnoreRules(),
+                excluded = listOf(alias.resolve("state")),
+                onChange = {},
+                registerDirectory = { directory, service ->
+                    registrations.add(directory)
+                    directory.register(
+                        service,
+                        StandardWatchEventKinds.ENTRY_CREATE,
+                        StandardWatchEventKinds.ENTRY_DELETE,
+                        StandardWatchEventKinds.ENTRY_MODIFY,
+                    )
+                },
+            ).use {
+                registrations.toSet() shouldBe setOf(real, docs)
+            }
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    test("a legacy ignore glob matching the empty relative path does not skip the root registration") {
+        withTempTree(seed = { root -> Files.createDirectories(root.resolve("ignored")) }) { root ->
+            val registrations = ConcurrentLinkedQueue<Path>()
+
+            FileWatcher(
+                root = root,
+                ignoreRules = IgnoreRules(listOf("*")),
+                excluded = emptyList(),
+                onChange = {},
+                registerDirectory = { directory, service ->
+                    registrations.add(directory)
+                    directory.register(
+                        service,
+                        StandardWatchEventKinds.ENTRY_CREATE,
+                        StandardWatchEventKinds.ENTRY_DELETE,
+                        StandardWatchEventKinds.ENTRY_MODIFY,
+                    )
+                },
+            ).use {
+                registrations.toSet() shouldBe setOf(root)
+            }
+        }
+    }
+
     test("a directory created after watch start is registered on sight: a later edit inside it is seen") {
         withTempTree(seed = { root -> writePage(root, "seed.md", "# Seed\n") }) { root ->
             val nested = TreePath.require("newdir/nested.md")
@@ -98,6 +159,72 @@ class FileWatcherTest : FunSpec({
                 writePage(root, "newdir/nested.md", "# Nested, edited\n")
                 nestedSeen.await(90, TimeUnit.SECONDS).shouldBeTrue()
             }
+        }
+    }
+
+    test("configured traversal watches admitted directories and ignores excluded churn") {
+        withTempTree(seed = { root ->
+            Files.createDirectories(root.resolve("docs/remove"))
+            Files.createDirectories(root.resolve(".crew/reviews"))
+            Files.createDirectories(root.resolve("outside"))
+            writePage(root, "docs/remove/page.md", "# Remove\n")
+            writePage(root, "docs/_folder.yaml", "title: Docs\n")
+        }) { root ->
+            val ignoreRules = IgnoreRules()
+            val rootConfig = localRoot("docs", root).copy(
+                includes = listOf("docs/**", ".crew/**"),
+                excludes = listOf(".crew/reviews/**"),
+            )
+            val membership = localContentPathPolicy(rootConfig, root, ignoreRules, emptyList())
+            val registrations = ConcurrentLinkedQueue<String>()
+            val seen = ConcurrentLinkedQueue<TreePath>()
+            val docsSeen = CountDownLatch(1)
+            val crewSeen = CountDownLatch(1)
+            val metadataSeen = CountDownLatch(1)
+            val directoryDeleteSeen = CountDownLatch(1)
+
+            FileWatcher(
+                root = root,
+                ignoreRules = ignoreRules,
+                excluded = emptyList(),
+                onChange = { path ->
+                    seen += path
+                    when (path.value) {
+                        "docs/sentinel.md" -> docsSeen.countDown()
+                        ".crew/keep.md" -> crewSeen.countDown()
+                        "docs" -> metadataSeen.countDown()
+                        "docs/remove" -> directoryDeleteSeen.countDown()
+                    }
+                },
+                registerDirectory = { directory, service ->
+                    registrations += root.relativize(directory).joinToString("/")
+                    directory.register(
+                        service,
+                        StandardWatchEventKinds.ENTRY_CREATE,
+                        StandardWatchEventKinds.ENTRY_DELETE,
+                        StandardWatchEventKinds.ENTRY_MODIFY,
+                    )
+                },
+                policy = membership,
+            ).use {
+                registrations.toSet() shouldBe setOf("", "docs", "docs/remove", ".crew")
+
+                writePage(root, ".crew/reviews/ignored.md", "# Ignored\n")
+                writePage(root, "outside/ignored.md", "# Ignored\n")
+                writePage(root, ".crew/keep.md", "# Keep\n")
+                writePage(root, "docs/sentinel.md", "# Sentinel\n")
+                Files.writeString(root.resolve("docs/_folder.yaml"), "title: Documentation\n")
+                Files.delete(root.resolve("docs/remove/page.md"))
+                Files.delete(root.resolve("docs/remove"))
+
+                docsSeen.await(90, TimeUnit.SECONDS).shouldBeTrue()
+                crewSeen.await(90, TimeUnit.SECONDS).shouldBeTrue()
+                metadataSeen.await(90, TimeUnit.SECONDS).shouldBeTrue()
+                directoryDeleteSeen.await(90, TimeUnit.SECONDS).shouldBeTrue()
+            }
+
+            pathsSeen(seen, ".crew/reviews").shouldBeEmpty()
+            pathsSeen(seen, "outside").shouldBeEmpty()
         }
     }
 

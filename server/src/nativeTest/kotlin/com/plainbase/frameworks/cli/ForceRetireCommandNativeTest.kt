@@ -86,7 +86,12 @@ class ForceRetireCommandNativeTest {
 
             DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
                 val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-                val resolver = PageRootResolver(repo, RootRegistry.of(config.roots.list))
+                val registry = RootRegistry.of(config.roots.list)
+                val resolver = PageRootResolver(
+                    repo,
+                    registry,
+                    com.plainbase.domain.service.allowAllNativePolicies(registry.roots.map { it.name }),
+                )
                 assertEquals(IdResolution.None, resolver.resolve(x)) // the §6.1 precondition: 0 live -> None
                 assertNotNull(repo.retiredAt(extra, x))
                 assertFalse(resolver.bindsLive(extra, x))

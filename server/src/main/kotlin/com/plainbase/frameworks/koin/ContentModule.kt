@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.koin
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.repository.DirtyPageRepository
@@ -52,6 +53,7 @@ internal fun createContentModule(
     resourceOwner: ServerResourceOwner,
 ) = module {
     single { inputs.ignoreRules }
+    single<Map<RootName, ContentPathPolicy>> { inputs.policies }
     single<RootRegistry> { inputs.registry }
     single { inputs.availability }
     // The availability holder's non-sticky twin: `serve()` records each watcher's coverage into it and `/healthz`

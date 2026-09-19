@@ -575,6 +575,7 @@ private class World(
         registeredRoots = registry.roots.map { it.name }.toSet(),
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)),
         availability = availability,
+        policies = allowAllPolicies(registry.roots.map { it.name }),
     )
 
     override fun close() = driver.close()

@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.mcp
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.ProposalRepository
 import com.plainbase.domain.root.RootName
@@ -56,6 +57,8 @@ import io.ktor.server.cio.CIO as ServerCIO
 class McpHarness(
     /** Whether the seeded root accepts page writes (ADR-0011 D6). `false` exercises the `root_not_editable` deny. */
     editable: Boolean = true,
+    /** Optional visibility boundary for the seeded root; the store is populated first so this exercises facade gating. */
+    primaryPolicy: ContentPathPolicy = ContentPathPolicy.ALL,
     /**
      * C4 window fixture: the roots a FAKE [AmbiguousIdMap] reports as holding the SEEDED page id. Non-empty wraps the
      * real idMap for that one id, which is the only way to pose Ambiguity under `UNIQUE(id)`. Threaded into BOTH the
@@ -140,11 +143,15 @@ class McpHarness(
         } else {
             AmbiguousIdMap(index.idMap, page.id, ambiguousRoots, retiredRoots)
         }
+        val policies = index.rootRegistry.roots.associate { root ->
+            root.name to if (root.name == RootName.PRIMARY) primaryPolicy else ContentPathPolicy.ALL
+        }
         val ctx = index.testRouteContext(
             searchProvider = searchProvider,
             enforced = true,
-            resolver = PageRootResolver(idMap, index.rootRegistry),
-            absence = AbsenceClassifier(idMap),
+            policies = policies,
+            resolver = PageRootResolver(idMap, index.rootRegistry, policies),
+            absence = AbsenceClassifier(idMap, policies),
             proposalRepository = proposalRepositoryDecorator(index.proposalRepository),
         )
         server = onThread { embeddedServer(ServerCIO, host = "127.0.0.1", port = 0) { plainbaseModule(ctx) }.start(wait = false) }

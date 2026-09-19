@@ -42,6 +42,8 @@ export type TreeNode = TreeFolder | TreePage;
 /** One root's tree entry (multi-root C3): the root-name slug + its synthetic root folder node. */
 export interface RootTree {
   root: string;
+  /** Optional configured display label; URLs, preferences, and identity continue to use `root`. */
+  displayName?: string;
   /**
    * Whether the root is currently SERVING. `false` means it is configured but its content is not reachable
    * (an unmounted disk, a failed watcher): `tree` is EMPTY - never a stale listing - and every read of it

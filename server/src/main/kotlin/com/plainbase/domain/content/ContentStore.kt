@@ -84,7 +84,8 @@ interface ContentStore {
      * making a genuinely new page wants [createExclusive], which enforces containment. The remaining caller is
      * the object backend's local MIRROR apply, whose target is derived DATA_DIR state that is CONTRACTUALLY
      * allowed to be absent and re-materialized from the bucket - the one place "make the parents" is the
-     * correct answer rather than a resurrection.
+     * correct answer rather than a resurrection. The local authoritative adapter rejects this entry point;
+     * object storage reaches a separate internal mirror-materialization capability.
      *
      * Each intended write is logged (path) before it is performed, so an interrupted run is detectable.
      */

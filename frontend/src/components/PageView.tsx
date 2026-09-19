@@ -13,6 +13,9 @@ import {
   landingPage,
   pageHref,
   rootAcceptsWrites,
+  rootLabel,
+  rootLabelFor,
+  entryFor,
   rootEntryOfUrl,
 } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -101,14 +104,14 @@ export function FolderLanding({ url }: { url?: string }) {
     // url survives, on the synthetic root folder node below). URL ownership is the one thing a down root still tells
     // us - every CONFIGURED root is listed with its url - so ask who owns the address before calling this not-found.
     const owner = rootEntryOfUrl(tree.data.roots, target);
-    if (owner && !owner.available) return <RootUnavailableView root={owner.root} />;
+    if (owner && !owner.available) return <RootUnavailableView root={owner.root} label={rootLabel(owner)} />;
     return <NotFoundView />;
   }
   // A root that is not serving has an EMPTY subtree on the wire (the server must never ship its stale carried
   // listing), so rendering the folder anyway would draw an empty directory over an outage - "your docs are gone"
   // instead of "this disk is not mounted". The pages under it 503 through their own requests; the folder view has
   // no request to 503, which is exactly why the flag has to be read here.
-  if (!resolved.available) return <RootUnavailableView root={resolved.root} />;
+  if (!resolved.available) return <RootUnavailableView root={resolved.root} label={rootLabel(resolved)} />;
 
   // The landing renders AT the folder URL — its one canonical home (the index/README's own bare
   // page URL redirects here; see DocsPage). With an index/README the authored content renders as the
@@ -128,7 +131,9 @@ export function FolderLanding({ url }: { url?: string }) {
  * Without that spacer the listing would bleed full-bleed and jar against every page view.
  */
 function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
-  const title = folderTitle(folder) || root;
+  const tree = useQuery(treeQuery);
+  const entry = tree.data ? entryFor(tree.data.roots, root) : null;
+  const title = folderTitle(folder) || (entry ? rootLabel(entry) : root);
   useEffect(() => {
     document.title = `${title} · Plainbase`;
   }, [title]);
@@ -281,6 +286,7 @@ export function PermalinkPage({ splat }: { splat: string }) {
  * NOT the candidates' own `url`s: those are the API retry targets, and would send a reader to JSON.
  */
 function PermalinkError({ error, id }: { error: Error; id: string }) {
+  const tree = useQuery(treeQuery);
   const candidates = error instanceof ApiError ? error.candidates : [];
   if (candidates.length === 0) return <PageError error={error} />;
   return (
@@ -289,7 +295,7 @@ function PermalinkError({ error, id }: { error: Error; id: string }) {
         {candidates.map((candidate) => (
           <li key={candidate.root}>
             <a href={permalinkOf(candidate.root, id)} className="font-medium text-link hover:text-link-hover hover:underline">
-              {candidate.root}
+              {rootLabelFor(tree.data?.roots, candidate.root)}
             </a>
           </li>
         ))}

@@ -291,6 +291,7 @@ function PaletteBody({
           searchedQuery={fullText.data?.query}
           errorMessage={errorMessage}
           showRoots={showRoots}
+          roots={tree.data?.roots}
           selectedIndex={selectedIndex}
           onSelect={setSelectedIndex}
           onActivate={enterAt}

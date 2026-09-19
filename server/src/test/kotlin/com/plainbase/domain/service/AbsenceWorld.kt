@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.repository.IdMapRepository
@@ -58,6 +59,8 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
     private val database = DatabaseFactory.createDatabase(driver)
 
     private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("extra", extraDir)))
+    private val allPolicies: Map<RootName, ContentPathPolicy> =
+        registry.roots.associate { root -> root.name to ContentPathPolicy.ALL }
 
     val availability = RootAvailability(Clock.System)
     val idMap = SqlDelightIdMapRepository(database)
@@ -83,7 +86,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
 
     val engine: SearchProvider = Fts5SearchProvider(searchDb)
-    val indexer = SearchIndexer(engine, SectionSplitter(), idMap::retiredUnboundIds, idMap::isRetiredUnbound)
+    val indexer = SearchIndexer(engine, SectionSplitter(), idMap::retiredUnboundIds, idMap::isRetiredUnbound, allPolicies)
 
     /**
      * Every break this world's WIRING reported - so a row can prove the mechanism it claims to be testing actually
@@ -141,6 +144,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         // Defaults to this world's real one; a race row wraps it (a decorator) to fire a concurrent bind at the exact
         // durable-read the EPOCH mint takes its negative evidence from - the mid-mint revoke-before-stamp interleave.
         idMap: IdMapRepository = this.idMap,
+        policies: Map<RootName, ContentPathPolicy> = allPolicies,
     ): IndexBuilder = IndexBuilder(
         sources = listOf(
             IndexBuilder.Source(registry.primary, LocalContentStore(mainDir), mainHistory),
@@ -167,6 +171,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         retirements = retirements,
         limbo = limbo,
         epochs = epochs,
+        policies = policies,
     )
 
     override fun close() {

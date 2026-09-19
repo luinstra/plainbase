@@ -6,6 +6,7 @@ import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentEntry
 import com.plainbase.domain.content.ContentFile
 import com.plainbase.domain.content.ContentFolder
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStat
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
@@ -115,6 +116,7 @@ class LocalContentStore(
      * runs the real check ([rootLivenessProbe]), bound at construction to the tree this store serves.
      */
     private val probeRoot: (Path) -> Boolean = rootLivenessProbe(root, onIdentityRebind),
+    private val policy: ContentPathPolicy = ContentPathPolicy.legacy(),
 ) : ContentStore {
 
     // App-owned subtrees (DATA_DIR) excluded from BOTH the scan and the watch: a nested data dir
@@ -126,19 +128,14 @@ class LocalContentStore(
     // `child in excludedDirs` membership test can never match a child against an ancestor). This is the
     // SINGLE source of truth shared by scan/watch AND the create-containment gate, so the gate can't
     // over-reject in the `PlainbaseConfig`-legal layout where DATA_DIR is a strict ANCESTOR of root.
-    private val excludedDirs: List<Path> =
-        exclusions.map { it.toAbsolutePath().normalize() }
-            .filter {
-                val rootNorm = root.toAbsolutePath().normalize()
-                it.startsWith(rootNorm) && it != rootNorm
-            }
+    private val excludedDirs: List<Path> = effectiveExcludedDirectories(root, exclusions)
 
     // The READ-ONLY pre-write checks (containment, NFC-equivalent occupancy, the resolve-only parent
     // walk), factored out as CreateGates so a second backend can run the SAME gates against its mirror
     // before its authoritative write. This store recomposes the walk with its own directory creation
     // ([resolveOrCreateParent]) - the seam itself never mutates. `internal` (C4 seam f) so the
     // ObjectContentStore hybrid runs the SAME gate instances against its mirror, never a re-derived set.
-    internal val gates = CreateGates(root, ignoreRules, excludedDirs)
+    internal val gates = CreateGates(root, ignoreRules, excludedDirs, policy)
 
     /**
      * Immutable snapshot of the most recent [scan]: the indexed files/folders (the membership
@@ -320,6 +317,7 @@ class LocalContentStore(
         dirPath: TreePath?,
         acc: ScanAccumulator,
     ) {
+        if (!policy.mayTraverse(dirPath)) return
         val candidates = collectCandidates(dir, dirPath, acc)
 
         for ((treePath, group) in candidates.groupBy { it.treePath }) {
@@ -352,9 +350,8 @@ class LocalContentStore(
         val children = withDirectoryStream(dir) { it.toList() }
         return children.mapNotNull { child ->
             val rawName = child.fileName.toString()
-            if (rawName == FOLDER_META_NAME) return@mapNotNull null // metadata sidecar, not a content entry
             val relativePath = childRelativePath(dirPath, rawName)
-            if (ignoreRules.isIgnored(rawName, relativePath)) return@mapNotNull null
+            if (rawName == FOLDER_META_NAME) return@mapNotNull null // metadata sidecar, not a content entry
             if (child.toAbsolutePath().normalize() in excludedDirs) {
                 logger.debug { "Skipping excluded app-owned subtree: $relativePath" }
                 return@mapNotNull null
@@ -377,6 +374,8 @@ class LocalContentStore(
                 return@mapNotNull null
             }
             val treePath = TreePath.childOf(dirPath, Nfc.normalize(rawName))
+            val eligible = if (attrs.isDirectory) policy.mayTraverse(treePath) else policy.allowsFile(treePath)
+            if (!eligible || ignoreRules.isGlobIgnored(relativePath)) return@mapNotNull null
             Candidate(rawName, child, treePath, attrs.isDirectory)
         }
     }
@@ -414,6 +413,8 @@ class LocalContentStore(
      * meta is treated as absent (null) and a warning logged, rather than aborting the whole scan.
      */
     private fun readFolderMeta(dir: Path, dirPath: TreePath): FolderMeta? {
+        if (!policy.allowsMetadata(dirPath)) return null
+        if (gates.accessRejectionReason(dirPath, dir, isDirectory = true) != null) return null
         val metaFile = dir.resolve(FOLDER_META_NAME)
         // No-follow on the sidecar: a symlinked _folder.yaml could point out of root, so honor the
         // same "links are not content" policy as the scan's symlink skip - never read or log it.
@@ -434,8 +435,9 @@ class LocalContentStore(
     override fun read(path: TreePath): ByteArray? {
         val snap = snapshot.load()
         // Indexed-only gate (see class header): a path the scan skipped is unreadable.
-        if (!snap.isIndexedFile(path)) return null
+        if (!policy.allowsFile(path) || !snap.isIndexedFile(path)) return null
         val osPath = resolveOnDisk(path, snap)
+        if (gates.accessRejectionReason(path, osPath, isDirectory = false) != null) return null
         if (!Files.isRegularFile(osPath, LinkOption.NOFOLLOW_LINKS)) return null
         // Defense-in-depth (belt-and-suspenders behind the membership gate): re-verify the resolved
         // file stays inside the content root even against a TOCTOU symlink swapped in between scan
@@ -479,16 +481,20 @@ class LocalContentStore(
         // attributes of an unproven path. The one still-warning case - a dangling/escaping symlink
         // swapped in post-scan - warns and returns null, unchanged (safe). Two filesystem hits where
         // one sufficed - stat is not a hot path, and the ordering discipline is worth it.
-        return when {
-            !snap.isIndexedEntry(path) -> null
-            !Files.exists(osPath, LinkOption.NOFOLLOW_LINKS) -> null
-            !isWithinRoot(root, osPath) -> {
-                logger.warn { "Refusing stat of '${path.value}': resolved path escapes content root (links are not content)" }
-                null
-            }
-
-            else -> readContentStat(path, osPath)
+        when {
+            !snap.isIndexedEntry(path) ||
+                !policy.mayTraverse(path.parent) ||
+                (!policy.allowsFile(path) && !snap.isIndexedDir(path)) -> return null
+            !Files.exists(osPath, LinkOption.NOFOLLOW_LINKS) -> return null
         }
+        val isDirectory = Files.isDirectory(osPath, LinkOption.NOFOLLOW_LINKS)
+        if (gates.accessRejectionReason(path, osPath, isDirectory) != null) return null
+        if (!isWithinRoot(root, osPath)) {
+            logger.warn { "Refusing stat of '${path.value}': resolved path escapes content root (links are not content)" }
+            return null
+        }
+
+        return readContentStat(path, osPath)
     }
 
     private fun readContentStat(path: TreePath, osPath: Path): ContentStat? =
@@ -514,7 +520,7 @@ class LocalContentStore(
         val snap = snapshot.load()
         // Indexed-only gate (see class header): children come purely from the snapshot. The root
         // (null) is always listable; any other directory must itself be indexed, else empty list.
-        if (dir != null && !snap.isIndexedDir(dir)) return emptyList()
+        if (!policy.mayTraverse(dir) || (dir != null && !snap.isIndexedDir(dir))) return emptyList()
         return snap.childrenOf(dir)
     }
 
@@ -568,6 +574,11 @@ class LocalContentStore(
     }
 
     override fun write(path: TreePath, bytes: ByteArray) {
+        error("unconditional local write of '${path.value}' (${bytes.size} bytes) is reserved for the object-store mirror")
+    }
+
+    /** Derived-mirror materialization; local authoritative roots must use the typed CAS/create operations. */
+    internal fun writeMirror(path: TreePath, bytes: ByteArray) {
         // Resolve through the scan-retained raw names exactly like read (P4): on a
         // normalization-preserving filesystem an existing NFD-named file is REPLACED rather than
         // shadowed by a new NFC-named sibling. resolveOnDisk is total - a genuinely-new segment
@@ -628,7 +639,8 @@ class LocalContentStore(
         val target = resolveOnDisk(path, snap)
         return when {
             // Indexed-only gate (see read/the class header): a path the scan skipped is not a CAS target.
-            !snap.isIndexedFile(path) -> CasTarget.Missing
+            !policy.allowsFile(path) || !snap.isIndexedFile(path) -> CasTarget.Missing
+            gates.accessRejectionReason(path, target, isDirectory = false) != null -> CasTarget.Missing
             !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || !isWithinRoot(root, target) -> CasTarget.Missing
             else ->
                 runCatching {
@@ -1017,6 +1029,7 @@ class LocalContentStore(
                 onRootUnavailable()
                 onChange(ContentStore.OVERFLOW)
             },
+            policy = policy,
         )
 
     /** The `/`-joined content-relative path of a child named [rawName] under [dirPath]. */

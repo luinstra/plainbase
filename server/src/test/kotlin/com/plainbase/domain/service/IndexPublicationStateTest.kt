@@ -251,6 +251,7 @@ private class PublicationGraph(root: Path) : AutoCloseable {
             retirements = retirements,
             limbo = limbo,
             epochs = epochs,
+            policies = allowAllPolicies(registry.roots.map { it.name }),
         )
     }
 

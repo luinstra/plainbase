@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.FrontmatterParser
@@ -72,6 +73,9 @@ class IndexHarness(
     decorateIdMap: (IdMapRepository) -> IdMapRepository = { it },
     /** Allows eligibility tests to exercise the builder's explicit registered-root port independently of topology. */
     registeredRootsOverride: Set<RootName>? = null,
+    /** Root membership used by durable identity and recovery consumers. */
+    val policies: Map<RootName, ContentPathPolicy> =
+        rootRegistry.roots.associate { configured -> configured.name to ContentPathPolicy.ALL },
 ) : AutoCloseable {
 
     private val driver = DatabaseFactory.createInMemoryDriver()
@@ -126,10 +130,10 @@ class IndexHarness(
     }
 
     /** The ONE id→root / root→status resolver, shared by every facade the harness wires (as production does). */
-    val resolver = PageRootResolver(idMap, rootRegistry)
+    val resolver = PageRootResolver(idMap, rootRegistry, policies)
 
     /** The ONE 404-vs-503 absence rule (C1), over the SAME durable index the builder binds into. */
-    val absence = AbsenceClassifier(idMap)
+    val absence = AbsenceClassifier(idMap, policies)
 
     /** The DERIVED limbo set the builder republishes each pass and `/healthz` reports (C1). */
     val limbo = RootLimbo()
@@ -177,6 +181,7 @@ class IndexHarness(
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)) + listeners,
         searchIndexer = searchIndexer,
         bindings = bindings,
+        policies = policies,
     )
 
     /**
@@ -200,6 +205,7 @@ class IndexHarness(
             aliasRegistry = registry,
             availability = availability,
             historyHook = historyHook,
+            policies = policies,
         )
 
     override fun close() = driver.close()
@@ -208,6 +214,10 @@ class IndexHarness(
 /** A local test root: [name] over [path]. Histories ride the per-[IndexBuilder.Source] provider, so the mode is inert. */
 fun localRoot(name: String, path: Path, editable: Boolean = true): Root =
     Root(RootName.require(name), RootBackend.Local(path), editable = editable, history = HistoryMode.OFF)
+
+/** Explicit allow-all policy wiring for direct unit constructions. */
+fun allowAllPolicies(roots: Iterable<RootName> = listOf(RootName.PRIMARY)): Map<RootName, ContentPathPolicy> =
+    roots.toSet().associateWith { ContentPathPolicy.ALL }
 
 /** Runs [block] with a fresh temp content tree seeded by [seed]; always cleans up. */
 fun <T> withTempTree(seed: (Path) -> Unit, block: (Path) -> T): T {

@@ -220,6 +220,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             limbo = limbo,
             epochs = epochs,
             bindings = bindings,
+            policies = allowAllPolicies(rootRegistry.roots.map { it.name }),
         )
         return Process(store, registry, builder, availability, idMap, limbo, convergence, epochs, bindings, identity, identityProvider)
     }
@@ -277,6 +278,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
                         identity = identity,
                         idProvider = identityProvider,
                         aliasRegistry = registry,
+                        policies = allowAllPolicies(rootRegistry.roots.map { it.name }),
                     ),
                     pageService = PageService(builder, registry, CitationFactory()),
                     searchService = SearchService(mockk(relaxed = true), builder, availability),

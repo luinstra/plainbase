@@ -67,7 +67,7 @@ class HybridFixture(
     /** Writes [bytes] directly to both the fake bucket and the mirror, healed (a pre-existing page). */
     fun seedExisting(path: TreePath, bytes: ByteArray) {
         val etag = fake.seed(mirror.resolveRepoRelativePath(path), bytes)
-        mirror.write(path, bytes)
+        mirror.writeMirror(path, bytes)
         state.recordConfirmed(path, etag)
         state.persist()
         mirror.scan()

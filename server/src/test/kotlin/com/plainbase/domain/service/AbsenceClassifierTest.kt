@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.StoreRead
@@ -60,6 +61,21 @@ class AbsenceClassifierTest : FunSpec({
         }
     }
 
+    test("a hidden durable target is absent even when a stale store can still return its bytes") {
+        world { world ->
+            world.idMap.bind(bound, id, materialized = true)
+            val hidden = ContentPathPolicy.create(
+                fileEligibility = { false },
+                traversalEligibility = { false },
+                metadataEligibility = { false },
+            )
+            val absence = AbsenceClassifier(world.idMap, mapOf(RootName.PRIMARY to hidden))
+
+            absence.classify(bound, StoreRead.Bytes("secret".toByteArray())) shouldBe ContentRead.ConfirmedAbsent
+            absence.classify(bound, StoreRead.NoBytes) shouldBe ContentRead.ConfirmedAbsent
+        }
+    }
+
     // ---- WritePipeline.reconcileDirtyPages: an interrupted save's ONLY recovery record --------------------
 
     test("reconcile KEEPS an interrupted save's recovery row on an unverified absence - it is USER CONTENT") {
@@ -104,6 +120,7 @@ class AbsenceClassifierTest : FunSpec({
                 citations = CitationFactory(),
                 rootRank = { 0 },
                 registeredRoots = setOf(RootName.PRIMARY),
+                policies = allowAllPolicies(),
             )
 
             val abort = shouldThrow<AbsenceUnverified> { pass.run(AdoptionPass.Mode.RECORD) { _, _ -> } }

@@ -1,10 +1,12 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.CasResult
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.FrontmatterParser
@@ -67,13 +69,14 @@ class WritePipeline(
     /** The availability HOLDER, both directions: the reconcile arms READ it, the post-write absorbers MARK through it. */
     private val availability: RootAvailability,
     private val historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _, _ -> null },
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) {
 
     /** The shared probe-and-mark rule, over the SAME holder (see [markIfRootGone]). */
     private val rootLoss = RootLossClassifier(availability)
 
     /** The ONE 404-vs-503 rule (C1), over the SAME durable index this pipeline binds into. Never re-derived here. */
-    private val absence = AbsenceClassifier(idMap)
+    private val absence = AbsenceClassifier(idMap, policies)
 
     @Synchronized
     fun write(@Suppress("UNUSED_PARAMETER") grant: EditGrant, intent: WriteIntent): WriteOutcome {
@@ -391,6 +394,13 @@ class WritePipeline(
 
     private fun reconcileDirtyPage(page: DirtyPage, available: RootAvailability.Snapshot) {
         val root = page.path.root
+        if (!policies.allowsFile(page.path)) {
+            logger.debug {
+                "dirty page ${page.path.path.value} is hidden by root policy for '$root'; " +
+                    "leaving it journaled without reading or rewriting it"
+            }
+            return
+        }
         // The cheap status arms, first: DETACHED (a root whose rows outlive its name in `roots {}` - it
         // has no store, so there is nothing to read) and already-marked UNAVAILABLE. Neither may clear.
         when {

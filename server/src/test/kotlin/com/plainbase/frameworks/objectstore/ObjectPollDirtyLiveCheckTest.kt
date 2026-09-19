@@ -21,7 +21,7 @@ class ObjectPollDirtyLiveCheckTest : FunSpec({
         HybridFixture().use { hybrid ->
             val path = TreePath.require("mid-poll-dirty.md")
             // The path is in the mirror + recorded state, but the bucket LISTs empty -> it is a delete candidate.
-            hybrid.mirror.write(path, "bytes".toByteArray())
+            hybrid.mirror.writeMirror(path, "bytes".toByteArray())
             hybrid.state.recordConfirmed(path, "\"e0\"")
             hybrid.state.persist()
             hybrid.mirror.scan()
@@ -46,7 +46,7 @@ class ObjectPollDirtyLiveCheckTest : FunSpec({
         }
         HybridFixture(isDirty = recordThenNotDirty).use { hybrid ->
             val path = TreePath.require("guarded.md")
-            hybrid.mirror.write(path, "bytes".toByteArray())
+            hybrid.mirror.writeMirror(path, "bytes".toByteArray())
             hybrid.state.recordConfirmed(path, "\"e0\"")
             hybrid.state.persist()
             hybrid.mirror.scan()

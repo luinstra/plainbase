@@ -65,6 +65,7 @@ class WritePipelineNativeTest {
                     rootRank = rootRegistry::rank,
                     registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
                     availability = availability,
+                    policies = allowAllNativePolicies(rootRegistry.roots.map { it.name }),
                 )
                 builder.rebuild()
                 val pipeline = WritePipeline(
@@ -76,6 +77,7 @@ class WritePipelineNativeTest {
                     idMap = idMap,
                     aliasRegistry = registry,
                     availability = availability,
+                    policies = allowAllNativePolicies(rootRegistry.roots.map { it.name }),
                 )
 
                 val page = builder.current.pages.single()

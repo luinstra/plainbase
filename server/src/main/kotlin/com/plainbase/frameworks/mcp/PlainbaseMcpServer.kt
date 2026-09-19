@@ -130,10 +130,7 @@ fun buildPlainbaseMcpServer(
                         "stale_base",
                         "The base you proposed against is no longer current; re-read the page and re-propose.",
                     )
-                    ProposeOutcome.InvalidRequest -> errorResult(
-                        "invalid_propose_request",
-                        "target_path disagrees with the page_id-resolved path; the server resolves the path from page_id.",
-                    )
+                    is ProposeOutcome.InvalidRequest -> errorResult("invalid_propose_request", outcome.message)
                     is ProposeOutcome.InvalidCreateContent -> errorResult("invalid_create_content", outcome.message)
                 }
             }

@@ -2,9 +2,11 @@
 
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.FileDiff
 import com.plainbase.domain.history.HistoryProvider
@@ -81,6 +83,7 @@ class GuardedReadFacade(
     private val absence: AbsenceClassifier,
     private val stores: (RootName) -> ContentStore,
     private val histories: (RootName) -> HistoryProvider,
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) : ReadFacade {
 
     private val treeJson = TreeJsonCache(indexBuilder, registry, availability)
@@ -149,7 +152,7 @@ class GuardedReadFacade(
     private fun pinnedSnapshot(id: PageId, root: RootName, snapshot: PageIndex): RootedSnapshot? =
         when {
             registry.byName(root) == null -> null
-            snapshot.pageAt(RootedPageId(root, id)) != null -> {
+            snapshot.pageAt(RootedPageId(root, id))?.let(::allowsPage) == true -> {
                 requireAvailable(root)
                 RootedSnapshot(snapshot, root)
             }
@@ -207,6 +210,7 @@ class GuardedReadFacade(
         // live in a DIFFERENT root than the one the route named and the gate checked (a cross-root alias), and a
         // vanished root's section is CARRIED FORWARD, so without
         // this the facade would serve its stale bytes with a 200. Gate the root we are actually about to serve.
+        if (!allowsPage(payload.page)) return null
         requireAvailable(payload.page.root)
         return payload
     }
@@ -254,7 +258,9 @@ class GuardedReadFacade(
     override fun assetRead(principal: Principal, root: RootName, path: TreePath): AssetReadOutcome {
         policy.checkRead(principal, RootedResource(root, path.value).audit)
         requireAvailable(root)
-        if (path !in indexBuilder.current.section(root).assets) return AssetReadOutcome.NotContentAsset
+        if (path !in indexBuilder.current.section(root).assets || !allowsFile(root, path)) {
+            return AssetReadOutcome.NotContentAsset
+        }
         // An indexed asset whose on-disk file vanished is IndexedButMissing (→ 404), NOT NotContentAsset: it must
         // never fall through to bundled static and unmask a shadowed name (disk is source of truth). But a 404 is
         // only honest for a file that is genuinely gone on a LIVE root - for a downed one it is the "drop your
@@ -278,7 +284,7 @@ class GuardedReadFacade(
     override fun browseTarget(principal: Principal, root: RootName, path: TreePath): String? {
         policy.checkRead(principal, RootedResource(root, path.value).audit)
         requireAvailable(root)
-        val page = indexBuilder.current.byPath[RootedPath(root, path)] ?: return null
+        val page = indexBuilder.current.byPath[RootedPath(root, path)]?.takeIf(::allowsPage) ?: return null
         return page.url ?: page.permalink
     }
 
@@ -315,7 +321,7 @@ class GuardedReadFacade(
         // Snapshot-first PRESENT read (coherent-stale, hot): a hit under the pin serves that root's published bytes,
         // with a durable consult only on a miss.
         val page = snapshot.pageAt(RootedPageId(root, id))
-        if (page != null) {
+        if (page != null && allowsPage(page)) {
             requireAvailable(root)
             return page.url?.let(PermalinkResolution::Found) ?: PermalinkResolution.LoserNoUrl
         }
@@ -350,7 +356,7 @@ class GuardedReadFacade(
         val id = aliasRegistry.find(rooted)
             .takeIf { rooted !in snapshot.byUrlPath } // live canonical wins (§A4)
             ?: return null
-        val target = snapshot.pageAt(id)
+        val target = snapshot.pageAt(id)?.takeIf(::allowsPage)
             // The alias target is in no section. Usually that means a stale binding (the shadow sweep has not run) and
             // today's null → SPA shell is right. But it is ALSO what a root unavailable SINCE BOOT looks like: never
             // scanned, so no section, so no canonical URL to redirect TO. Emit the id-derived PERMALINK there (the
@@ -382,4 +388,8 @@ class GuardedReadFacade(
             RootStatus.UNAVAILABLE -> throw RootUnavailable(root, snapshot.unavailable.getValue(root).cause)
         }
     }
+
+    private fun allowsPage(page: IndexedPage): Boolean = allowsFile(page.root, page.path)
+
+    private fun allowsFile(root: RootName, path: TreePath): Boolean = policies.allowsFile(root, path)
 }

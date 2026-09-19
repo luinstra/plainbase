@@ -254,7 +254,8 @@ private const val WINDOWS_INVALID_CHARS = "<>:\"|?*"
  *     trailing dot/space (all legal on POSIX but they break or silently rename on a Windows mirror — a
  *     filesystem-native tree may sync there); `.` / `..`; Windows reserved names; AND — so the route's
  *     own post-write `rebuild()` can NEVER index the upload as a PAGE — `.md` (case-insensitive) and every
- *     scan-skipped name ([isAssetSkippedName], mirroring `LocalContentStore.isScanSkippedName`).
+ *     scan-skipped sidecar name ([isAssetSkippedName], mirroring `CreateGates.isScanSkippedName`). Dot-prefixed
+ *     assets are left to the rooted content policy so an explicit hidden include can authorize them.
  */
 private fun ApplicationCall.assetFilename(): String? {
     val raw = request.rawQueryParameters["filename"]?.replace('+', ' ') ?: return null
@@ -291,13 +292,11 @@ private fun Char.isInvalidAssetCharacter(): Boolean =
     }
 
 /**
- * Mirrors `LocalContentStore.isScanSkippedName` for a single segment: a name the scan would skip — the
- * `_folder.yaml` sidecar or a dot-prefixed entry (`IgnoreRules`' always-ignored dotfile rule). The
- * `content.ignore` globs are deploy config and not consulted here (a single client filename can only
- * exercise the name-level skips); `writeAssetExclusive`'s `rejectionReason` is the backstop for any
- * residual containment refusal. Reject so the post-write `rebuild()` can never silently drop the upload.
+ * Mirrors `CreateGates.isScanSkippedName` for the reserved `_folder.yaml` sidecar. Dot-prefixed assets are decided
+ * by the rooted content policy, while legacy ignore globs and residual containment refusals are enforced by
+ * `writeAssetExclusive`. Reject so the post-write `rebuild()` can never silently drop the upload.
  */
-private fun isAssetSkippedName(name: String): Boolean = name.equals(FOLDER_META_NAME, ignoreCase = true) || name.startsWith(".")
+private fun isAssetSkippedName(name: String): Boolean = name.equals(FOLDER_META_NAME, ignoreCase = true)
 
 /** 409 `page_exists` for an asset name already taken — reuses the create route's envelope (a thing exists at path). */
 private suspend fun ApplicationCall.respondAssetExists(path: TreePath) {

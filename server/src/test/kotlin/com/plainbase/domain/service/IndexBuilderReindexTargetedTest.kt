@@ -174,7 +174,9 @@ private class ReindexHarness(root: Path) : AutoCloseable {
                 pointReadCalls++
                 idMap.isRetiredUnbound(it)
             },
+            allowAllPolicies(),
         ),
+        policies = allowAllPolicies(),
     )
 
     override fun close() = driver.close()

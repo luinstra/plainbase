@@ -100,9 +100,7 @@ private fun Route.proposeRoute(ctx: RouteContext) {
                     ErrorCodes.STALE_BASE,
                     "The base you proposed against is no longer current; re-read the page and re-propose.",
                 )
-                ProposeOutcome.InvalidRequest -> call.invalidProposeRequest(
-                    "target_path disagrees with the page_id-resolved path; the server resolves the path from page_id.",
-                )
+                is ProposeOutcome.InvalidRequest -> call.invalidProposeRequest(outcome.message)
                 is ProposeOutcome.InvalidCreateContent -> call.respondError(
                     HttpStatusCode.BadRequest,
                     ErrorCodes.INVALID_CREATE_CONTENT,

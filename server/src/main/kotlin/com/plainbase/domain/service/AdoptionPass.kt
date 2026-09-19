@@ -1,9 +1,11 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.CasResult
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.BindOutcome
@@ -118,6 +120,7 @@ class AdoptionPass(
     private val citations: CitationFactory,
     rootRank: (RootName) -> Int,
     private val registeredRoots: Set<RootName>,
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) {
 
     /** One root's tree. */
@@ -145,7 +148,7 @@ class AdoptionPass(
     private val scannedRoots: Set<RootName> = this.sources.mapTo(mutableSetOf()) { it.root }
 
     /** The ONE 404-vs-503 rule (C1), over the SAME durable index this pass binds into. Never re-derived here. */
-    private val absence = AbsenceClassifier(idMap)
+    private val absence = AbsenceClassifier(idMap, policies)
 
     /** The three `adopt` modes — see the class header for the frozen write policy of each. */
     enum class Mode {
@@ -280,7 +283,12 @@ class AdoptionPass(
         val patched = HashMap<RootedPath, PlannedWrite>()
         // The SAME supersession rule `IndexBuilder` resolves and binds under (C0) - one object, so the two passes
         // cannot drift into disagreeing about whose id is whose. This pass mints no proofs either.
-        val supersession = Supersession(witnessed = witnessed.keys, scannedRoots = scannedRoots, registeredRoots = registeredRoots)
+        val supersession = Supersession(
+            witnessed = witnessed.keys,
+            scannedRoots = scannedRoots,
+            registeredRoots = registeredRoots,
+            eligible = ::allowsFile,
+        )
 
         val pages = drafts.map { draft ->
             val assignment = identity.resolve(
@@ -295,7 +303,14 @@ class AdoptionPass(
                     claimed[RootedPageId(draft.page.root, id)]
                         ?: idMap.bindingInRoot(draft.page.root, id)
                             ?.takeIf {
-                                BindingVisibility.isOwner(it, witnessed, scannedRoots, registeredRoots, supersession)
+                                BindingVisibility.isOwner(
+                                    it,
+                                    witnessed,
+                                    scannedRoots,
+                                    registeredRoots,
+                                    supersession,
+                                    ::allowsFile,
+                                )
                             }
                             ?.path
                         ?: idMap.retiredAt(draft.page.root, id)?.path
@@ -416,6 +431,8 @@ class AdoptionPass(
                 Draft(target, bytes)
             }
     }
+
+    private fun allowsFile(path: RootedPath): Boolean = policies.allowsFile(path)
 
     /**
      * One page's planned outcome. The patch is computed HERE, in the read-only phase, and its bytes are

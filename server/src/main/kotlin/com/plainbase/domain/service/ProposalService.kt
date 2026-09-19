@@ -57,6 +57,11 @@ class ProposalService(
      * direction for a guard whose whole job is to NOT rewrite the row.
      */
     private val rootStatus: (RootName) -> RootStatus = { RootStatus.AVAILABLE },
+    /**
+     * Shared proposal visibility boundary for recovery. Production closes this over
+     * [PageRootResolver.proposalEligible]; the default keeps policy-free domain fixtures concise.
+     */
+    private val proposalEligibility: (ProposalGuard) -> Boolean = { true },
 ) {
 
     /**
@@ -83,7 +88,11 @@ class ProposalService(
         author: ProposalAuthor,
     ): ProposeOutcome {
         // C3: page_id is authoritative; a client target_path that disagrees with the resolved path is malformed.
-        if (clientTargetPath != null && clientTargetPath != target.path) return ProposeOutcome.InvalidRequest
+        if (clientTargetPath != null && clientTargetPath != target.path) {
+            return ProposeOutcome.InvalidRequest(
+                "target_path disagrees with the page_id-resolved path; the server resolves the path from page_id.",
+            )
+        }
         val currentBytes = when (val read = baseReader.currentBytes(target)) {
             is ContentRead.Bytes -> read.bytes
             // NEVER StaleBase: "your base moved" is a lie when the truth is that the disk is unmounted, and it is
@@ -336,9 +345,10 @@ class ProposalService(
      * following it would be picking a root rather than reading one, and could walk an approved edit off the root it
      * was proposed, reviewed and gated against. The apply pins the same stored root ([SaveRequest.expectedRoot]), so
      * the guard and the write can never disagree about which root a 503 is about; an id the stored root no longer
-     * holds answers `page_deleted` -> CONFLICTED instead. That is also why the guard needs nothing but this name.
+     * holds answers `page_deleted` -> CONFLICTED instead. The operation and page id travel with the guard so the
+     * facade can also hide an edit whose current durable binding has moved outside configured content scope.
      */
-    fun guardOf(id: ProposalId): ProposalGuard? = repository.findById(id)?.let { ProposalGuard(it.root, it.status) }
+    fun guardOf(id: ProposalId): ProposalGuard? = repository.findById(id)?.toGuard()
 
     /**
      * The inspect-then-decide crash-recovery reconciler (P1b/C1), run at startup AFTER the disk + index are ready
@@ -349,7 +359,8 @@ class ProposalService(
      * equal `hash(proposed_content)`, the apply's disk write SUCCEEDED before the terminal stamp ran -> stamp APPLIED
      * (with a NULL approver + `status_reason="recovered"`, since the approver is unknown post-crash); otherwise the
      * write did NOT land -> return to PENDING for a fresh approve. Cannot race a live apply (the engine is not serving
-     * yet), the [reconcileDirtyPages] guarantee.
+     * yet), the [reconcileDirtyPages] guarantee. Detached, unavailable, or policy-hidden rows remain APPLYING because
+     * those states cannot supply durable recovery evidence.
      */
     fun reconcileApplying() {
         val applying = repository.allApplying()
@@ -367,7 +378,8 @@ class ProposalService(
      * resolved path equal `hash(proposed_content)`, the apply's disk write SUCCEEDED before the terminal stamp ran ->
      * stamp APPLIED (NULL approver + `status_reason="recovered"`, since the approver is unknown post-crash and uniform
      * with the boot path); otherwise the write did NOT land -> return to PENDING for a fresh approve. The terminal CAS
-     * conditions on `status='APPLYING'`, so a row that already left APPLYING (a racing winner) is a no-op.
+     * conditions on `status='APPLYING'`, so a row that already left APPLYING (a racing winner) is a no-op. The shared
+     * proposal eligibility boundary runs before path or byte reads; hidden rows stay unchanged until re-included.
      */
     private fun recoverApplyingRow(row: ProposalRow) {
         // A root name read back off a DURABLE ROW is UNTRUSTED: plainbase.db outlives roots{}. A DETACHED stored root
@@ -377,6 +389,13 @@ class ProposalService(
             logger.warn {
                 "APPLYING proposal ${row.id} targets root '${row.root}', which is not configured; leaving it APPLYING - " +
                     "it is never stamped off evidence a root that is not serving cannot supply. Re-add the root and restart to decide it."
+            }
+            return
+        }
+        if (!proposalEligibility(row.toGuard())) {
+            logger.debug {
+                "APPLYING proposal ${row.id} is outside the configured content scope; leaving it APPLYING until the " +
+                    "root and policy make its durable target eligible again"
             }
             return
         }
@@ -438,13 +457,19 @@ class ProposalService(
     }
 
     /** Every proposal as a summary view, newest-first, each carrying its LIVE-derived `base_drifted` flag. */
-    fun list(): List<ProposalSummaryView> = repository.all().map {
-        ProposalSummaryView(it, baseDrifted(it.status, it.operation, it.pageId, RootedPath(it.root, it.targetPath), it.baseHash))
-    }
+    fun list(eligible: (ProposalGuard) -> Boolean = { true }): List<ProposalSummaryView> = repository.all()
+        .filter { eligible(it.toSummaryGuard()) }
+        .map {
+            ProposalSummaryView(
+                it,
+                baseDrifted(it.status, it.operation, it.pageId, RootedPath(it.root, it.targetPath), it.baseHash),
+            )
+        }
 
     /** The full proposal view for [id] (incl. the stable `unified_diff`) with its LIVE `base_drifted`, or null. */
-    fun get(id: ProposalId): ProposalView? {
+    fun get(id: ProposalId, eligible: (ProposalGuard) -> Boolean = { true }): ProposalView? {
         val row = repository.findById(id) ?: return null
+        if (!eligible(row.toGuard())) return null
         return ProposalView(row, baseDrifted(row.status, row.operation, row.pageId, RootedPath(row.root, row.targetPath), row.baseHash))
     }
 
@@ -559,15 +584,25 @@ sealed interface ProposeOutcome {
     /** An edit's claimed `base_hash` no longer matches the live content, or the target page was deleted (400 stale_base). */
     data object StaleBase : ProposeOutcome
 
-    /** A semantic malformed request the service detected (C3 — a client `target_path` disagreeing with the resolved path) (400 invalid_propose_request). */
-    data object InvalidRequest : ProposeOutcome
+    /** A semantic malformed request carrying its accurate 400 `invalid_propose_request` explanation. */
+    data class InvalidRequest(val message: String) : ProposeOutcome
 
     /** A create blob the server could not materialize an id into (FrontmatterPatcher refusal / an agent-supplied id) (400 invalid_create_content). */
     data class InvalidCreateContent(val message: String) : ProposeOutcome
 }
 
-/** A row's write [root] and current [status]: what the facade's pre-claim guards read before they act. */
-data class ProposalGuard(val root: RootName, val status: ProposalStatus)
+/** The durable row facts the facade needs for pre-claim and content-scope guards. */
+data class ProposalGuard(
+    val root: RootName,
+    val status: ProposalStatus,
+    val targetPath: TreePath,
+    val operation: ProposalOperation,
+    val pageId: PageId?,
+)
+
+private fun ProposalRow.toGuard(): ProposalGuard = ProposalGuard(root, status, targetPath, operation, pageId)
+
+private fun ProposalSummaryRow.toSummaryGuard(): ProposalGuard = ProposalGuard(root, status, targetPath, operation, pageId)
 
 /** The outcome of an apply (the wire contract maps these). */
 sealed interface ApplyOutcome {

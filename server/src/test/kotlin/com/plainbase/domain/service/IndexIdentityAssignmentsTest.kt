@@ -403,7 +403,7 @@ class IndexIdentityAssignmentsTest : FunSpec({
                 val rootedPaths = paths.map { path -> RootedPath(RootName.PRIMARY, path) }
                 val witnessed = rootedPaths.associateWith { Witness(ID_MIXED_ANCHOR) }
 
-                val assignments = IndexIdentityAssignments(graph.idMap, graph.identity, graph.patcher)
+                val assignments = IndexIdentityAssignments(graph.idMap, graph.identity, graph.patcher) { true }
                     .resolveIdentities(
                         scans = scans,
                         witnessed = witnessed,
@@ -545,6 +545,7 @@ private class IdentityAssignmentsGraph(
             ),
             availability = availability,
             limbo = limbo,
+            policies = allowAllPolicies(registry.roots.map { it.name }),
         )
     }
 

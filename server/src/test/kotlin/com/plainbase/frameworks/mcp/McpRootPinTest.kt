@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.mcp
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.root.RootName
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -17,6 +18,39 @@ import kotlinx.serialization.json.jsonPrimitive
  * id succeeds.
  */
 class McpRootPinTest : FunSpec({
+
+    test("a policy-hidden page uses ordinary not-found vocabulary over MCP and REST") {
+        val hidden = ContentPathPolicy.create(
+            fileEligibility = { it.value != "doc.md" },
+            traversalEligibility = { true },
+            metadataEligibility = { true },
+        )
+        McpHarness(primaryPolicy = hidden).use { harness ->
+            harness.session(harness.readOnlyBearer) { client ->
+                for (args in listOf(
+                    mapOf("id" to harness.seedPageId),
+                    mapOf("id" to harness.seedPageId, "root" to "docs"),
+                )) {
+                    val result = client.call("read_page", args)
+                    result.isErr() shouldBe true
+                    result.text() shouldContain "not_found"
+                    result.text() shouldNotContain "absence_unverified"
+                }
+            }
+
+            for (path in listOf(
+                "/api/v1/pages/${harness.seedPageId}",
+                "/api/v1/pages/${harness.seedPageId}?root=docs",
+                "/p/${harness.seedPageId}",
+                "/p/docs/${harness.seedPageId}",
+            )) {
+                val response = harness.restGetResponse(path, harness.readOnlyBearer)
+                response.status shouldBe 404
+                response.body shouldContain "page_not_found"
+                response.body shouldNotContain "absence_unverified"
+            }
+        }
+    }
 
     test("read_page root=docs (registered, holds it) succeeds; root=ghost|a/b -> invalid_root") {
         McpHarness().use { harness ->

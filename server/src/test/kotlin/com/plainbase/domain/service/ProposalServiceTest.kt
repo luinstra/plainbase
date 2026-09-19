@@ -311,7 +311,9 @@ class ProposalServiceTest : FunSpec({
             "r",
             author,
         )
-        outcome shouldBe ProposeOutcome.InvalidRequest
+        outcome shouldBe ProposeOutcome.InvalidRequest(
+            "target_path disagrees with the page_id-resolved path; the server resolves the path from page_id.",
+        )
         (repo as MemRepo).rows.shouldBeEmpty()
     }
 

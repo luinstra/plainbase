@@ -171,7 +171,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 val proposalService = ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, harness.stores, harness.absence),
+                    IndexProposalBaseReader(harness.builder, harness.stores, harness.absence, harness.policies),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -187,6 +187,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     proposals = { proposalsFacade },
                     agentDirectCommitGlobs = globs,
                     proposalLabeler = labeler,
+                    policies = harness.policies,
                 )
                 val facade =
                     GuardedProposalFacade(
@@ -199,6 +200,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                         harness.resolver,
                         harness.availability,
                         harness.absence,
+                        harness.policies,
                     )
                 proposalsFacade = facade
                 block(harness, store, facade, mutate, root)
@@ -241,11 +243,11 @@ class ProposalApplyAuthzRouteTest : FunSpec({
 
     test("enforced: a PROPOSE agent + an EDITOR are DENIED rebase (403); an ADMIN is ALLOWED rebase") {
         // Build a CONFLICTED proposal as ADMIN, then assert the rebase authz matrix by re-binding the principal.
-        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, _, _, root ->
             val (id, hash) = app.pageIdAndHash()
             val proposalId = app.proposeEdit(id, hash)
             // Drift the live page so the apply conflicts.
-            store.write(TreePath.require("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nDRIFTED.\n".toByteArray())
+            Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nDRIFTED.\n")
             harness.builder.rebuild()
             app.client.post("/api/v1/changes/$proposalId/approve").status shouldBe HttpStatusCode.Conflict
             // ADMIN rebase is allowed.
@@ -290,10 +292,10 @@ class ProposalApplyAuthzRouteTest : FunSpec({
     }
 
     test("apply-time drift -> 409 conflicted (code=conflicted + current_hash); the proposal is CONFLICTED (rebasable)") {
-        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, _, _, root ->
             val (id, hash) = app.pageIdAndHash()
             val proposalId = app.proposeEdit(id, hash)
-            store.write(TreePath.require("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nDRIFTED underneath.\n".toByteArray())
+            Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nDRIFTED underneath.\n")
             harness.builder.rebuild()
             val resp = app.client.post("/api/v1/changes/$proposalId/approve")
             resp.status shouldBe HttpStatusCode.Conflict
@@ -306,12 +308,12 @@ class ProposalApplyAuthzRouteTest : FunSpec({
     }
 
     test("idempotent-replay -> 200 applied: the disk already equals proposed_content (a one-byte diff would conflict)") {
-        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, _, _, root ->
             val (id, hash) = app.pageIdAndHash()
             val proposalId = app.proposeEdit(id, hash)
             // Write the EXACT proposed bytes to disk (the disk already equals proposed) BUT keep the base_hash stale,
             // so the CAS reports Conflict with currentHash == hash(proposed) -> the idempotent-replay APPLIED branch.
-            store.write(TreePath.require("doc.md"), editedBody.toByteArray())
+            Files.writeString(root.resolve("doc.md"), editedBody)
             harness.builder.rebuild()
             app.client.post("/api/v1/changes/$proposalId/approve").status shouldBe HttpStatusCode.OK
             harness.proposalRepository.findById(com.plainbase.domain.page.ProposalId.require(proposalId))!!.status shouldBe
@@ -410,12 +412,13 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     harness.availability,
                     harness.resolver,
                     harness.absence,
+                    policies = harness.policies,
                 )
             val proposalService =
                 ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, harness.stores, harness.absence),
+                    IndexProposalBaseReader(harness.builder, harness.stores, harness.absence, harness.policies),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -429,6 +432,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 harness.resolver,
                 harness.availability,
                 harness.absence,
+                harness.policies,
             )
             val admin = Principal.Human("builtin", "admin")
             val proposalId = app.proposeEdit(id, hash)
@@ -446,7 +450,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
     }
 
     test("Unreadable -> Failed + status_reason 'unreadable', no FS leak (fake MutatingFacade at the facade boundary)") {
-        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, root ->
             val (id, hash) = app.pageIdAndHash()
             val proposalId = app.proposeEdit(id, hash)
             val pid = com.plainbase.domain.page.ProposalId.require(proposalId)
@@ -463,7 +467,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, harness.stores, harness.absence),
+                    IndexProposalBaseReader(harness.builder, harness.stores, harness.absence, harness.policies),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -498,6 +502,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     harness.resolver,
                     harness.availability,
                     harness.absence,
+                    harness.policies,
                 )
             val outcome = facade.approve(Principal.Human("builtin", "admin"), pid)
             (outcome as ApplyOutcome.Failed).reason shouldBe "unreadable" // the STABLE string, never the raw cause
@@ -769,10 +774,10 @@ class ProposalApplyAuthzRouteTest : FunSpec({
     // ---- Rebase round-trip (enforced) ----------------------------------------------------------------
 
     test("rebase -> re-approve applies against the new base (last-writer-wins)") {
-        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, root ->
             val (id, hash) = app.pageIdAndHash()
             val proposalId = app.proposeEdit(id, hash)
-            store.write(TreePath.require("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nintervening.\n".toByteArray())
+            Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nintervening.\n")
             harness.builder.rebuild()
             app.client.post("/api/v1/changes/$proposalId/approve").status shouldBe HttpStatusCode.Conflict
             val rebase = app.client.post("/api/v1/changes/$proposalId/rebase")
@@ -793,10 +798,10 @@ class ProposalApplyAuthzRouteTest : FunSpec({
     }
 
     test("rebase Gone -> 422 apply_failed; the proposal is FAILED + status_reason 'rebase_target_gone'") {
-        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, root ->
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, _, _, root ->
             val (id, hash) = app.pageIdAndHash()
             val proposalId = app.proposeEdit(id, hash)
-            store.write(TreePath.require("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nintervening.\n".toByteArray())
+            Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nintervening.\n")
             harness.builder.rebuild()
             app.client.post("/api/v1/changes/$proposalId/approve").status shouldBe HttpStatusCode.Conflict
             // DELETE the target page so pathOf(pageId) returns null.
@@ -856,13 +861,14 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                         harness.availability,
                         harness.resolver,
                         harness.absence,
+                        policies = harness.policies,
                     )
                 val labeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
                 val proposalService =
                     ProposalService(
                         harness.proposalRepository,
                         citations,
-                        IndexProposalBaseReader(harness.builder, harness.stores, harness.absence),
+                        IndexProposalBaseReader(harness.builder, harness.stores, harness.absence, harness.policies),
                         UuidV7ProposalIdProvider(),
                         Clock.System,
                     )
@@ -877,6 +883,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                         harness.resolver,
                         harness.availability,
                         harness.absence,
+                        harness.policies,
                     )
                 // Propose (agent) then approve (admin).
                 val page = harness.builder.current.pages.single()

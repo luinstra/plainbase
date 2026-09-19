@@ -316,6 +316,7 @@ private class NativeObjectGraph : AutoCloseable {
             retirements = retirements,
             limbo = limbo,
             bindings = bindings,
+            policies = com.plainbase.domain.service.allowAllNativePolicies(),
         )
     }
 

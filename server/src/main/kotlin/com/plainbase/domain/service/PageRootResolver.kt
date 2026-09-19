@@ -1,7 +1,10 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.ProposalOperation
 import com.plainbase.domain.root.RetiredBinding
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
@@ -39,6 +42,7 @@ import com.plainbase.domain.root.RootedPath
 class PageRootResolver(
     private val idMap: IdMapRepository,
     private val registry: RootRegistry,
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) {
 
     /**
@@ -57,15 +61,39 @@ class PageRootResolver(
         val state = idMap.claimantState(id)
         val rank = compareBy<RootName>({ registry.rank(it) }, { it.value }) // the registeredRanked comparator
         return ResolvedClaimants(
-            live = state.live.filter { registry.byName(it) != null }.distinct().sortedWith(rank),
+            live = state.live.filter { registry.byName(it.path.root) != null && allowsFile(it.path) }
+                .map { it.path.root }.distinct().sortedWith(rank),
             // registered-filter + D7-rank the TOMBSTONES too, so the mixed union and the pure-tombstone 300 emit in rank order
-            retired = state.retired.filter { registry.byName(it.path.root) != null }.sortedWith(compareBy(rank) { it.path.root }),
+            retired = state.retired
+                .filter { registry.byName(it.path.root) != null && allowsFile(it.path) }
+                .sortedWith(compareBy(rank) { it.path.root }),
             rank = rank,
         )
     }
 
     /** True iff [root] holds a LIVE durable binding for [id] - the pinned WRITE / pinned-read-miss fresh-validate. */
-    fun bindsLive(root: RootName, id: PageId): Boolean = root in idMap.rootsHoldingId(id)
+    fun bindsLive(root: RootName, id: PageId): Boolean =
+        idMap.bindingInRoot(root, id)?.let { allowsFile(it.path) } == true
+
+    /** The current eligible durable binding for one rooted id, or null when it is absent or hidden. */
+    fun bindingPath(root: RootName, id: PageId): RootedPath? =
+        idMap.bindingInRoot(root, id)?.path?.takeIf(::allowsFile)
+
+    /**
+     * Whether [proposal]'s stored target and current/retired edit claims are eligible for disclosure or recovery.
+     * A registered root with no claim is allowed so genuine deletion reaches the existing lifecycle outcomes;
+     * hidden live/tombstoned paths and a missing root policy fail closed. This predicate never mutates the durable row,
+     * so a detached proposal becomes visible and actionable again when its root and policy return.
+     */
+    fun proposalEligible(proposal: ProposalGuard): Boolean {
+        if (registry.byName(proposal.root) == null) return false
+        if (!allowsFile(RootedPath(proposal.root, proposal.targetPath))) return false
+        if (proposal.operation != ProposalOperation.EDIT) return true
+        val pageId = proposal.pageId ?: return false
+        val state = idMap.claimantState(pageId)
+        return state.live.filter { it.path.root == proposal.root }.all { allowsFile(it.path) } &&
+            state.retired.filter { it.path.root == proposal.root }.all { allowsFile(it.path) }
+    }
 
     /**
      * **The pinned-WRITE validation, in the SIGNATURE rather than in four call sites.** A caller-supplied [pin] is
@@ -87,7 +115,9 @@ class PageRootResolver(
         if (registry.byName(pin) != null && bindsLive(pin, id)) IdResolution.One(pin) else IdResolution.None
 
     /** The last-known rooted path of ([root], [id])'s tombstone, or null when it was never retired there. */
-    fun retirementAt(root: RootName, id: PageId): RootedPath? = idMap.retiredAt(root, id)?.path
+    fun retirementAt(root: RootName, id: PageId): RootedPath? = idMap.retiredAt(root, id)?.path?.takeIf(::allowsFile)
+
+    private fun allowsFile(path: RootedPath): Boolean = policies.allowsFile(path)
 
     /**
      * [root]'s serving status. DETACHED is checked FIRST: [RootAvailability] only ever tracks REGISTERED

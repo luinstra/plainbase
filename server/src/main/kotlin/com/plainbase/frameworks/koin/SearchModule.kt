@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.koin
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.SearchIndexer
@@ -48,6 +50,7 @@ internal fun createSearchModule(
             splitter = get(),
             retiredUnboundIds = idMap::retiredUnboundIds,
             isRetiredUnbound = idMap::isRetiredUnbound,
+            policies = get<Map<RootName, ContentPathPolicy>>(),
         )
     }
     single<IndexBuilder.PublicationListener>(named("searchSync")) {

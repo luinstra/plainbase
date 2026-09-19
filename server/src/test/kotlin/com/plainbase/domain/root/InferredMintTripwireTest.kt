@@ -66,12 +66,14 @@ class InferredMintTripwireTest : FunSpec({
             """
             private class AbsencePass private constructor(
                 private val proven: (RootName, ObjectManifest, Map<RootedPath, Witness>) -> Set<BindingRef>,
-                private val durable: () -> List<IdBinding>,
                 private val gitCheckpoint: (RootName) -> String?,
                 private val histories: Map<RootName, GitReads>,
                 private val observationStamps: Map<RootName, ObservationId>,
                 private val bindingEpochs: Map<RootName, BindingEpoch>,
                 private val headsBefore: Map<RootName, String>,
+                private val allDurable: () -> List<IdBinding>,
+                private val eligible: (RootedPath) -> Boolean,
+                private val onHiddenGitStall: (RootName, Set<RootedPath>) -> Unit,
             )
             """.normalizedWhitespace()
         assertSoftly {
@@ -83,12 +85,14 @@ class InferredMintTripwireTest : FunSpec({
             withClue("AbsencePass extra or missing fields: $passFields") {
                 passFields shouldBe setOf(
                     "proven",
-                    "durable",
                     "gitCheckpoint",
                     "histories",
                     "observationStamps",
                     "bindingEpochs",
                     "headsBefore",
+                    "allDurable",
+                    "eligible",
+                    "onHiddenGitStall",
                 )
             }
 

@@ -14,7 +14,7 @@ import { createAppRouter } from "../router";
  */
 
 const ID = "rev-1";
-const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "docs", displayName: "Documentation", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "csrf-xyz", auth_mode: "builtin" };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -106,13 +106,14 @@ describe("review detail", () => {
   });
 
   it("names the ROOT the approve would write into, not just the root-relative target_path", async () => {
-    const { view } = renderDetail(detail({ root: "handbook" }));
+    const { view } = renderDetail(detail({ root: "docs" }));
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-review-header]")).not.toBeNull());
     const header = view.container.querySelector("[data-pb-review-header]")!;
     // An approve lands bytes. `target_path` is root-relative and repeats across roots, so a header showing only
     // the path lets an admin approve a change against a repository they never looked at.
-    expect(view.container.querySelector("[data-pb-review-root]")?.textContent).toBe("handbook");
+    expect(view.container.querySelector("[data-pb-review-root]")?.getAttribute("data-pb-review-root")).toBe("docs");
+    expect(view.container.querySelector("[data-pb-review-root]")?.textContent).toBe("Documentation");
     expect(header.textContent).toContain("guides/deploy-guide.md");
   });
 

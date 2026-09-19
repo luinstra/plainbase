@@ -12,7 +12,7 @@ import { createAppRouter } from "../router";
  * per-test fetch stub. Each row links to `/review/$id`.
  */
 
-const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "docs", displayName: "Documentation", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -110,6 +110,8 @@ describe("review queue", () => {
     // Both rows carry the SAME target_path: without the root they are indistinguishable, and an approver
     // picking one of them is picking a repository blind.
     expect(roots).toEqual(["docs", "handbook"]);
+    const labels = [...view.container.querySelectorAll("[data-pb-review-root]")].map((el) => el.textContent);
+    expect(labels).toEqual(["Documentation", "handbook"]);
   });
 
   it("renders the empty notice when there are no proposals", async () => {

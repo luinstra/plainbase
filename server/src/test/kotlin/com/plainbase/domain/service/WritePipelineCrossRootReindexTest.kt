@@ -73,7 +73,13 @@ class WritePipelineCrossRootReindexTest : FunSpec({
             val search = RecordingSearchProvider()
             lateinit var authority: IdMapRepository
             val searchIndexer =
-                SearchIndexer(search, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
+                SearchIndexer(
+                    search,
+                    SectionSplitter(),
+                    { authority.retiredUnboundIds() },
+                    { authority.isRetiredUnbound(it) },
+                    allowAllPolicies(registry.roots.map { it.name }),
+                )
 
             IndexHarness(
                 root = mainDir,
@@ -119,6 +125,7 @@ class WritePipelineCrossRootReindexTest : FunSpec({
                     idMap = harness.idMap,
                     aliasRegistry = harness.registry,
                     availability = harness.availability,
+                    policies = allowAllPolicies(harness.rootRegistry.roots.map { it.name }),
                 )
 
                 val outcome = pipeline.write(

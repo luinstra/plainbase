@@ -530,6 +530,7 @@ private class DualObjectWorld : AutoCloseable {
         retirements = retirements,
         limbo = limbo,
         bindings = latch,
+        policies = com.plainbase.domain.service.allowAllPolicies(registry.roots.map { it.name }),
     )
 
     private fun makeStore(

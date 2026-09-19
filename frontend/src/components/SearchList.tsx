@@ -1,5 +1,5 @@
-import type { SearchHit } from "../api/types";
-import type { PageEntry } from "../lib/tree";
+import type { RootTree, SearchHit } from "../api/types";
+import { rootLabelFor, type PageEntry } from "../lib/tree";
 import { JumpToItem } from "./JumpToItem";
 import { SearchResultItem } from "./SearchResultItem";
 
@@ -32,6 +32,7 @@ export function SearchList({
   errorMessage,
   // shared
   showRoots,
+  roots,
   selectedIndex,
   onSelect,
   onActivate,
@@ -49,6 +50,7 @@ export function SearchList({
   searchedQuery?: string;
   errorMessage?: string;
   showRoots?: boolean;
+  roots?: RootTree[];
   selectedIndex: number;
   onSelect: (index: number) => void;
   onActivate: (index: number) => void;
@@ -69,6 +71,7 @@ export function SearchList({
             <JumpToItem
               key={`${entry.root}:${entry.page.id}`}
               entry={entry}
+              rootLabel={rootLabelFor(roots, entry.root)}
               showRoot={showRoots}
               id={optionId("jump", index)}
               active={index === selectedIndex}
@@ -122,6 +125,7 @@ export function SearchList({
             <SearchResultItem
               key={`${hit.page_id}:${hit.heading_id ?? ""}:${index}`}
               hit={hit}
+              rootLabel={rootLabelFor(roots, hit.root)}
               showRoot={showRoots}
               id={optionId("search", index)}
               active={index === selectedIndex}

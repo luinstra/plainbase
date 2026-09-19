@@ -71,7 +71,7 @@ class ObjectMirrorApplyFailureTest {
             val path = TreePath.require("map-absent-heal-fails.md")
             val original = "v1".toByteArray()
             fx.client.seed(fx.mirror.resolveRepoRelativePath(path), original)
-            fx.mirror.write(path, original)
+            fx.mirror.writeMirror(path, original)
             fx.mirror.scan()
             // The map has NO entry for this path (never recorded) - forces the map-absent read-back.
             assertNull(fx.state.etagOf(path))
@@ -99,7 +99,7 @@ class ObjectMirrorApplyFailureTest {
             val original = "v1".toByteArray()
             val key = fx.mirror.resolveRepoRelativePath(path)
             fx.client.seed(key, original)
-            fx.mirror.write(path, original)
+            fx.mirror.writeMirror(path, original)
             fx.mirror.scan()
             fx.state.recordConfirmed(path, fx.client.currentEtag(key)!!)
             fx.state.persist()

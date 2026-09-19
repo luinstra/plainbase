@@ -65,6 +65,23 @@ export function entryFor(roots: RootTree[], root: string): RootTree | null {
   return roots.find((entry) => entry.root === root) ?? null;
 }
 
+/** Human-facing root label; keep the server-issued root slug for every URL and lookup. */
+export function rootLabel(entry: Pick<RootTree, "root" | "displayName">): string {
+  return entry.displayName ?? entry.root;
+}
+
+/** Human-facing label for a named root, falling back to the stable name before the tree is available. */
+export function rootLabelFor(roots: Array<Pick<RootTree, "root" | "displayName">> | undefined, root: string): string {
+  const entry = roots?.find((candidate) => candidate.root === root);
+  return entry ? rootLabel(entry) : root;
+}
+
+/** The selector's explicit status annotation; outage notices keep the shared headline wording stable. */
+export function rootOptionLabel(entry: Pick<RootTree, "root" | "displayName" | "available">): string {
+  const label = rootLabel(entry);
+  return entry.available ? label : `${label} (unavailable)`;
+}
+
 /** The named entry's tree, if served. */
 export function treeFor(roots: RootTree[], root: string): TreeFolder | null {
   return entryFor(roots, root)?.tree ?? null;

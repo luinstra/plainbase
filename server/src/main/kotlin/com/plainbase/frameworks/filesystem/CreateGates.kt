@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.filesystem
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.TreePath
@@ -30,6 +31,7 @@ internal class CreateGates(
     private val root: Path,
     private val ignoreRules: IgnoreRules,
     private val excludedDirs: List<Path>,
+    private val policy: ContentPathPolicy = ContentPathPolicy.legacy(),
 ) {
 
     /**
@@ -73,32 +75,48 @@ internal class CreateGates(
      * legitimately name content, or null when a create may proceed. Fails closed (an [IOException]
      * resolving the real path is "not contained"). Three guards, mirroring the scan/read invariants:
      *  1. **Scan-skipped-name segment** — any ancestor (or the leaf) whose NAME the scan would skip
-     *     ([isScanSkippedName]: `_folder.yaml`, dotfile, `content.ignore` glob), or a segment under an
+     *     ([isScanSkippedName]: `_folder.yaml`, `content.ignore` glob), or a segment under an
      *     excluded subtree (DATA_DIR) → a ghost the next rebuild discards, so refuse it up front. The
      *     name predicate is the SAME one the scan's candidate filter uses, so the create-reject set
      *     cannot drift from scan's skip set (this is what closes the "scan skips X but create allows
-     *     it" class — dotfiles, `_folder.yaml`).
+     *     it" class — configured hidden paths, `_folder.yaml`).
      *  2. **Symlinked existing ancestor** — links are not content; an existing ancestor directory that
      *     is a symlink would let a create write THROUGH it (the scan never enters it), so refuse.
      *  3. **Real-path escape** — the nearest EXISTING ancestor's resolved real path must stay inside
      *     root's real path, so a symlink pointing outside the root (or any escape) is caught even when
      *     the lexical [TreePath] looks contained.
      */
-    fun rejectionReason(path: TreePath, target: Path): String? {
+    fun rejectionReason(path: TreePath, target: Path): String? = accessRejectionReason(path, target, isDirectory = false)
+
+    /** Shared logical/physical policy gate for already-indexed reads, stats, metadata, and CAS targets. */
+    fun accessRejectionReason(path: TreePath, target: Path, isDirectory: Boolean): String? {
+        scanSkippedSegmentReason(path, isDirectory)?.let { return it }
+        if (isDirectory && Files.isSymbolicLink(target)) return "an indexed directory became a symlink (links are not content)"
         val onDiskParent = target.parent
-        return scanSkippedSegmentReason(path)
-            ?: excludedSubtreeReason(onDiskParent)
-            ?: existingAncestorReason(onDiskParent)
+        excludedSubtreeReason(onDiskParent)?.let { return it }
+        existingAncestorReason(onDiskParent)?.let { return it }
+        // A vanished/unreadable root is not a permanent path-policy rejection. Let the owning
+        // store's exit classifier translate the ensuing filesystem failure to RootUnavailable;
+        // failures resolving anything beneath a live root still fail closed here.
+        val rootReal = runCatching { root.toRealPath() }.getOrNull() ?: return null
+        val effective = effectivePath(target, rootReal)
+            ?: return "the target's effective on-disk path could not be resolved"
+        return if (effective == path) null else scanSkippedSegmentReason(effective, isDirectory)
     }
 
-    private fun scanSkippedSegmentReason(path: TreePath): String? {
+    private fun scanSkippedSegmentReason(path: TreePath, leafIsDirectory: Boolean = false): String? {
         // (1) Scan-skipped name: check each content-relative segment along the path against the SAME
         // name-skip predicate scan uses, so no scan-skipped name (incl. `_folder.yaml`) can be created.
         var relative: TreePath? = null
-        for (segment in path.segments) {
+        for ((index, segment) in path.segments.withIndex()) {
             relative = relative?.resolveChild(segment) ?: TreePath.require(segment)
-            if (isScanSkippedName(segment, relative.value)) {
-                return "segment '$segment' is one the scan skips (_folder.yaml / dotfile / ignore glob — not content)"
+            val allowed = if (index == path.segments.lastIndex && !leafIsDirectory) {
+                policy.allowsFile(relative)
+            } else {
+                policy.mayTraverse(relative)
+            }
+            if (!allowed || isScanSkippedName(segment, relative.value)) {
+                return "segment '$segment' is excluded by the root content policy"
             }
         }
         return null
@@ -196,22 +214,41 @@ internal class CreateGates(
     /**
      * The SINGLE source of truth for "scan would skip a segment by NAME alone" (independent of whether
      * it exists on disk yet): the `_folder.yaml` metadata sidecar ([FOLDER_META_NAME]) OR an
-     * [IgnoreRules]-ignored name (dotfile / `content.ignore` glob). The scan's candidate filter applies
+     * [IgnoreRules]-ignored name (`content.ignore` glob). The scan's candidate filter applies
      * exactly these name skips, so both the create-reject gate ([rejectionReason]) and the
      * scan-eligibility filter ([isScanEligible]) defer to this — a created page can never land at a
      * name scan won't index. (The on-disk-entry skips — excluded DATA_DIR subtree, symlink — are
      * existence-dependent and stay in [isScanEligible] / the [rejectionReason] ancestor walk.)
      */
     private fun isScanSkippedName(name: String, relativePath: String): Boolean =
-        name == FOLDER_META_NAME || ignoreRules.isIgnored(name, relativePath)
+        name == FOLDER_META_NAME || ignoreRules.isGlobIgnored(relativePath)
 
     /** Whether [child] (under the `/`-joined [dirPrefix], null at root) is a content candidate — the scan's filter. */
     private fun isScanEligible(child: Path, dirPrefix: String?): Boolean {
         val rawName = child.fileName.toString()
         val relativePath = if (dirPrefix == null) rawName else "$dirPrefix/$rawName"
+        val treePath = TreePath.of(relativePath) ?: return false
         if (isScanSkippedName(rawName, relativePath)) return false
         if (child.toAbsolutePath().normalize() in excludedDirs) return false
-        return !Files.isSymbolicLink(child)
+        if (Files.isSymbolicLink(child)) return false
+        return if (Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
+            policy.mayTraverse(treePath)
+        } else {
+            policy.allowsFile(treePath)
+        }
+    }
+
+    private fun effectivePath(target: Path, rootReal: Path): TreePath? {
+        val missing = ArrayDeque<String>()
+        var existing: Path? = target
+        while (existing != null && !Files.exists(existing, LinkOption.NOFOLLOW_LINKS)) {
+            existing.fileName?.toString()?.let(missing::addFirst)
+            existing = existing.parent
+        }
+        val prefix = existing?.let { runCatching { it.toRealPath() }.getOrNull() } ?: return null
+        val physical = missing.fold(prefix) { current, segment -> current.resolve(segment) }
+        val relative = runCatching { rootReal.relativize(physical) }.getOrNull() ?: return null
+        return TreePath.of(relative.joinToString("/") { it.toString() })
     }
 }
 

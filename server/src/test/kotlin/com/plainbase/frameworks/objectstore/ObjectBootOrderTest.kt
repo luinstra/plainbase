@@ -29,7 +29,7 @@ class ObjectBootOrderTest : FunSpec({
             val newBytes = "new (durable at the bucket, not yet mirrored)".toByteArray()
             // The mirror is STALE (as if a crash landed the PUT at the bucket but never applied it
             // locally - exactly Q8b's class): only the bucket holds newBytes.
-            hybrid.mirror.write(path, oldBytes)
+            hybrid.mirror.writeMirror(path, oldBytes)
             hybrid.mirror.scan()
             val key = hybrid.mirror.resolveRepoRelativePath(path)
             hybrid.fake.seed(key, newBytes)
@@ -56,7 +56,7 @@ class ObjectBootOrderTest : FunSpec({
         HybridFixture().use { hybrid ->
             val path = TreePath.require("unpushed.md")
             val bytes = "written locally, not yet confirmed at the bucket".toByteArray()
-            hybrid.mirror.write(path, bytes) // mirror-only - the bucket LIST will not carry this key
+            hybrid.mirror.writeMirror(path, bytes) // mirror-only - the bucket LIST will not carry this key
             hybrid.mirror.scan()
             hybrid.dirtyPaths += path // the write-ahead mark: WritePipeline.write marks dirty BEFORE the CAS
 
@@ -69,7 +69,7 @@ class ObjectBootOrderTest : FunSpec({
     test("hydrate's delete-absent step DOES remove a mirror file absent from LIST and not dirty-journaled") {
         HybridFixture().use { hybrid ->
             val path = TreePath.require("stale-mirror-only.md")
-            hybrid.mirror.write(path, "orphaned".toByteArray())
+            hybrid.mirror.writeMirror(path, "orphaned".toByteArray())
             hybrid.mirror.scan()
             // Not in dirtyPaths - an ordinary stale mirror entry the bucket no longer has (deleted upstream).
 

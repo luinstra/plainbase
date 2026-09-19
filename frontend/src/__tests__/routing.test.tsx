@@ -93,10 +93,11 @@ const rootReadmeTree: TreeResponse = {
  * child instead and DocsPage diverts to FolderLanding, and the rows would quietly stop testing the
  * by-id read they exist to test.
  */
-function hubEntry(root: string, id: string): TreeResponse["roots"][number] {
+function hubEntry(root: string, id: string, displayName?: string): TreeResponse["roots"][number] {
   const rootUrl = root === "docs" ? "/docs" : `/${root}`;
   return {
     root,
+    displayName,
     available: true,
     editable: true,
     primary: root === "docs",
@@ -377,12 +378,16 @@ describe("routing flows", () => {
       vi.fn(async () => new Response(JSON.stringify(envelope), { status: 409, headers: { "content-type": "application/json" } })),
     );
     try {
-      const { view } = renderAt(`/p/${DUP_ID}`, () => {});
+      const { view } = renderAt(`/p/${DUP_ID}`, (queryClient) => {
+        queryClient.setQueryData(treeQuery.queryKey, {
+          roots: [hubEntry("runbooks", DUP_ID, "Runbooks"), hubEntry("docs", DUP_ID, "Documentation")],
+        } satisfies TreeResponse);
+      });
 
       await waitFor(() => expect(view.container.querySelector("[data-pb-candidates]")).not.toBeNull());
       const links = [...view.container.querySelectorAll("[data-pb-candidates] a")];
       // Rank order is the server's, and it is preserved verbatim - the client never re-sorts the roots.
-      expect(links.map((a) => a.textContent)).toEqual(["runbooks", "docs"]);
+      expect(links.map((a) => a.textContent)).toEqual(["Runbooks", "Documentation"]);
       expect(links.map((a) => a.getAttribute("href"))).toEqual([`/p/runbooks/${DUP_ID}`, `/p/docs/${DUP_ID}`]);
       // The message the links answer is still on screen; the API retry urls are NOT linked.
       expect(view.container.querySelector("[data-pb-error]")?.textContent).toContain("retry against one of the candidate roots");

@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.runtime
 
 import app.cash.sqldelight.db.SqlDriver
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RowsAtStart
@@ -20,6 +21,7 @@ internal data class LocalStoreInputs(
     val rootName: RootName,
     val onRootUnavailable: () -> Unit,
     val onIdentityRebind: () -> Unit,
+    val policy: ContentPathPolicy,
 )
 
 /** The finite set of real constructor seams used by one serving run. */

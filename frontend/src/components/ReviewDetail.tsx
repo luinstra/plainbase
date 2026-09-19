@@ -3,9 +3,10 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { ApiError } from "../api/client";
 import { approveChange, rebaseChange, rejectChange } from "../api/proposals";
-import { changeQuery, invalidateAfterDecision, invalidateAfterWrite } from "../api/queries";
+import { changeQuery, invalidateAfterDecision, invalidateAfterWrite, treeQuery } from "../api/queries";
 import type { ChangeDetail } from "../api/types";
 import { formatTime } from "../lib/datetime";
+import { rootLabelFor } from "../lib/tree";
 import { DiffView } from "./DiffView";
 import { QueryErrorView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
@@ -21,6 +22,7 @@ import { NotFoundView } from "./NotFound";
  */
 export function ReviewDetail({ id }: { id: string }) {
   const detail = useQuery(changeQuery(id));
+  const tree = useQuery(treeQuery);
 
   if (detail.isPending) {
     return (
@@ -35,10 +37,10 @@ export function ReviewDetail({ id }: { id: string }) {
   }
 
   // Key by id so navigating between proposals remounts with fresh action state.
-  return <ReviewDetailView key={detail.data.id} change={detail.data} />;
+  return <ReviewDetailView key={detail.data.id} change={detail.data} rootLabel={rootLabelFor(tree.data?.roots, detail.data.root)} />;
 }
 
-function ReviewDetailView({ change }: { change: ChangeDetail }) {
+function ReviewDetailView({ change, rootLabel }: { change: ChangeDetail; rootLabel: string }) {
   const queryClient = useQueryClient();
   const [comment, setComment] = useState("");
   const [noAccess, setNoAccess] = useState(false);
@@ -112,7 +114,7 @@ function ReviewDetailView({ change }: { change: ChangeDetail }) {
             {change.operation}
           </span>{" "}
           <span className="pb-review-root" data-pb-review-root={change.root}>
-            {change.root}
+            {rootLabel}
           </span>{" "}
           {change.target_path}
         </h1>

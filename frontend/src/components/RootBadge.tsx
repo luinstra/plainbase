@@ -6,10 +6,10 @@
  *
  * `data-pb-root-badge` is the stable selector, carrying the root name so a customizer can target one.
  */
-export function RootBadge({ root }: { root: string }) {
+export function RootBadge({ root, label }: { root: string; label?: string }) {
   return (
     <span className="shrink-0 rounded border border-edge px-1.5 font-mono text-[11px] text-muted" data-pb-root-badge={root}>
-      {root}
+      {label ?? root}
     </span>
   );
 }

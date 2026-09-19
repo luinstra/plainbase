@@ -27,6 +27,7 @@ import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.domain.service.allowAllPolicies
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.runtime.HistoryProviders
@@ -103,11 +104,13 @@ class MultiRootRestHarness(
     private val searchDir = Files.createTempDirectory("plainbase-multiroot-search")
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
     val searchProvider = Fts5SearchProvider(searchDb)
+    private val policies = allowAllPolicies(registry.roots.map { it.name })
     private val searchIndexer = SearchIndexer(
         searchProvider,
         SectionSplitter(),
         { index.idMap.retiredUnboundIds() },
         { index.idMap.isRetiredUnbound(it) },
+        policies,
     )
 
     /**
@@ -142,6 +145,7 @@ class MultiRootRestHarness(
             },
         ),
         searchIndexer = searchIndexer,
+        policies = policies,
         )
     }
 
@@ -178,7 +182,7 @@ class MultiRootRestHarness(
             agentDirectCommitGlobs = globList,
             extract = extractor,
             convergence = convergence,
-            resolver = resolverFactory?.invoke(index) ?: PageRootResolver(index.idMap, registry),
+            resolver = resolverFactory?.invoke(index) ?: PageRootResolver(index.idMap, registry, policies),
             absence = absenceFactory?.invoke(index) ?: index.absence,
         )
         return this

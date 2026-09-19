@@ -660,6 +660,33 @@ class RootCommandTest : FunSpec({
         }
     }
 
+    test("adding another managed root preserves existing presentation and membership settings") {
+        world { w ->
+            Files.writeString(
+                w.rootsConf,
+                """
+                roots {
+                  notes {
+                    path = "/roots/notes"
+                    displayName = "Team Notes"
+                    includes = []
+                    excludes = ["private/**"]
+                    folderLabels { "guides/setup" = "Setup" }
+                  }
+                }
+                """.trimIndent(),
+            )
+
+            captureStdout { w.root("add", "extra", Files.createDirectory(w.tmp("extra")).toString()) shouldBe 0 }
+
+            val notes = w.config().roots.extras.single { it.name.value == "notes" }
+            notes.displayName shouldBe "Team Notes"
+            notes.includes shouldBe emptyList()
+            notes.excludes shouldBe listOf("private/**")
+            notes.folderLabels shouldBe mapOf("guides/setup" to "Setup")
+        }
+    }
+
     test("an UNEXPECTED failure is exit 1 through the command's own funnel, never a stack trace at the operator") {
         // The reachable trigger, and the reason the catch is not theatre: a path carrying a control character is
         // REFUSED by `hoconQuote` (a newline in a path is not something to be clever about), and that refusal is

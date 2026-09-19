@@ -76,6 +76,20 @@ object ManagedRootsFile {
             appendLine("    path = ${hoconQuote(requireNotNull(root.localPath) { "a managed root must be local-backed" }.toString())}")
             appendLine("    editable = ${root.editable}")
             appendLine("    history = ${root.history.name.lowercase()}")
+            root.displayName?.let { appendLine("    displayName = ${hoconQuote(it)}") }
+            root.includes?.let { includes ->
+                appendLine("    includes = [${includes.joinToString(", ") { hoconQuote(it) }}]")
+            }
+            if (root.excludes.isNotEmpty()) {
+                appendLine("    excludes = [${root.excludes.joinToString(", ") { hoconQuote(it) }}]")
+            }
+            if (root.folderLabels.isNotEmpty()) {
+                appendLine("    folderLabels {")
+                root.folderLabels.toSortedMap().forEach { (path, label) ->
+                    appendLine("      ${hoconQuote(path)} = ${hoconQuote(label)}")
+                }
+                appendLine("    }")
+            }
             appendLine("  }")
         }
         appendLine("}")

@@ -1,8 +1,10 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.StoreRead
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.IdMapRepository
@@ -32,14 +34,22 @@ import com.plainbase.domain.root.RootedPath
  * one by accident: the consumer matrix in C1 makes every arm end in "come back later" rather than in "it's gone",
  * and [AbsenceUnverified] is the carrier that says so on the wire.
  */
-class AbsenceClassifier(private val idMap: IdMapRepository) {
+class AbsenceClassifier(
+    private val idMap: IdMapRepository,
+    private val policies: Map<RootName, ContentPathPolicy>,
+) {
 
     /** The ONE rule, over a store read that has already happened. */
-    fun classify(target: RootedPath, read: StoreRead): ContentRead = when (read) {
-        is StoreRead.Bytes -> ContentRead.Bytes(read.bytes)
-        StoreRead.RootDown -> ContentRead.RootDown
-        StoreRead.NoBytes -> absenceAt(target)
-    }
+    fun classify(target: RootedPath, read: StoreRead): ContentRead =
+        if (!allowsFile(target)) {
+            ContentRead.ConfirmedAbsent
+        } else {
+            when (read) {
+                is StoreRead.Bytes -> ContentRead.Bytes(read.bytes)
+                StoreRead.RootDown -> ContentRead.RootDown
+                StoreRead.NoBytes -> absenceAt(target)
+            }
+        }
 
     /** Read [target] from [store] and classify it - the shape almost every consumer wants. */
     fun read(store: ContentStore, target: RootedPath): ContentRead = classify(target, store.readClassified(target.path))
@@ -51,7 +61,13 @@ class AbsenceClassifier(private val idMap: IdMapRepository) {
      * this is one classifier and not a rule copied into each caller.
      */
     fun absenceAt(target: RootedPath): ContentRead =
-        if (idMap.find(target) != null) ContentRead.AbsenceUnknown else ContentRead.ConfirmedAbsent
+        if (!allowsFile(target)) {
+            ContentRead.ConfirmedAbsent
+        } else if (idMap.find(target) != null) {
+            ContentRead.AbsenceUnknown
+        } else {
+            ContentRead.ConfirmedAbsent
+        }
 
     /**
      * **The gate every id-addressed surface owes, and the shape the 404 lie actually took.** A page MISSING FROM THE
@@ -75,8 +91,11 @@ class AbsenceClassifier(private val idMap: IdMapRepository) {
      */
     fun requireVerifiedAbsence(root: RootName, id: PageId, snapshot: PageIndex) {
         if (snapshot.pageAt(RootedPageId(root, id)) != null) return
-        if (root in idMap.rootsHoldingId(id)) throw AbsenceUnverified(root, id.value)
+        val binding = idMap.bindingInRoot(root, id) ?: return
+        if (allowsFile(binding.path)) throw AbsenceUnverified(root, id.value)
     }
+
+    private fun allowsFile(target: RootedPath): Boolean = policies.allowsFile(target)
 }
 
 /**

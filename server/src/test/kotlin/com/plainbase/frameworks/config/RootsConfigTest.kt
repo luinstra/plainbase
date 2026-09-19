@@ -92,6 +92,54 @@ class RootsConfigTest : FunSpec({
         }
     }
 
+    test("root presentation and membership settings parse with omission distinct from an empty include list") {
+        val nfdCafe = "cafe" + '\u0301'
+        withDataDir(
+            """
+            roots {
+              docs { path = "/roots/docs" }
+              project {
+                path = "/roots/project"
+                displayName = "  Plainbase 文档  "
+                includes = ["docs/**", "$nfdCafe/**"]
+                excludes = ["docs/private/**"]
+                folderLabels {
+                  ".crew" = "Planning"
+                  "$nfdCafe/guides" = "Guides"
+                }
+              }
+              empty { path = "/roots/empty", includes = [] }
+            }
+            """.trimIndent(),
+        ) { env ->
+            val roots = ConfigLoader.fromEnvAndFile(env).roots.list.associateBy { it.name.value }
+            roots.getValue("docs").includes shouldBe null
+            roots.getValue("empty").includes shouldBe emptyList()
+            roots.getValue("project").let { project ->
+                project.displayName shouldBe "Plainbase 文档"
+                project.includes shouldBe listOf("docs/**", "café/**")
+                project.excludes shouldBe listOf("docs/private/**")
+                project.folderLabels shouldBe mapOf(".crew" to "Planning", "café/guides" to "Guides")
+            }
+        }
+    }
+
+    test("invalid display text and root-relative glob shapes fail during config load") {
+        listOf(
+            "displayName = \"bad\\tlabel\"",
+            "displayName = \"   \"",
+            "includes = [\"\"]",
+            "includes = [\"/absolute/**\"]",
+            "includes = [\"parent/../escape/**\"]",
+            "includes = [\"trailing/\"]",
+            "includes = [\"bad\\\\path/**\"]",
+        ).forEach { setting ->
+            withDataDir("roots { docs { path = \"/roots/docs\", $setting } }") { env ->
+                shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
+            }
+        }
+    }
+
     // --- parse-time refusals (each names the offending entry) ---------------------------------------
 
     test("an invalid slug key fails naming the key and the rule") {

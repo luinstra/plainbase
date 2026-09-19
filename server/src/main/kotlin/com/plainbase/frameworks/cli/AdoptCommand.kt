@@ -22,6 +22,7 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
+import com.plainbase.frameworks.filesystem.contentPolicies
 import com.plainbase.frameworks.lifecycle.OfflineStoreResources
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.runtime.ContentRepositories
@@ -136,18 +137,28 @@ object AdoptCommand {
         resources: OfflineStoreResources,
     ): Int {
         val registry = RootRegistry.of(config.roots.list)
+        val ignoreRules = IgnoreRules()
+        val policies = contentPolicies(registry, config, ignoreRules)
         val database = DatabaseFactory.createDatabase(driver)
         val repositories = ContentRepositories(database)
         val rawPrimary = RootStoreFactory.primary(
             backend = config.storage.backend,
             local = {
-                operations.openLocal(offlineLocalStoreInputs(config, config.mainContentRoot(), registry.primary.name))
+                operations.openLocal(
+                    offlineLocalStoreInputs(
+                        config,
+                        registry.primary,
+                        ignoreRules,
+                        policies.getValue(registry.primary.name),
+                        config.mainContentRoot(),
+                    ),
+                )
             },
             objectStore = {
                 resources.ownObject(
                     operations.openObject(
                         config,
-                        IgnoreRules(),
+                        ignoreRules,
                         { repositories.dirtyPages.all().map { it.path.path }.toSet() },
                         { path -> repositories.dirtyPages.isDirty(RootedPath(RootName.PRIMARY, path)) },
                         // Offline commands have no proof source; an empty snapshot cannot authorize absence.
@@ -160,7 +171,8 @@ object AdoptCommand {
         val primary = decorate(registry.primary.name, rawPrimary)
         val stores = RootStoreFactory.roots(registry, primary) { root ->
             val path = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" }
-            decorate(root.name, operations.openLocal(offlineLocalStoreInputs(config, path, root.name)))
+            val inputs = offlineLocalStoreInputs(config, root, ignoreRules, policies.getValue(root.name), path)
+            decorate(root.name, operations.openLocal(inputs))
         }
         if (mode != AdoptionPass.Mode.PREVIEW) {
             // Mutating hydration runs after lock acquisition; PREVIEW never reaches this branch.
@@ -178,6 +190,7 @@ object AdoptCommand {
             citations = CitationFactory(),
             rootRank = registry::rank,
             registeredRoots = registry.roots.map { it.name }.toSet(),
+            policies = policies,
         )
         val qualified = registry.roots.size > 1
         // ONE global read-only plan across ALL roots, THEN the write (D19).

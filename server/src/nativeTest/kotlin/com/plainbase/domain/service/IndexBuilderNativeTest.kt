@@ -61,6 +61,7 @@ class IndexBuilderNativeTest {
                     citations = CitationFactory(),
                     rootRank = rootRegistry::rank,
                     registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
+                    policies = allowAllNativePolicies(rootRegistry.roots.map { it.name }),
                 )
 
                 val first = builder.rebuild()

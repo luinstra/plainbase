@@ -2,6 +2,7 @@
 
 package com.plainbase.frameworks.filesystem
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
@@ -147,14 +148,13 @@ class FileWatcher(
     },
     /** Keeps failed-construction cleanup tied to the raw service returned by [watchServiceFactory]. */
     private val closeWatchService: (WatchService) -> Unit = { it.close() },
+    private val policy: ContentPathPolicy = ContentPathPolicy.legacy(),
 ) : AutoCloseable {
 
     private val root: Path = root.toAbsolutePath().normalize()
 
     /** Only exclusions STRICTLY inside the root apply (see class doc): at-or-above-root ones can never receive app writes here. */
-    private val excludedDirs: List<Path> = excluded
-        .map { it.toAbsolutePath().normalize() }
-        .filter { it != this.root && it.startsWith(this.root) }
+    private val excludedDirs: List<Path> = effectiveExcludedDirectories(this.root, excluded)
 
     private val watchService = watchServiceFactory()
     private val keys = ConcurrentHashMap<WatchKey, Path>()
@@ -254,7 +254,10 @@ class FileWatcher(
                 object : SimpleFileVisitor<Path>() {
                     override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
                         if (isExcluded(dir)) return FileVisitResult.SKIP_SUBTREE
-                        if (dir != root && isIgnoredDir(dir)) return FileVisitResult.SKIP_SUBTREE
+                        val relative = TreePath.of(relativeOf(dir))
+                        if (isIgnoredDir(dir) || (dir != this@FileWatcher.root && (relative == null || !policy.mayTraverse(relative)))) {
+                            return FileVisitResult.SKIP_SUBTREE
+                        }
                         try {
                             keys[registerDirectory(dir, watchService)] = dir
                         } catch (e: IOException) {
@@ -464,12 +467,25 @@ class FileWatcher(
         val child = dir.resolve(event.context() as Path)
         if (isExcluded(child)) return
         val relative = relativeOf(child)
-        if (ignoreRules.isIgnored(child.fileName.toString(), relative)) return
-        if (event.kind() == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
+        val treePath = TreePath.of(relative) ?: return
+        val isDirectory = Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)
+        if (event.kind() == StandardWatchEventKinds.ENTRY_CREATE && isDirectory && policy.mayTraverse(treePath)) {
             registerSubtree(child) // a created directory is registered on sight (§B1)
         }
-        // TreePath.of NFC-normalizes (the boundary rule); a name it rejects cannot be content.
-        val treePath = TreePath.of(relative) ?: return
+        if (treePath.name == FOLDER_META_NAME) {
+            treePath.parent?.takeIf { policy.allowsMetadata(it) }?.let(onChange)
+            return
+        }
+        if (isDirectory) {
+            if (!policy.mayTraverse(treePath)) return
+        } else if (event.kind() != StandardWatchEventKinds.ENTRY_DELETE && !policy.allowsFile(treePath)) {
+            return
+        } else if (event.kind() == StandardWatchEventKinds.ENTRY_DELETE &&
+            !policy.allowsFile(treePath) && !policy.mayTraverse(treePath)
+        ) {
+            return
+        }
+        if (ignoreRules.isGlobIgnored(relative)) return
         onChange(treePath)
     }
 
@@ -482,7 +498,7 @@ class FileWatcher(
         return excludedDirs.any { normalized.startsWith(it) }
     }
 
-    private fun isIgnoredDir(dir: Path): Boolean = ignoreRules.isIgnored(dir.fileName.toString(), relativeOf(dir))
+    private fun isIgnoredDir(dir: Path): Boolean = dir != root && ignoreRules.isGlobIgnored(relativeOf(dir))
 
     companion object {
         private val logger = KotlinLogging.logger {}

@@ -221,6 +221,7 @@ internal class SearchRetirementWorld : AutoCloseable {
             aliasRegistry = state.aliases,
             availability = availability,
             historyHook = historyHook,
+            policies = allowAllPolicies(state.sourceRoots),
         )
 
     fun pageBytes(id: PageId, title: String, body: String): ByteArray = page(id, title, body).toByteArray()
@@ -346,6 +347,7 @@ internal class SearchRetirementWorld : AutoCloseable {
                     }
                     idMap.isRetiredUnbound(rooted)
                 },
+                allowAllPolicies(registry.roots.map { it.name }),
             )
             val frontmatterParser = FrontmatterReader()
             val citations = CitationFactory()
@@ -393,6 +395,7 @@ internal class SearchRetirementWorld : AutoCloseable {
                 retirements = retirements,
                 limbo = RootLimbo(),
                 epochs = epochs,
+                policies = allowAllPolicies(registry.roots.map { it.name }),
             )
             return State(
                 driver = driver,

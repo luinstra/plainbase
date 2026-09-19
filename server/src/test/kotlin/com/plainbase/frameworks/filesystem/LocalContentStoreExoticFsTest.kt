@@ -133,7 +133,7 @@ class LocalContentStoreExoticFsTest : FunSpec({
             val path = TreePath.require("cas.md")
             val initial = "original bytes\n".toByteArray()
 
-            store.write(path, initial) // exercises write()'s copy+delete fallback
+            store.writeMirror(path, initial) // exercises mirror write's copy+delete fallback
             Files.readAllBytes(root.resolve("cas.md")) shouldBe initial
             store.scan() // index the file so it is a CAS target
 

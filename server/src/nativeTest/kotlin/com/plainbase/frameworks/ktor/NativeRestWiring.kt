@@ -96,13 +96,15 @@ fun withRestServices(
             val idMap = SqlDelightIdMapRepository(database)
             SearchDb(data.resolve("search.db")).use { searchDb ->
                 val searchProvider = Fts5SearchProvider(searchDb)
+                val rootRegistry = RootRegistry.of(listOf(localRoot("docs", content)))
+                val policies = com.plainbase.domain.service.allowAllNativePolicies(rootRegistry.roots.map { it.name })
                 val searchIndexer = SearchIndexer(
                     searchProvider,
                     SectionSplitter(),
                     idMap::retiredUnboundIds,
                     idMap::isRetiredUnbound,
+                    policies,
                 )
-                val rootRegistry = RootRegistry.of(listOf(localRoot("docs", content)))
                 val availability = com.plainbase.domain.root.RootAvailability(Clock.System)
                 val limbo = RootLimbo()
                 val convergence = RootConvergence()
@@ -132,6 +134,7 @@ fun withRestServices(
                     limbo = limbo,
                     epochs = epochs,
                     bindings = bindings,
+                    policies = policies,
                 )
                 builder.rebuild()
                 val writeCitations = CitationFactory()
@@ -221,9 +224,14 @@ fun withRestServices(
                     ).upsert("proxy", subject, com.plainbase.domain.repository.Role.ADMIN, Clock.System.now())
                 }
                 val stores: (com.plainbase.domain.root.RootName) -> com.plainbase.domain.content.ContentStore = { store }
-                val resolver = com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry)
-                val absence = com.plainbase.domain.service.AbsenceClassifier(idMap)
-                val proposalBaseReader = IndexProposalBaseReader(indexBuilder = builder, stores = stores, absence = absence)
+                val resolver = com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry, policies)
+                val absence = com.plainbase.domain.service.AbsenceClassifier(idMap, policies)
+                val proposalBaseReader = IndexProposalBaseReader(
+                    indexBuilder = builder,
+                    stores = stores,
+                    absence = absence,
+                    policies = policies,
+                )
                 val proposalService = com.plainbase.domain.service.ProposalService(
                     repository = SqlDelightProposalRepository(database),
                     citations = CitationFactory(),
@@ -231,9 +239,15 @@ fun withRestServices(
                     proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
                     clock = Clock.System,
                     rootStatus = { root -> resolver.statusOf(root, availability.current()) },
+                    proposalEligibility = resolver::proposalEligible,
                 )
                 val pageService = PageService(builder, registry, CitationFactory())
-                val searchService = SearchService(provider = searchProvider, indexBuilder = builder, availability = availability)
+                val searchService = SearchService(
+                    provider = searchProvider,
+                    indexBuilder = builder,
+                    availability = availability,
+                    policies = policies,
+                )
                 val writePipeline = WritePipeline(
                     stores = stores,
                     indexBuilder = builder,
@@ -243,6 +257,7 @@ fun withRestServices(
                     idMap = idMap,
                     aliasRegistry = registry,
                     availability = availability,
+                    policies = policies,
                 )
                 val proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(
                     tokens = SqlDelightApiTokenRepository(database),
@@ -263,6 +278,7 @@ fun withRestServices(
                             identity = identity,
                             idProvider = identityProvider,
                             aliasRegistry = registry,
+                            policies = policies,
                         ),
                         pageService = pageService,
                         searchService = searchService,

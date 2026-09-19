@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.cli
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.page.PageId
@@ -306,6 +307,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
     private val searchIndexer = SearchIndexer(provider, SectionSplitter(), idMap::retiredUnboundIds, idMap::isRetiredUnbound)
 
     private val rootRegistry = RootRegistry.of(listOf(localRoot("docs", config.contentDir)))
+    private val policies = mapOf(RootName.PRIMARY to ContentPathPolicy.ALL)
 
     private val availability = RootAvailability(kotlin.time.Clock.System)
 
@@ -328,6 +330,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
             IndexBuilder.PublicationListener { snap, _ -> searchIndexer.sync(snap) },
         ),
         searchIndexer = searchIndexer,
+        policies = policies,
     )
 
     val pipeline = WritePipeline(
@@ -338,6 +341,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
         dirtyPages = dirtyPages,
         idMap = idMap,
         aliasRegistry = registry,
+        policies = policies,
         availability = availability,
         historyHook = WriteHistoryHook { _, _, _, _, _ -> null },
     )

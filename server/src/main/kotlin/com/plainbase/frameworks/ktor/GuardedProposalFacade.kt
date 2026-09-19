@@ -1,5 +1,7 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.content.ContentPathPolicy
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
@@ -29,6 +31,7 @@ import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.ProposalCommandResource
 import com.plainbase.domain.service.ProposalContentWriter
 import com.plainbase.domain.service.ProposalFacade
+import com.plainbase.domain.service.ProposalGuard
 import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.ProposalSummaryView
 import com.plainbase.domain.service.ProposalView
@@ -60,6 +63,9 @@ import com.plainbase.frameworks.protocol.WriteConflictReason
  *    matching `check*` mints its grant — a denied propose does no labeler lookup before the deny is audited+thrown.
  *  - `reject` -> `checkApprove` -> `proposalService.reject(approveGrant, …)` (the status transition only).
  *  - `list`/`get` -> `checkRead`.
+ *
+ * Proposal membership fails closed when a root policy is absent. Its durable row is retained unchanged and becomes
+ * visible again when the root is configured with a policy on a later boot.
  */
 class GuardedProposalFacade(
     private val policy: PolicyService,
@@ -76,6 +82,7 @@ class GuardedProposalFacade(
     private val availability: RootAvailability,
     /** The ONE owner of "is this absence a 404 or a 503?" (C1) - the same rule the read and write facades ask. */
     private val absence: AbsenceClassifier,
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) : ProposalFacade {
 
     override fun propose(principal: Principal, command: ProposeCommand): ProposeOutcome =
@@ -152,6 +159,9 @@ class GuardedProposalFacade(
         // `invalid_root`), so the gate always sees a real root - no unrooted arm.
         val grant = policy.checkCreate(principal, WriteClass.PageCreate, RootedResource(command.root, ProposalCommandResource.PROPOSE))
         requireAvailable(command.root)
+        if (!allowsTarget(RootedPath(command.root, command.targetPath))) {
+            return ProposeOutcome.InvalidRequest("target_path is excluded by the root content policy.")
+        }
         val (pageId, bakedBytes) = when (val pre = command.pageId) {
             null -> {
                 val minted = idProvider.next()
@@ -180,6 +190,8 @@ class GuardedProposalFacade(
 
     override fun reject(principal: Principal, id: ProposalId, comment: String?): RejectOutcome {
         val grant = policy.checkApprove(principal, ProposalCommandResource.approve(id))
+        val row = proposals.guardOf(id) ?: return RejectOutcome.NotFound
+        if (!allowsProposal(row)) return RejectOutcome.NotFound
         val approver = labeler.resolve(principal).let { ProposalApprover(it.issuer, it.externalId, it.label) }
         return proposals.reject(grant, id, approver, comment)
     }
@@ -201,6 +213,7 @@ class GuardedProposalFacade(
         // availability, below), and it introduces no status TOCTOU: the PENDING CAS in the service remains the single
         // point of truth, so a row that turns terminal after this read is still caught there.
         val row = proposals.guardOf(id) ?: return ApplyOutcome.NotFound
+        if (!allowsProposal(row)) return ApplyOutcome.NotFound
         if (row.status != ProposalStatus.PENDING) return ApplyOutcome.NotPending
         requireEditable(principal, row.root, ProposalCommandResource.apply(id))
         requireAvailable(row.root)
@@ -258,6 +271,7 @@ class GuardedProposalFacade(
         // CONFLICTED; answer 503. But a row that is NOT conflicted has no rebase to perform at all, so it answers
         // the documented 409 without the root having to be up.
         val row = proposals.guardOf(id) ?: return RebaseOutcome.NotFound
+        if (!allowsProposal(row)) return RebaseOutcome.NotFound
         if (row.status != ProposalStatus.CONFLICTED) return RebaseOutcome.NotConflicted
         requireAvailable(row.root)
         return proposals.rebase(grant, id)
@@ -307,13 +321,17 @@ class GuardedProposalFacade(
 
     override fun list(principal: Principal): List<ProposalSummaryView> {
         policy.checkRead(principal, ProposalCommandResource.LIST)
-        return proposals.list()
+        return proposals.list(::allowsProposal)
     }
 
     override fun get(principal: Principal, id: ProposalId): ProposalView? {
         policy.checkRead(principal, ProposalCommandResource.detail(id))
-        return proposals.get(id)
+        return proposals.get(id, ::allowsProposal)
     }
+
+    private fun allowsTarget(target: RootedPath): Boolean = policies.allowsFile(target)
+
+    private fun allowsProposal(row: ProposalGuard): Boolean = resolver.proposalEligible(row)
 
     private companion object {
         /** The single surgical frontmatter patcher (the `GuardedMutatingFacade` idiom) — splices ONLY the `id:` line. */

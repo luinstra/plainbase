@@ -12,6 +12,7 @@ import {
   nonLandingChildren,
   pageHref,
   primaryEntry,
+  rootLabel,
   rootOfLocation,
 } from "../lib/tree";
 import { ROOT_UNAVAILABLE } from "./ErrorView";
@@ -123,7 +124,7 @@ function RootSection({
           onOpenFoldersChange={onOpenFoldersChange}
         />
       ) : (
-        <RootUnavailableNotice root={entry.root} />
+        <RootUnavailableNotice entry={entry} />
       )}
     </section>
   );
@@ -132,11 +133,11 @@ function RootSection({
 /** The COMPACT renderer of the shared outage vocabulary ([ROOT_UNAVAILABLE]): the full-page
  *  `RootUnavailableView` is a centered `<h1>` block, which is wrong markup and worse layout inside a
  *  nav. Same words, nav-sized. */
-function RootUnavailableNotice({ root }: { root: string }) {
+function RootUnavailableNotice({ entry }: { entry: RootTree }) {
   return (
-    <div className="px-4 py-5 text-sm" data-pb-root-section-unavailable={root}>
+    <div className="px-4 py-5 text-sm" data-pb-root-section-unavailable={entry.root}>
       <p className="text-xs font-semibold uppercase tracking-wide text-faint">{ROOT_UNAVAILABLE.eyebrow}</p>
-      <p className="mt-1 font-medium text-ink">{ROOT_UNAVAILABLE.headline(root)}</p>
+      <p className="mt-1 font-medium text-ink">{ROOT_UNAVAILABLE.headline(rootLabel(entry))}</p>
       <p className="mt-1 text-xs text-muted">{ROOT_UNAVAILABLE.body}</p>
     </div>
   );

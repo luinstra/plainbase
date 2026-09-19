@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.runtime
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
@@ -10,6 +11,7 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.filesystem.contentPolicies
 import com.plainbase.frameworks.git.GitRepoLocks
 import com.plainbase.frameworks.lifecycle.GitMaintenanceTasks
 import java.nio.file.Path
@@ -30,6 +32,7 @@ internal data class RootBootInputs(
     val signals: BootRootSignals,
     val history: RootHistorySelection,
     val probes: Map<RootName, RootBootProbe>,
+    val policies: Map<RootName, ContentPathPolicy>,
 )
 
 /** The server's pre-lock LOCAL constructor path; the counter intentionally counts the primary only. */
@@ -44,17 +47,42 @@ internal fun prepareRootBootInputs(
     val ignoreRules = IgnoreRules()
     val availability = RootAvailability(Clock.System)
     val signals = BootRootSignals()
+    val policies = contentPolicies(registry, config, ignoreRules)
     val localStores = buildMap {
         val primary = registry.primary
         if (config.storage.backend != StorageBackend.OBJECT) {
             primary.localPath?.let { localPath ->
                 contentDirStoreConstructions.incrementAndGet()
-                put(primary.name, openPreparedLocal(primary, localPath, config, ignoreRules, availability, signals, openLocal))
+                put(
+                    primary.name,
+                    openPreparedLocal(
+                        primary,
+                        localPath,
+                        config,
+                        ignoreRules,
+                        availability,
+                        signals,
+                        policies.getValue(primary.name),
+                        openLocal,
+                    ),
+                )
             }
         }
         registry.extras.forEach { root ->
             root.localPath?.let { localPath ->
-                put(root.name, openPreparedLocal(root, localPath, config, ignoreRules, availability, signals, openLocal))
+                put(
+                    root.name,
+                    openPreparedLocal(
+                        root,
+                        localPath,
+                        config,
+                        ignoreRules,
+                        availability,
+                        signals,
+                        policies.getValue(root.name),
+                        openLocal,
+                    ),
+                )
             }
         }
     }
@@ -95,7 +123,7 @@ internal fun prepareRootBootInputs(
         put(primary.name, primaryProbe)
         putAll(extraProbes)
     }
-    return RootBootInputs(registry, ignoreRules, availability, localStores, signals, history, probes)
+    return RootBootInputs(registry, ignoreRules, availability, localStores, signals, history, probes, policies)
 }
 
 private fun requirePreparedLocalStores(
@@ -118,6 +146,7 @@ private fun openPreparedLocal(
     ignoreRules: IgnoreRules,
     availability: RootAvailability,
     signals: BootRootSignals,
+    policy: ContentPathPolicy,
     openLocal: (LocalStoreInputs) -> LocalContentStore,
 ): LocalContentStore = openLocal(
     LocalStoreInputs(
@@ -127,6 +156,7 @@ private fun openPreparedLocal(
         rootName = root.name,
         onRootUnavailable = { availability.markUnavailable(root.name, UnavailableCause.VANISHED) },
         onIdentityRebind = { signals.broke(root.name, BreakCause.IDENTITY_REBIND) },
+        policy = policy,
     ),
 )
 

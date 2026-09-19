@@ -624,9 +624,9 @@ class GitBundleDr(
      * on [GitState.UNREADABLE], which aborts the boot before reaching here). Belt-and-suspenders (review
      * fold): renames it ASIDE to a dot-prefixed `.git.pre-restore-<epoch-millis>-<uuid>` sibling rather
      * than an irreversible [deleteRecursively], so an operator has a last-ditch recovery window if this
-     * self-heal path ever fires against a mirror that was not actually incomplete. Dot-prefixed, so
-     * [com.plainbase.frameworks.filesystem.IgnoreRules] excludes it from every content scan the same way
-     * it already excludes `.git` itself. Falls back to an outright delete only if the rename itself fails
+     * self-heal path ever fires against a mirror that was not actually incomplete. Dot-prefixed, so the local
+     * [com.plainbase.domain.content.ContentPathPolicy] excludes it from content scans like other hidden paths.
+     * Falls back to an outright delete only if the rename itself fails
      * (e.g. cross-device or permission trouble) - never leaves the incomplete `.git` in place to keep
      * being misread as complete-ish debris.
      *

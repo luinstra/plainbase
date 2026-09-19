@@ -14,6 +14,7 @@ import { RootBadge } from "./RootBadge";
 export function SearchResultItem({
   hit,
   showRoot,
+  rootLabel,
   id,
   active,
   onActivate,
@@ -21,6 +22,7 @@ export function SearchResultItem({
 }: {
   hit: SearchHit;
   showRoot?: boolean;
+  rootLabel?: string;
   id: string;
   active: boolean;
   onActivate: () => void;
@@ -44,7 +46,7 @@ export function SearchResultItem({
     >
       <div className="flex items-baseline gap-2">
         <span className="font-medium text-ink">{hit.title}</span>
-        {showRoot && <RootBadge root={hit.root} />}
+        {showRoot && <RootBadge root={hit.root} label={rootLabel} />}
         {breadcrumb && <span className="truncate font-mono text-xs text-muted">{breadcrumb}</span>}
       </div>
       <p className="mt-0.5 text-sm text-muted" data-pb-search-snippet>
