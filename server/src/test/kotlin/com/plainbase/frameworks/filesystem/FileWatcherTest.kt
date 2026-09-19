@@ -24,6 +24,7 @@ import java.nio.file.ClosedWatchServiceException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardWatchEventKinds
 import java.nio.file.WatchService
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -225,6 +226,105 @@ class FileWatcherTest : FunSpec({
 
             pathsSeen(seen, ".crew/reviews").shouldBeEmpty()
             pathsSeen(seen, "outside").shouldBeEmpty()
+        }
+    }
+
+    test("bounded wildcard registration keeps only the root and admitted subtrees") {
+        withTempTree(seed = { root ->
+            writePage(root, "README.md", "# Readme\n")
+            writePage(root, "docs/page.md", "# Page\n")
+            writePage(root, ".crew/plan.md", "# Plan\n")
+            Files.createDirectories(root.resolve("node_modules/pkg"))
+            writePage(root, "node_modules/pkg/ignored.md", "# Ignored\n")
+        }) { root ->
+            val rootConfig = localRoot("docs", root).copy(
+                includes = listOf("*.md", "docs/**", ".crew/**"),
+            )
+            val membership = localContentPathPolicy(rootConfig, root, IgnoreRules(), emptyList())
+            val registrations = ConcurrentLinkedQueue<String>()
+            val rootSeen = CountDownLatch(1)
+            val docsSeen = CountDownLatch(1)
+
+            FileWatcher(
+                root = root,
+                ignoreRules = IgnoreRules(),
+                excluded = emptyList(),
+                onChange = { path ->
+                    when (path.value) {
+                        "README.md" -> rootSeen.countDown()
+                        "docs/page.md" -> docsSeen.countDown()
+                    }
+                },
+                registerDirectory = { directory, service ->
+                    registrations += root.relativize(directory).joinToString("/")
+                    directory.register(
+                        service,
+                        StandardWatchEventKinds.ENTRY_CREATE,
+                        StandardWatchEventKinds.ENTRY_DELETE,
+                        StandardWatchEventKinds.ENTRY_MODIFY,
+                    )
+                },
+                policy = membership,
+            ).use {
+                registrations.toList().sorted() shouldBe listOf("", ".crew", "docs")
+
+                writePage(root, "README.md", "# Readme, edited\n")
+                writePage(root, "docs/page.md", "# Page, edited\n")
+                rootSeen.await(90, TimeUnit.SECONDS).shouldBeTrue()
+                docsSeen.await(90, TimeUnit.SECONDS).shouldBeTrue()
+            }
+        }
+    }
+
+    test("bounded wildcard registers new depth-one directories but not depth-two directories") {
+        withTempTree(seed = { root ->
+            Files.createDirectories(root.resolve("a/sub"))
+            writePage(root, "a/README.md", "# A\n")
+        }) { root ->
+            val rootConfig = localRoot("docs", root).copy(includes = listOf("*/README.md"))
+            val membership = localContentPathPolicy(rootConfig, root, IgnoreRules(), emptyList())
+            val staged = Files.createTempDirectory("pb-watch-bounded-stage")
+            try {
+                writePage(staged, "b/sub/README.md", "# B\n")
+                val registrations = ConcurrentLinkedQueue<String>()
+                val aEditSeen = CountDownLatch(1)
+                val bCreatedSeen = CountDownLatch(1)
+
+                FileWatcher(
+                    root = root,
+                    ignoreRules = IgnoreRules(),
+                    excluded = emptyList(),
+                    onChange = { path ->
+                        when (path.value) {
+                            "a/README.md" -> aEditSeen.countDown()
+                            "b" -> bCreatedSeen.countDown()
+                        }
+                    },
+                    registerDirectory = { directory, service ->
+                        registrations += root.relativize(directory).joinToString("/")
+                        directory.register(
+                            service,
+                            StandardWatchEventKinds.ENTRY_CREATE,
+                            StandardWatchEventKinds.ENTRY_DELETE,
+                            StandardWatchEventKinds.ENTRY_MODIFY,
+                        )
+                    },
+                    policy = membership,
+                ).use {
+                    // Seed a/sub before startup so the initial registration assertion proves the bound.
+                    registrations.toList().sorted() shouldBe listOf("", "a")
+
+                    writePage(root, "a/README.md", "# A, observed\n")
+                    aEditSeen.await(90, TimeUnit.SECONDS).shouldBeTrue()
+
+                    // deliver() registers b's admitted subtree before publishing the b callback.
+                    Files.move(staged.resolve("b"), root.resolve("b"), StandardCopyOption.ATOMIC_MOVE)
+                    bCreatedSeen.await(90, TimeUnit.SECONDS).shouldBeTrue()
+                    registrations.toList().sorted() shouldBe listOf("", "a", "b")
+                }
+            } finally {
+                staged.toFile().deleteRecursively()
+            }
         }
     }
 
