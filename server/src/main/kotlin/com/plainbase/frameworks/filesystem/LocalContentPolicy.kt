@@ -49,6 +49,7 @@ internal fun localContentPathPolicy(
     val includePatterns = rootConfig.includes?.map(::compileGlob).orEmpty()
     val excludePatterns = rootConfig.excludes.map(::compileGlob)
     val includePrefixes = rootConfig.includes?.map(::literalPrefix).orEmpty()
+    val includeTraversals = rootConfig.includes?.map(::compileIncludeTraversal).orEmpty()
     val excludePrefixes = rootConfig.excludes
         .mapNotNull(::terminalLiteralDirectoryPrefix)
     val rootNormalized = root.toAbsolutePath().normalize()
@@ -72,8 +73,9 @@ internal fun localContentPathPolicy(
         if (pathUnderSegments(path, excludePrefixes)) return false
         if (rootConfig.includes == null) return true
         if (rootConfig.includes.isEmpty()) return false
-        return includePrefixes.any { prefix ->
-            prefix.isEmpty() || path.segments.hasPrefix(prefix) || prefix.hasPrefix(path.segments)
+        return includeTraversals.any { include ->
+            (include.maximumPathDepth == null || path.segments.size < include.maximumPathDepth) &&
+                (include.prefix.isEmpty() || path.segments.hasPrefix(include.prefix) || include.prefix.hasPrefix(path.segments))
         }
     }
 
@@ -115,6 +117,19 @@ private fun bestEffortCanonical(path: Path): Path {
 
 private fun compileGlob(pattern: String): PathMatcher =
     FileSystems.getDefault().getPathMatcher("glob:$pattern")
+
+private data class IncludeTraversal(
+    val prefix: List<String>,
+    val maximumPathDepth: Int?,
+)
+
+private fun compileIncludeTraversal(pattern: String): IncludeTraversal {
+    val normalizedPattern = Nfc.normalize(pattern)
+    return IncludeTraversal(
+        prefix = literalPrefix(normalizedPattern),
+        maximumPathDepth = if ("**" in normalizedPattern) null else normalizedPattern.count { it == '/' } + 1,
+    )
+}
 
 private fun structurallyAllowed(
     path: TreePath,

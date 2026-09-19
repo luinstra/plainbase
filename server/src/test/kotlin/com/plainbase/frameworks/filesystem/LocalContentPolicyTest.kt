@@ -18,6 +18,7 @@ import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.runtime.LocalStoreInputs
 import com.plainbase.frameworks.runtime.RootStoreFactory
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.nulls.shouldBeNull
@@ -26,9 +27,11 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.types.shouldBeSameInstanceAs
 import java.io.IOException
+import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.util.regex.PatternSyntaxException
 
 class LocalContentPolicyTest : FunSpec({
     fun policy(
@@ -77,6 +80,68 @@ class LocalContentPolicyTest : FunSpec({
         policy.mayTraverse(TreePath.require("secret")) shouldBe false
         policy.allowsFile(TreePath.require("secret")) shouldBe true
         policy.allowsFile(TreePath.require("secret/page.md")) shouldBe false
+    }
+
+    test("a non-recursive include prunes child-directory traversal while retaining root files") {
+        val policy = policy(includes = listOf("*.md"))
+
+        policy.mayTraverse(TreePath.require("docs")) shouldBe false
+        policy.allowsFile(TreePath.require("README.md")) shouldBe true
+        policy.allowsFile(TreePath.require("docs/page.md")) shouldBe false
+    }
+
+    test("bounded includes keep JDK file matching and only their needed ancestors") {
+        data class Case(
+            val includes: List<String>,
+            val files: List<String>,
+            val keptParents: List<String>,
+            val prunedParents: List<String>,
+        )
+
+        val cases = listOf(
+            Case(listOf("{*.md,*.txt}"), listOf("README.md", "notes.txt", "docs/page.md"), emptyList(), listOf("docs")),
+            Case(listOf("docs/*.md"), listOf("docs/page.md", "docs/sub/page.md"), listOf("docs"), listOf("docs/sub")),
+            Case(listOf("docs/?.md"), listOf("docs/a.md", "docs/ab.md", "docs/sub/a.md"), listOf("docs"), listOf("docs/sub")),
+            Case(listOf("docs/[!x].md"), listOf("docs/a.md", "docs/x.md", "docs/sub/a.md"), listOf("docs"), listOf("docs/sub")),
+            Case(listOf("*/README.md"), listOf("a/README.md", "a/sub/README.md"), listOf("a"), listOf("a/sub")),
+            Case(listOf("docs/README.md"), listOf("docs/README.md", "docs/sub/README.md"), listOf("docs"), listOf("docs/README.md")),
+            Case(listOf("{a/b,c}/page.md"), listOf("a/b/page.md", "c/page.md"), listOf("a", "a/b", "c"), listOf("a/b/deep")),
+            Case(
+                listOf("foo**bar/*.md"),
+                listOf("fooXbar/page.md", "fooXbar/deep/page.md"),
+                listOf("fooXbar", "fooXbar/deep"),
+                emptyList(),
+            ),
+        )
+
+        cases.forEach { case ->
+            val policy = policy(includes = case.includes)
+            case.keptParents.forEach { parent ->
+                policy.mayTraverse(TreePath.require(parent)) shouldBe true
+            }
+            case.prunedParents.forEach { parent ->
+                policy.mayTraverse(TreePath.require(parent)) shouldBe false
+            }
+            val matchers = case.includes.map { pattern ->
+                FileSystems.getDefault().getPathMatcher("glob:$pattern")
+            }
+            case.files.forEach { file ->
+                policy.allowsFile(TreePath.require(file)) shouldBe matchers.any { it.matches(Path.of(file)) }
+            }
+        }
+
+        shouldThrow<PatternSyntaxException> {
+            FileSystems.getDefault().getPathMatcher("glob:docs/[a/b].md")
+        }
+    }
+
+    test("degenerate admitted globs retain their existing prefix semantics") {
+        val doubleSlash = policy(includes = listOf("docs//*.md"))
+        doubleSlash.mayTraverse(TreePath.require("docs")) shouldBe true
+        doubleSlash.mayTraverse(TreePath.require("docs/sub")) shouldBe false
+
+        val dotSlash = policy(includes = listOf("./*.md"))
+        dotSlash.mayTraverse(TreePath.require("docs")) shouldBe false
     }
 
     test("hidden authorization requires the full literal prefix through the hidden segment") {

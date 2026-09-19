@@ -180,6 +180,10 @@ JDK glob matching is whole-path matching: `**/*.md` matches nested Markdown but 
 both shapes when both are intended. Dot-prefixed entries remain hidden unless an include contains the literal
 dot-prefixed prefix (for example `.crew/**`; `**/*.md` does not authorize `.crew`). Internally supplied legacy ignore
 rules remain additive; there is no live `content.ignore` configuration key in this release.
+Traversal is bounded for non-recursive includes: `*.md` and `docs/*.md` prune directories deeper than the matching
+file depth from scans, watches, listings and the sidebar, while any pattern containing `**` retains conservative
+traversal. Brace alternatives mixing `**` with bounded patterns may traverse more broadly; prefer separate includes
+such as `["*.md", "docs/**"]` over `["{*.md,docs/**}"]` when pruning matters. Actual file matching is unchanged.
 `_folder.yaml` is metadata only and is read for an admitted folder. The configuration is restart-only.
 Quote `folderLabels` keys that contain dots (for example, `folderLabels { "v1.2" = "Version 1.2" }`);
 unquoted dots are HOCON path separators rather than part of one folder key.

@@ -29,4 +29,24 @@ class LocalContentPolicyNativeTest {
         assertTrue(policy.allowsFile(TreePath.require("nested/readme.md")))
         assertFalse(policy.allowsFile(TreePath.require("readme.md")))
     }
+
+    @Test
+    fun `bounded traversal keeps an eligible parent but prunes beyond the file boundary`() {
+        val rootPath = Path.of("/content")
+        val root = Root(
+            name = RootName.PRIMARY,
+            backend = RootBackend.Local(rootPath),
+            editable = true,
+            history = HistoryMode.OFF,
+            includes = listOf("docs/*.md", "*/README.md"),
+        )
+        val policy = localContentPathPolicy(root, rootPath, IgnoreRules(), emptyList())
+
+        assertTrue(policy.mayTraverse(TreePath.require("docs")))
+        assertFalse(policy.mayTraverse(TreePath.require("docs/sub")))
+        assertTrue(policy.allowsFile(TreePath.require("docs/page.md")))
+        assertTrue(policy.mayTraverse(TreePath.require("guide")))
+        assertFalse(policy.mayTraverse(TreePath.require("guide/sub")))
+        assertTrue(policy.allowsFile(TreePath.require("guide/README.md")))
+    }
 }

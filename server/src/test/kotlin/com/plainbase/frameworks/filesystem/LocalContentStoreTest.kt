@@ -11,6 +11,7 @@ import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.service.writePage
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -212,6 +213,44 @@ class LocalContentStoreTest : FunSpec({
             val result = LocalContentStore(tmp, ignoreRules = ignoreRules, policy = policy).scan()
 
             result.files.map { it.path.value }.toSet() shouldBe setOf("docs/page.md", "docs/diagram.svg", ".crew/plan.md")
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    test("bounded configured membership scans and lists only admitted subtrees") {
+        val tmp = Files.createTempDirectory("pb-bounded-policy")
+        try {
+            writePage(tmp, "README.md", "# Readme\n")
+            writePage(tmp, "docs/page.md", "# Page\n")
+            writePage(tmp, ".crew/plan.md", "# Plan\n")
+            Files.createDirectories(tmp.resolve("node_modules/pkg"))
+            writePage(tmp, "node_modules/pkg/ignored.md", "# Ignored\n")
+            val root = Root(
+                name = RootName.PRIMARY,
+                backend = RootBackend.Local(tmp),
+                editable = true,
+                history = HistoryMode.OFF,
+                includes = listOf("*.md", "docs/**", ".crew/**"),
+            )
+            val policy = localContentPathPolicy(root, tmp, IgnoreRules(), emptyList())
+            val store = LocalContentStore(tmp, policy = policy)
+            val result = store.scan()
+
+            result.files.map { it.path.value }.toSet() shouldBe setOf("README.md", "docs/page.md", ".crew/plan.md")
+            result.folders.map { it.path.value }.toSet() shouldBe setOf("docs", ".crew")
+            store.list(null).map { it.path.value }.toSet() shouldBe setOf("README.md", "docs", ".crew")
+            store.list(TreePath.require("docs")).map { it.path.value } shouldBe listOf("docs/page.md")
+
+            val boundaryRoot = root.copy(includes = listOf("*/README.md"))
+            val boundaryPolicy = localContentPathPolicy(boundaryRoot, tmp, IgnoreRules(), emptyList())
+            val boundaryStore = LocalContentStore(tmp, policy = boundaryPolicy)
+            boundaryStore.scan()
+            val boundaryFile = TreePath.require("a/README.md")
+            writePage(tmp, boundaryFile.value, "# Boundary\n")
+            boundaryStore.scan()
+            boundaryStore.stat(boundaryFile).shouldNotBeNull()
+            boundaryStore.list(TreePath.require("a")).map { it.path.value } shouldBe listOf("a/README.md")
         } finally {
             tmp.toFile().deleteRecursively()
         }

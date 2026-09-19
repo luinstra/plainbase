@@ -7,6 +7,7 @@ import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.nio.file.Files
@@ -98,6 +99,35 @@ class CreateGatesTest : FunSpec({
             store.createExclusive(TreePath.require("a/page.md"), "# body\n".toByteArray(), hasher)
                 .shouldBeInstanceOf<CreateResult.Rejected>()
             Files.readString(root.resolve("a")) shouldBe "a file, not a dir" // untouched
+        }
+    }
+
+    test("a bounded include rejects directory access beyond its root-file boundary") {
+        withRoot { rootPath ->
+            val root = Root(
+                name = RootName.PRIMARY,
+                backend = RootBackend.Local(rootPath),
+                editable = true,
+                history = HistoryMode.OFF,
+                includes = listOf("*.md"),
+            )
+            val policy = localContentPathPolicy(root, rootPath, IgnoreRules(), emptyList())
+            val store = LocalContentStore(rootPath, policy = policy).also { it.scan() }
+
+            store.gates.accessRejectionReason(
+                TreePath.require("new"),
+                rootPath.resolve("new"),
+                isDirectory = true,
+            ).shouldNotBeNull()
+
+            // PIN: the leaf matcher already rejected this path before bounded traversal was added.
+            store.createExclusive(TreePath.require("new/sub/page.md"), "# No\n".toByteArray(), hasher)
+                .shouldBeInstanceOf<CreateResult.Rejected>()
+            Files.exists(rootPath.resolve("new")) shouldBe false
+
+            store.createExclusive(TreePath.require("README.md"), "# Readme\n".toByteArray(), hasher)
+                .shouldBeInstanceOf<CreateResult.Created>()
+            Files.exists(rootPath.resolve("README.md")) shouldBe true
         }
     }
 })
