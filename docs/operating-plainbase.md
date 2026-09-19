@@ -606,17 +606,18 @@ There is no on-demand forced-hydrate admin action today. Restore recipes reflect
   (`rclone copy backup/ <remote>:<bucket>/<prefix>` or `aws s3 sync backup/ s3://<bucket>/<prefix>/
   --endpoint-url <endpoint>`), then EITHER **restart the server** (boot `hydrate()` pulls the restored
   keys) OR **wait up to `PLAINBASE_S3_POLL_SECONDS`** for the background poll to fetch the changed keys.
-  Do NOT expect `rescan` to surface the restored content. _Rehearsed for real: 2026-07-29 against
-  Cloudflare R2 (1000-page corpus). The full chain held: the restored page 404'd before the drop,
+  Do NOT expect `rescan` to surface the restored content. _Rehearsed for real: 2026-09-19 against
+  Cloudflare R2 in an isolated two-page test prefix. The restored page 404'd before the copy,
   `rescan` answered 200 while the page stayed 404 (proving rescan never reads the bucket), and a
-  restart served it._
+  restart served it with byte-identical content._
 - **Bundle history restore (required drill, `git.enabled=true` only).** Wipe `DATA_DIR`, boot, and
   verify `git -C <DATA_DIR>/mirror log` shows history up to the last shipped bundle plus exactly one
   `reconcile: bucket state at boot` commit for the divergence (the mechanism documented under
   [Object-storage backend](#object-storage-backend-storagebackendobject) above). _Rehearsed for real:
-  2026-07-29 against Cloudflare R2. After a full `DATA_DIR` loss the recovery boot (which pauses
-  visibly for the synchronous DR-bundle re-ship) restored the pre-loss history plus exactly one
-  reconcile commit, and the edited page's content survived byte-for-byte._
+  2026-09-19 against Cloudflare R2 in an isolated test prefix. An API edit shipped a valid bundle;
+  after an out-of-band bucket edit, a fresh `DATA_DIR` recovered the prior history plus exactly one
+  reconcile commit. The bucket content survived byte-for-byte, and the re-shipped bundle contained
+  the recovered HEAD before shutdown._
 - **Versioned-S3 per-object restore (BONUS tier, documented, never drilled).** On a versioning-enabled
   S3 bucket, `aws s3api list-object-versions` then copy a prior `versionId` over the current key; then
   restart or wait for the poll (same surfacing rule - not `rescan`). Versioned-S3 deployments only; R2

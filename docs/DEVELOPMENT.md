@@ -114,8 +114,8 @@ gate a *release* that ships (or touches) the object-storage backend.
 1. **Credentialed `plainbase s3-smoke` from the NATIVE binary, per release platform** (R2 primary; S3
    compat when creds exist), certificate validation ON (the command has no insecure flag). Record green
    runs in the deploy guide's [platform table](deploy/object-storage.md#platform-support-honestly).
-   Current honest state: macos-arm64 PROVEN 2026-07-06, re-proven 2026-07-29 after the Content-Type
-   emission regression the second run caught (see the platform table); linux-x64 credential-free TLS+SigV4
+   Current honest state: macos-arm64 most recently PROVEN 2026-09-19 for v0.3.0
+   (see the platform table for earlier runs); linux-x64 credential-free TLS+SigV4
    spike banked in CI; the linux-x64 **real-R2** credentialed smoke is a documented nice-to-have
    (owner-deferred, run when convenient, **NOT a release blocker**); linux-arm64 is docs-only until
    proven.
@@ -131,6 +131,9 @@ gate a *release* that ships (or touches) the object-storage backend.
    on cloud startup budgets anywhere - the CI native-startup tripwire covers the local backend only.
    Seed the corpus per the recipe in the script header (no ~1k fixture is checked in). `PLAINBASE_BUDGET_OBJECT_COUNT`
    is the credential-free escape for the corpus-floor preflight (asserts the seeded count without a bucket round-trip).
+   Latest rehearsal: 2026-09-19, macos-arm64 native binary against R2 with 1000 content objects:
+   cold median **9.160 s** (3 runs), warm median **1.571 s** (5 runs). Every cold run fetched all
+   1000 objects; warm runs fetched none; all runs reported zero unhealed objects.
 3. **The two required DR drills**, if the release touched storage / git / DR code paths: content restore
    and bundle-history restore (recipes in
    [operating-plainbase.md](operating-plainbase.md#object-mode-dr-drills-operator-recipes)). Rehearse

@@ -135,7 +135,7 @@ green credentialed `plainbase s3-smoke` from the native binary, cert validation 
 
 | Platform | Status |
 |---|---|
-| macos-arm64 | **PROVEN** 2026-07-06 and re-proven 2026-07-29 - real R2, full TLS handshake + signed round-trip, cert validation on (macOS trust store). Both records are true: a header-emission regression landed between them (`063018c`, 2026-07-09) and the 07-29 run - the first credentialed smoke since - caught and fixed it, so the re-proof is load-bearing, not ceremonial. |
+| macos-arm64 | **PROVEN**, most recently 2026-09-19 for v0.3.0 - real R2, full native `s3-smoke`, certificate validation on, conditional writes, hostile-key LIST/GET round-trips, pagination, and verified cleanup. Earlier runs: 2026-07-06 and 2026-07-29; the latter caught and fixed a header-emission regression introduced in `063018c`. |
 | linux-x64 | TLS + SigV4 **proven credential-free in CI** (the `plainbase spike` 9/9 self-signed-loopback check runs on every PR). The real system-CA-trust-against-R2-under-Linux leg is a documented nice-to-have (owner-deferred 2026-07-07), NOT release-gating. |
 | linux-arm64 | Docs-only until a green native s3-smoke is recorded. |
 
