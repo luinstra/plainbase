@@ -110,6 +110,29 @@ class ForceRetireCommandTest : FunSpec({
         }
     }
 
+    test("a policy-hidden live binding can be force-retired") {
+        withConfig { config ->
+            val hiddenConfig = config.copy(
+                roots = RootsConfig.of(
+                    list = listOf(config.roots.list.single().copy(includes = listOf("public/**"))),
+                    origin = RootsOrigin.EXPLICIT,
+                ),
+            )
+            seedBinding(hiddenConfig, "private/hidden.md")
+
+            val out = CommandOutputFixture()
+            AdminCommand.run(listOf("force-retire", "docs", id), hiddenConfig, out.output) shouldBe 0
+            out.stdout shouldContain "force-retired"
+
+            DatabaseFactory.createDriver(hiddenConfig.appDatabasePath).use { driver ->
+                val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
+                repo.bindingInRoot(RootName.PRIMARY, PageId.require(id)).shouldBeNull()
+                repo.retiredAt(RootName.PRIMARY, PageId.require(id)).shouldNotBeNull().path shouldBe
+                    RootedPath(RootName.PRIMARY, TreePath.require("private/hidden.md"))
+            }
+        }
+    }
+
     test("a same-id re-bind before the binding lookup refuses retirement and leaves the binding live") {
         withConfig { config ->
             val bindingPath = RootedPath(RootName.PRIMARY, TreePath.require("guides/a.md"))

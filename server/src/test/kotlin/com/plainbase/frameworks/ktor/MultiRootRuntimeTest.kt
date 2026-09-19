@@ -105,6 +105,21 @@ class MultiRootRuntimeTest : FunSpec({
         }
     }
 
+    test("tree display names are optional labels and never replace root url segments") {
+        twoRoots { main, extra ->
+            val labeledExtra = testRoot("extra", extra).copy(displayName = "Team Notes")
+            multiRootTest(listOf(testRoot("docs", main), labeledExtra)) { _ ->
+                val roots = treeRoots().map { it.jsonObject }
+                val docs = roots.single { it.getValue("root").jsonPrimitive.content == "docs" }
+                val notes = roots.single { it.getValue("root").jsonPrimitive.content == "extra" }
+
+                docs.containsKey("displayName") shouldBe false
+                notes.getValue("displayName").jsonPrimitive.content shouldBe "Team Notes"
+                notes.getValue("tree").jsonObject.getValue("url").jsonPrimitive.content shouldBe "/extra"
+            }
+        }
+    }
+
     // ---- the mid-run vanish: skip, carry, mark - and DELETE NOTHING -------------------------------
 
     test("an extra root vanishing mid-run is marked, its section is CARRIED, and no durable row is deleted for it") {

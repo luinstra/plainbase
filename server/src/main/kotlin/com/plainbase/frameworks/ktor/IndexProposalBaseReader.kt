@@ -1,7 +1,9 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
@@ -34,15 +36,22 @@ class IndexProposalBaseReader(
     private val indexBuilder: IndexBuilder,
     private val stores: (RootName) -> ContentStore,
     private val absence: AbsenceClassifier,
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) : ProposalBaseReader {
 
     override fun pathOf(root: RootName, pageId: PageId): RootedPath? =
-        indexBuilder.current.pageAt(RootedPageId(root, pageId))?.let { RootedPath(it.root, it.path) }
+        indexBuilder.current.pageAt(RootedPageId(root, pageId))
+            ?.takeIf { allowsFile(RootedPath(it.root, it.path)) }
+            ?.let { RootedPath(it.root, it.path) }
 
-    override fun currentBytes(target: RootedPath): ContentRead = absence.read(stores(target.root), target)
+    override fun currentBytes(target: RootedPath): ContentRead =
+        if (allowsFile(target)) absence.read(stores(target.root), target) else ContentRead.ConfirmedAbsent
 
     override fun occupied(target: RootedPath): Boolean {
+        if (!allowsFile(target)) return false
         val snapshot = indexBuilder.current
         return target in snapshot.byPath || target.path in snapshot.section(target.root).assets
     }
+
+    private fun allowsFile(target: RootedPath): Boolean = policies.allowsFile(target)
 }

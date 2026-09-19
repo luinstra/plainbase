@@ -113,7 +113,13 @@ private fun measure(slices: List<Pair<String, IntRange>>): Metrics = withSeededT
     }
     withProvider { provider, _ ->
         lateinit var authority: IdMapRepository
-        val indexer = SearchIndexer(provider, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
+        val indexer = SearchIndexer(
+            provider,
+            SectionSplitter(),
+            { authority.retiredUnboundIds() },
+            { authority.isRetiredUnbound(it) },
+            allowAllPolicies(registry.roots.map { it.name }),
+        )
         IndexHarness(
             trees.first(),
             listeners = listOf(

@@ -325,6 +325,7 @@ private class SourceReaderBufferingGraph(
             ),
             availability = availability,
             limbo = limbo,
+            policies = allowAllPolicies(registry.roots.map { it.name }),
         )
         builder = built
     }

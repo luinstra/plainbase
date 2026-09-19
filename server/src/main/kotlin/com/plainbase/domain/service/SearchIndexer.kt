@@ -1,7 +1,11 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
+import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.SearchProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -21,14 +25,17 @@ class SearchIndexer(
     private val splitter: SectionSplitter,
     private val retiredUnboundIds: () -> Set<RootedPageId>,
     private val isRetiredUnbound: (RootedPageId) -> Boolean,
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) {
 
     /** Reconciles changed accepted pages and deletes only current retired engine rows. */
     fun sync(snapshot: PageIndex) {
         val retired = retiredUnboundIds()
         val engineState = provider.indexedState()
-        val accepted = snapshot.pages.filter { it.rooted !in retired }
-        val stale = engineState.keys.intersect(retired)
+        val accepted = snapshot.pages.filter { it.rooted !in retired && allowsFile(it.rooted, it.path) }
+        val stale = engineState.filter { (rooted, state) ->
+            rooted in retired || hiddenByPolicy(rooted, state.path)
+        }.keys
         val changed = accepted.filter { page ->
             val state = engineState[page.rooted]
             state == null || state.contentHash != page.contentHash || state.path != page.path
@@ -62,8 +69,10 @@ class SearchIndexer(
     /** Rebuilds one generation from accepted pages and returns the accepted input count. */
     fun rebuild(snapshot: PageIndex): Int {
         val retired = retiredUnboundIds()
-        val accepted = snapshot.pages.filter { it.rooted !in retired }
-        provider.rebuild(accepted.asSequence().map(splitter::split), retired = retired)
+        val engineState = provider.indexedState()
+        val hidden = engineState.filter { (rooted, state) -> hiddenByPolicy(rooted, state.path) }.keys
+        val accepted = snapshot.pages.filter { it.rooted !in retired && allowsFile(it.rooted, it.path) }
+        provider.rebuild(accepted.asSequence().map(splitter::split), retired = retired + hidden)
         logger.debug {
             "search reindex: scanned ${retired.size} retired-unbound identity(s), accepted ${accepted.size}, " +
                 "excluded ${snapshot.pages.size - accepted.size}"
@@ -79,7 +88,7 @@ class SearchIndexer(
      * [indexedState] diff [sync] makes. The provider controls its own transaction and index costs.
      */
     fun syncPage(page: IndexedPage) {
-        if (isRetiredUnbound(page.rooted)) {
+        if (isRetiredUnbound(page.rooted) || !allowsFile(page.rooted, page.path)) {
             error("cannot sync retired/unbound page root=${page.root.value} id=${page.id.value}")
         }
         provider.index(listOf(splitter.split(page)))
@@ -92,4 +101,12 @@ class SearchIndexer(
 
         private val logger = KotlinLogging.logger {}
     }
+
+    private fun allowsFile(rooted: RootedPageId, path: TreePath): Boolean =
+        policies.allowsFile(rooted.root, path)
+
+    // A missing policy means the root is detached: carry its unretired rows. Only an explicit policy denial is
+    // visibility-based cleanup; omission is not deletion authority.
+    private fun hiddenByPolicy(rooted: RootedPageId, path: TreePath): Boolean =
+        policies[rooted.root]?.allowsFile(path) == false
 }

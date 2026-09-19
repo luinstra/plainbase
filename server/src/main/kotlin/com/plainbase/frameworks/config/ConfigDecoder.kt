@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.config
 
+import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.HistoryMode
@@ -12,7 +13,9 @@ import com.plainbase.frameworks.net.RemoteAddress
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigObject
 import com.typesafe.config.ConfigValue
+import java.nio.file.FileSystems
 import java.nio.file.Path
+import java.util.regex.PatternSyntaxException
 
 /** Owns typed HOCON decoding and validation, without filesystem observation or application wiring. */
 internal object ConfigDecoder {
@@ -349,7 +352,69 @@ private object RootsConfigParser {
             backend = RootBackend.Local(Path.of(raw).toAbsolutePath().normalize()),
             editable = entry.boolStrict("editable", "roots.$key.editable") ?: isPrimary,
             history = history,
+            displayName = entry.stringOrNull("displayName")?.let { parseDisplayName("roots.$key.displayName", it) },
+            includes = parseRootGlobs(entry, "includes", key),
+            excludes = parseRootGlobs(entry, "excludes", key).orEmpty(),
+            folderLabels = parseFolderLabels(entry, key),
         )
+    }
+
+    private fun parseRootGlobs(entry: Config, field: String, root: String): List<String>? {
+        if (!entry.hasPath(field)) return null
+        return entry.getStringList(field).mapIndexed { index, raw ->
+            parseRootGlob("roots.$root.$field[$index]", raw)
+        }
+    }
+
+    private fun parseRootGlob(key: String, raw: String): String {
+        require(raw.isNotEmpty()) { "$key must not contain an empty pattern" }
+        require('\\' !in raw) { "$key must use / separators and may not contain backslashes: '$raw'" }
+        require(!raw.startsWith('/') && !raw.endsWith('/')) {
+            "$key must be relative and may not start or end with '/': '$raw'"
+        }
+        val normalized = Nfc.normalize(raw)
+        require(normalized.split('/').none { it == ".." }) {
+            "$key may not contain a '..' path segment: '$raw'"
+        }
+        try {
+            FileSystems.getDefault().getPathMatcher("glob:$normalized")
+        } catch (failure: PatternSyntaxException) {
+            throw IllegalArgumentException("$key is not a valid glob: '$raw'", failure)
+        }
+        return normalized
+    }
+
+    private fun parseFolderLabels(entry: Config, root: String): Map<String, String> {
+        if (!entry.hasPath("folderLabels")) return emptyMap()
+        val labels = entry.getObject("folderLabels").entries.map { (rawPath, value) ->
+            val path = parseFolderLabelPath("roots.$root.folderLabels.$rawPath", rawPath)
+            val label = value.unwrapped() as? String ?: throw IllegalArgumentException(
+                "roots.$root.folderLabels.$rawPath must be a string",
+            )
+            path.value to parseDisplayName("roots.$root.folderLabels.$rawPath", label)
+        }
+        require(labels.map { it.first }.toSet().size == labels.size) {
+            "roots.$root.folderLabels contains duplicate paths after NFC normalization"
+        }
+        return labels.toMap()
+    }
+
+    private fun parseFolderLabelPath(key: String, raw: String): TreePath {
+        require(raw.isNotEmpty() && '\\' !in raw && !raw.startsWith('/') && !raw.endsWith('/')) {
+            "$key must be a non-empty relative folder path using / separators: '$raw'"
+        }
+        require(raw.split('/').none { it.any { character -> character in "*?[]{}" } }) {
+            "$key is an exact folder path and may not contain glob metacharacters: '$raw'"
+        }
+        return TreePath.of(Nfc.normalize(raw))
+            ?: throw IllegalArgumentException("$key is not a valid relative folder path: '$raw'")
+    }
+
+    private fun parseDisplayName(key: String, raw: String): String {
+        require(raw.none(Char::isISOControl)) { "$key may not contain ISO control characters" }
+        val value = raw.trim()
+        require(value.isNotEmpty()) { "$key must not be blank" }
+        return value
     }
 
     private fun parseHistoryMode(key: String, raw: String?): HistoryMode? {

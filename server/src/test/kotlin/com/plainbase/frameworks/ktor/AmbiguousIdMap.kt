@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.ClaimantState
+import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RetiredBinding
 import com.plainbase.domain.root.RootName
@@ -33,15 +34,25 @@ class AmbiguousIdMap(
     override fun retiredRootsHoldingId(id: PageId): List<RootName> =
         if (id == ambiguousId) retiredRoots else real.retiredRootsHoldingId(id)
 
+    override fun bindingInRoot(root: RootName, id: PageId): IdBinding? =
+        if (id == ambiguousId) liveRoots.singleOrNull { it == root }?.liveBinding(id) else real.bindingInRoot(root, id)
+
     // Post-flip the resolver reads ONE atomic [claimantState] snapshot (not rootsHoldingId + resolveRetired), so the
     // fake must pose it too - live from [liveRoots], one synthetic tombstone per [retiredRoots] entry (§6.2).
     override fun claimantState(id: PageId): ClaimantState =
-        if (id == ambiguousId) ClaimantState(live = liveRoots, retired = retiredRoots.map { it.tombstone(id) }) else real.claimantState(id)
+        if (id == ambiguousId) {
+            ClaimantState(live = liveRoots.map { it.liveBinding(id) }, retired = retiredRoots.map { it.tombstone(id) })
+        } else {
+            real.claimantState(id)
+        }
 }
 
 /** A synthetic tombstone for [id] under this root - the fakes hold no real path, so a stable placeholder stands in. */
 private fun RootName.tombstone(id: PageId): RetiredBinding =
     RetiredBinding(id, RootedPath(this, TreePath.require("retired/gone.md")), materialized = false, retiredAt = 0L)
+
+private fun RootName.liveBinding(id: PageId): IdBinding =
+    IdBinding(RootedPath(this, TreePath.require("live/${id.value}.md")), id, materialized = true)
 
 /** A rooted-miss fixture with one synthetic tombstone and a configurable live claimant set for the same id. */
 class RetiredElsewhereIdMap(
@@ -58,6 +69,9 @@ class RetiredElsewhereIdMap(
     override fun retiredRootsHoldingId(id: PageId): List<RootName> =
         if (id == retiredId) listOf(retiredRoot) else real.retiredRootsHoldingId(id)
 
+    override fun bindingInRoot(root: RootName, id: PageId): IdBinding? =
+        if (id == retiredId && root in liveRoots) root.liveBinding(id) else real.bindingInRoot(root, id)
+
     override fun retiredAt(root: RootName, id: PageId): RetiredBinding? =
         if (id == retiredId && root == retiredRoot) {
             RetiredBinding(id, RootedPath(retiredRoot, retiredPath), materialized = false, retiredAt = 0L)
@@ -68,7 +82,7 @@ class RetiredElsewhereIdMap(
     override fun claimantState(id: PageId): ClaimantState =
         if (id == retiredId) {
             ClaimantState(
-                live = liveRoots,
+                live = liveRoots.map { it.liveBinding(retiredId) },
                 retired = listOf(RetiredBinding(id, RootedPath(retiredRoot, retiredPath), materialized = false, retiredAt = 0L)),
             )
         } else {
@@ -105,7 +119,7 @@ class RacingUnbindIdMap(
         if (id != racingId) return real.claimantState(id)
         if (!raced) {
             raced = true
-            return ClaimantState(live = listOf(holder), retired = emptyList()) // T1: live, not yet tombstoned
+            return ClaimantState(live = listOf(holder.liveBinding(id)), retired = emptyList()) // T1: live, not yet tombstoned
         }
         return ClaimantState(live = emptyList(), retired = listOf(holder.tombstone(id))) // T2: unbound + tombstoned
     }
@@ -128,6 +142,15 @@ class RacingUnbindIdMap(
         } else {
             emptyList()
         }
+
+    override fun bindingInRoot(root: RootName, id: PageId): IdBinding? {
+        if (id != racingId) return real.bindingInRoot(root, id)
+        if (!raced && root == holder) {
+            raced = true
+            return holder.liveBinding(id)
+        }
+        return null
+    }
 }
 
 /**
@@ -163,9 +186,14 @@ class RootedUnbindRaceIdMap(
     override fun claimantState(id: PageId): ClaimantState {
         if (id != racingId) return real.claimantState(id)
         return if (reads++ == 0) {
-            ClaimantState(live = listOf(holder), retired = emptyList()) // the STALE snapshot, if read FIRST
+            ClaimantState(live = listOf(holder.liveBinding(id)), retired = emptyList()) // the STALE snapshot, if read FIRST
         } else {
             ClaimantState(live = emptyList(), retired = listOf(holder.tombstone(id))) // the DELETE's tombstone, post-unbind
         }
+    }
+
+    override fun bindingInRoot(root: RootName, id: PageId): IdBinding? {
+        if (id != racingId) return real.bindingInRoot(root, id)
+        return if (reads++ == 0 && root == holder) holder.liveBinding(id) else null
     }
 }

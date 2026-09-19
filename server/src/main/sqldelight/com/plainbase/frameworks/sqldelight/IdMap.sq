@@ -261,7 +261,7 @@ SELECT 1 AS kind, root, path, id, materialized, retired_at
 FROM retired_binding
 WHERE id = :id
 UNION ALL
-SELECT 0 AS kind, root, NULL, NULL, NULL, NULL
+SELECT 0 AS kind, root, path, id, materialized, NULL
 FROM id_map
 WHERE id = :id;
 

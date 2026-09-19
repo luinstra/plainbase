@@ -11,6 +11,7 @@ import { RootBadge } from "./RootBadge";
 export function JumpToItem({
   entry,
   showRoot,
+  rootLabel,
   id,
   active,
   onActivate,
@@ -18,6 +19,7 @@ export function JumpToItem({
 }: {
   entry: PageEntry;
   showRoot?: boolean;
+  rootLabel?: string;
   id: string;
   active: boolean;
   onActivate: () => void;
@@ -43,7 +45,7 @@ export function JumpToItem({
     >
       <span className="font-medium text-ink">{entry.page.title}</span>
       <span className="flex items-baseline gap-1.5 overflow-hidden">
-        {showRoot && <RootBadge root={entry.root} />}
+        {showRoot && <RootBadge root={entry.root} label={rootLabel} />}
         <span className="truncate font-mono text-xs text-faint">{entry.page.path}</span>
       </span>
     </li>

@@ -273,6 +273,7 @@ class WritePipelineTest : FunSpec({
                     idMap = harness.idMap,
                     aliasRegistry = harness.registry,
                     availability = harness.availability,
+                    policies = allowAllPolicies(),
                 )
                 val outcome = pipeline.write(
                     grantForTests(),

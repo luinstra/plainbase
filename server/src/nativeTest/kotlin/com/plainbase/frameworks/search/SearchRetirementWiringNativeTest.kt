@@ -239,6 +239,7 @@ private class NativeRetirementGraph : AutoCloseable {
                 retired
             },
             idMap::isRetiredUnbound,
+            com.plainbase.domain.service.allowAllNativePolicies(),
         )
         builder = IndexBuilder(
             sources = listOf(IndexBuilder.Source(registry.primary, store, NoOpHistoryProvider)),
@@ -261,6 +262,7 @@ private class NativeRetirementGraph : AutoCloseable {
             retirements = retirements,
             limbo = RootLimbo(),
             epochs = epochs,
+            policies = com.plainbase.domain.service.allowAllNativePolicies(registry.roots.map { it.name }),
         )
     }
 
@@ -296,6 +298,7 @@ private class NativeRetirementGraph : AutoCloseable {
         aliasRegistry = aliases,
         availability = availability,
         historyHook = historyHook,
+        policies = com.plainbase.domain.service.allowAllNativePolicies(),
     )
 
     fun pageBytes(body: String): ByteArray = page(victimId, "Native victim", body).toByteArray()

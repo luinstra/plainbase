@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.runtime
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.Commit
@@ -35,6 +36,7 @@ import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
+import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -53,6 +55,24 @@ import kotlin.time.Clock
 import kotlin.time.Instant
 
 class IndexRuntimeFactoryTest : FunSpec({
+
+    test("offline local inputs reuse the caller's ignore rules") {
+        val contentDir = Path.of("/content")
+        val ignoreRules = IgnoreRules(ignoreGlobs = listOf("drafts/**"))
+        val root = Root(
+            name = RootName.PRIMARY,
+            backend = RootBackend.Local(contentDir),
+            editable = true,
+            history = HistoryMode.OFF,
+        )
+
+        offlineLocalStoreInputs(
+            config = PlainbaseConfig(contentDir, Path.of("/data"), "127.0.0.1", 8080),
+            root = root,
+            ignoreRules = ignoreRules,
+            policy = ContentPathPolicy.ALL,
+        ).ignoreRules shouldBeSameInstanceAs ignoreRules
+    }
 
     test("observed and offline profiles forward real sources and keep authority boundaries distinct") {
         withTempTree(seed = { root -> writePage(root, "docs/primary.md", "# Primary\n\nobserved\n") }) { primaryDir ->
@@ -154,6 +174,7 @@ class IndexRuntimeFactoryTest : FunSpec({
                             val observedProofs = slot<List<AbsenceProof>>()
                             val observed = IndexRuntimeFactory.observed(
                                 registry = registry,
+                                policies = com.plainbase.domain.service.allowAllPolicies(registry.roots.map { it.name }),
                                 stores = stores,
                                 histories = histories,
                                 support = support,
@@ -243,6 +264,7 @@ class IndexRuntimeFactoryTest : FunSpec({
                                 splitter = SectionSplitter(),
                                 retiredUnboundIds = repositories.idMap::retiredUnboundIds,
                                 isRetiredUnbound = repositories.idMap::isRetiredUnbound,
+                                policies = com.plainbase.domain.service.allowAllPolicies(registry.roots.map { it.name }),
                             )
                             val configuredRoots = listOf(downRootName, RootName.PRIMARY, objectRootName)
                             val persistedObservations = repositories.retirements.observations()
@@ -267,6 +289,7 @@ class IndexRuntimeFactoryTest : FunSpec({
                             val offlineProofs = slot<List<AbsenceProof>>()
                             val offline = IndexRuntimeFactory.offlineReindex(
                                 registry = registry,
+                                policies = com.plainbase.domain.service.allowAllPolicies(registry.roots.map { it.name }),
                                 stores = stores,
                                 support = support,
                                 retirements = retirements,
@@ -352,6 +375,7 @@ private fun localStore(root: Path, name: RootName, dataDir: Path): LocalContentS
     rootName = name,
     onRootUnavailable = {},
     onIdentityRebind = {},
+    policy = ContentPathPolicy.ALL,
 ).let(RootStoreFactory::local)
 
 private open class CountingStore(private val delegate: ContentStore) : ContentStore by delegate {

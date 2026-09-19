@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { changesQuery } from "../api/queries";
+import { changesQuery, treeQuery } from "../api/queries";
 import type { ChangeSummary } from "../api/types";
 import { formatTime } from "../lib/datetime";
+import { rootLabelFor } from "../lib/tree";
 import { QueryErrorView } from "./ErrorView";
 
 /**
@@ -15,6 +16,7 @@ import { QueryErrorView } from "./ErrorView";
  */
 export function ReviewQueue() {
   const changes = useQuery(changesQuery);
+  const tree = useQuery(treeQuery);
 
   if (changes.isPending) {
     return (
@@ -38,7 +40,7 @@ export function ReviewQueue() {
       ) : (
         <ol className="pb-review-list" data-pb-review-list>
           {proposals.map((change) => (
-            <ReviewRow key={change.id} change={change} />
+            <ReviewRow key={change.id} change={change} rootLabel={rootLabelFor(tree.data?.roots, change.root)} />
           ))}
         </ol>
       )}
@@ -51,7 +53,7 @@ function rank(change: ChangeSummary): number {
   return change.status === "PENDING" ? 0 : 1;
 }
 
-function ReviewRow({ change }: { change: ChangeSummary }) {
+function ReviewRow({ change, rootLabel }: { change: ChangeSummary; rootLabel: string }) {
   // Two drift signals collapse to one chip (F3): a LIVE-drifted PENDING or a post-failed-apply CONFLICTED.
   const drifted = change.base_drifted || change.status === "CONFLICTED";
   return (
@@ -69,7 +71,7 @@ function ReviewRow({ change }: { change: ChangeSummary }) {
           {/* The ROOT, not just the path: two roots can hold the same `target_path`, so an unqualified row makes
               two changes against two different repositories look identical in the queue an approver acts from. */}
           <span className="pb-review-root" data-pb-review-root={change.root}>
-            {change.root}
+            {rootLabel}
           </span>
           <span className="pb-review-row-path">{change.target_path}</span>
         </span>

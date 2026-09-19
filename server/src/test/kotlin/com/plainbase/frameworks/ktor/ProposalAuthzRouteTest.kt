@@ -117,6 +117,7 @@ class ProposalAuthzRouteTest : FunSpec({
                             harness.builder,
                             harness.stores,
                             harness.absence,
+                            harness.policies,
                         ),
                         proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
                         clock = Clock.System,
@@ -129,6 +130,7 @@ class ProposalAuthzRouteTest : FunSpec({
                     resolver = com.plainbase.domain.service.PageRootResolver(harness.idMap, harness.rootRegistry),
                     availability = harness.availability,
                     absence = harness.absence,
+                    policies = harness.policies,
                 )
                 val readOnly = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.READ_ONLY).id)
                 val page = harness.builder.current.pages.single()

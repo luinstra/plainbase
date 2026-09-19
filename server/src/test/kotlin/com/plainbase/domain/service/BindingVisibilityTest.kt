@@ -113,6 +113,25 @@ class BindingVisibilityTest : FunSpec({
         Supersession.NONE.mayDisplace(binding(gone)) shouldBe false // ...and it cannot call anything detached either
     }
 
+    test("an ineligible incumbent remains an identity owner but is not supersedable") {
+        val hidden = binding(main)
+        val gate = Supersession(
+            witnessed = setOf(hidden.path),
+            scannedRoots = scannedRoots,
+            registeredRoots = registered,
+            eligible = { it != hidden.path },
+        )
+
+        BindingVisibility.isLive(
+            hidden,
+            setOf(hidden.path),
+            scannedRoots,
+            registered,
+            gate,
+        ) { it != hidden.path } shouldBe true
+        gate.mayDisplace(hidden) shouldBe false
+    }
+
     // [BindingVisibility.isOwner] = isLive + the path-reuse gate. The two passes each pin ONE row of this at the
     // pass level (a pasted copy, a moved page); the whole table belongs here, because the gate's entire job is
     // telling two different meanings of "the witnessed file carries no id" apart.

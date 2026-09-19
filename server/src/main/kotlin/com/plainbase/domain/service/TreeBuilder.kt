@@ -65,14 +65,14 @@ sealed interface TreeNode {
  */
 object TreeBuilder {
 
-    fun build(index: PageIndex, root: RootName): TreeNode.Folder {
+    fun build(index: PageIndex, root: RootName, folderLabels: Map<String, String> = emptyMap()): TreeNode.Folder {
         // One root's tree (the section accessor is total, so an unknown root yields the empty
         // tree); the per-root wire entry wrapping is TreeJsonCache's (C3).
         val section = index.section(root)
         val pagesByParent = section.pages.groupBy { it.path.parent }
         val foldersByParent = section.folders.groupBy { it.path.parent }
         val folderUrls = CanonicalUrlBuilder.folderUrlPaths(section.folders)
-        val children = childrenOf(root, null, pagesByParent, foldersByParent, folderUrls)
+        val children = childrenOf(root, null, pagesByParent, foldersByParent, folderUrls, folderLabels)
         return TreeNode.Folder(
             name = "",
             title = null,
@@ -91,16 +91,18 @@ object TreeBuilder {
         pagesByParent: Map<TreePath?, List<IndexedPage>>,
         foldersByParent: Map<TreePath?, List<ContentFolder>>,
         folderUrls: Map<TreePath, TreePath?>,
+        folderLabels: Map<String, String>,
     ): List<TreeNode> {
         val folders = foldersByParent[dir].orEmpty().mapNotNull { folder ->
-            val children = childrenOf(root, folder.path, pagesByParent, foldersByParent, folderUrls)
+            val children = childrenOf(root, folder.path, pagesByParent, foldersByParent, folderUrls, folderLabels)
             if (children.isEmpty()) return@mapNotNull null // no pages anywhere beneath -> omitted
+            val configuredTitle = folderLabels[folder.path.value]
             Sortable(
                 order = folder.meta?.order,
-                sortTitle = folder.meta?.title ?: folder.path.name,
+                sortTitle = configuredTitle ?: folder.meta?.title ?: folder.path.name,
                 node = TreeNode.Folder(
                     name = folder.path.name,
-                    title = folder.meta?.title,
+                    title = configuredTitle ?: folder.meta?.title,
                     description = folder.meta?.description,
                     path = folder.path,
                     url = folderUrls.getValue(folder.path)?.let { "/" + root.value + "/" + PercentCoding.encodePath(it.value) },

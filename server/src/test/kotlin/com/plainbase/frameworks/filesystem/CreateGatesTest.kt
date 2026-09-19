@@ -2,6 +2,10 @@ package com.plainbase.frameworks.filesystem
 
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.Root
+import com.plainbase.domain.root.RootBackend
+import com.plainbase.domain.root.RootName
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -48,6 +52,36 @@ class CreateGatesTest : FunSpec({
             resolution.occupiedByFile shouldBe false
             Files.exists(root.resolve("a/b")) shouldBe false // resolve-only: nothing minted
         }
+    }
+
+    test("a case alias of an excluded existing parent is rejected before mutation on case-insensitive filesystems") {
+        withRoot { rootPath ->
+            Files.createDirectory(rootPath.resolve("secret"))
+            val aliasedParent = rootPath.resolve("SECRET")
+            if (!Files.exists(aliasedParent)) return@withRoot
+            val root = Root(
+                name = RootName.PRIMARY,
+                backend = RootBackend.Local(rootPath),
+                editable = true,
+                history = HistoryMode.OFF,
+                excludes = listOf("secret/**"),
+            )
+            val policy = localContentPathPolicy(root, rootPath, IgnoreRules(), emptyList())
+            val store = LocalContentStore(rootPath, policy = policy).also { it.scan() }
+
+            store.createExclusive(TreePath.require("SECRET/new/page.md"), "# No".encodeToByteArray(), hasher)
+                .shouldBeInstanceOf<CreateResult.Rejected>()
+            Files.exists(rootPath.resolve("secret/new")) shouldBe false
+        }
+    }
+
+    test("an unavailable root is deferred to the store root-loss classifier") {
+        val root = Files.createTempDirectory("pb-create-gates-gone")
+        root.toFile().deleteRecursively()
+
+        CreateGates(root, IgnoreRules(), emptyList())
+            .rejectionReason(TreePath.require("page.md"), root.resolve("page.md")) shouldBe null
+        Files.exists(root) shouldBe false
     }
 
     test("a parent segment occupied by a FILE reports occupiedByFile; end-to-end the create refuses with nothing written") {

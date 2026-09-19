@@ -60,7 +60,13 @@ class SqlDelightIdMapRepository(
     override fun claimantState(id: PageId): ClaimantState {
         val (retired, live) = queries.selectClaimantsById(id).executeAsList().partition { it.kind == RETIRED_CLAIMANT }
         return ClaimantState(
-            live = live.map { it.root },
+            live = live.map {
+                IdBinding(
+                    path = RootedPath(it.root, requireNotNull(it.path)),
+                    id = requireNotNull(it.id),
+                    materialized = requireNotNull(it.materialized),
+                )
+            },
             retired = retired.map {
                 RetiredBinding(
                     id = requireNotNull(it.id),

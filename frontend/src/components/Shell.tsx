@@ -4,7 +4,7 @@ import type { MouseEvent } from "react";
 import { sessionQuery, treeQuery } from "../api/queries";
 import type { RootTree } from "../api/types";
 import { interceptableHref } from "../lib/links";
-import { entryFor, primaryEntry, rootAcceptsWrites, rootOfLocation } from "../lib/tree";
+import { entryFor, primaryEntry, rootAcceptsWrites, rootLabel, rootOfLocation } from "../lib/tree";
 import { ROOT_UNAVAILABLE } from "./ErrorView";
 import { SearchPalette } from "./SearchPalette";
 import { Sidebar } from "./Sidebar";
@@ -48,7 +48,7 @@ function NewPageLabel() {
  */
 function newPageBlockedReason(target: RootTree | null): string | undefined {
   if (!target) return undefined;
-  return target.available ? "This root is read-only" : ROOT_UNAVAILABLE.headline(target.root);
+  return target.available ? "This root is read-only" : ROOT_UNAVAILABLE.headline(rootLabel(target));
 }
 
 /**

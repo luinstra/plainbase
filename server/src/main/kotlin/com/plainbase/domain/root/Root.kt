@@ -49,6 +49,13 @@ data class Root(
      */
     val editable: Boolean,
     val history: HistoryMode,
+    /** Optional operator-facing label; the stable root name remains the URL and identity. */
+    val displayName: String? = null,
+    /** Null means the legacy default include policy; an empty list intentionally admits no files. */
+    val includes: List<String>? = null,
+    val excludes: List<String> = emptyList(),
+    /** Exact NFC-normalized relative folder paths to their display labels. */
+    val folderLabels: Map<String, String> = emptyMap(),
 ) {
     /** The root's local filesystem path, or null for an object-backed root - saves caller-side casts in the wiring. */
     val localPath: Path? get() = (backend as? RootBackend.Local)?.path

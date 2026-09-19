@@ -58,8 +58,8 @@ class ObjectContentStoreConcurrencyTest : FunSpec({
         HybridFixture().use { hybrid ->
             val ok = TreePath.require("poll-ok.md")
             val failing = TreePath.require("poll-failing.md")
-            hybrid.mirror.write(ok, "ok-old".toByteArray())
-            hybrid.mirror.write(failing, "failing-old".toByteArray())
+            hybrid.mirror.writeMirror(ok, "ok-old".toByteArray())
+            hybrid.mirror.writeMirror(failing, "failing-old".toByteArray())
             hybrid.mirror.scan()
             hybrid.fake.seed(hybrid.mirror.resolveRepoRelativePath(ok), "ok-new".toByteArray())
             hybrid.fake.seed(hybrid.mirror.resolveRepoRelativePath(failing), "failing-new".toByteArray())

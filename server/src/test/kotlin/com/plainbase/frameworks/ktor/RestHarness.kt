@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootName
@@ -168,17 +169,20 @@ fun IndexHarness.testRouteContext(
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
     /** The watch-coverage holder `/healthz` reads. Defaults to all-whole: a harness with no watcher degrades nothing. */
     convergence: com.plainbase.domain.root.RootConvergence = this.convergence,
+    policies: Map<RootName, ContentPathPolicy> =
+        rootRegistry.roots.associate { configured -> configured.name to ContentPathPolicy.ALL },
     /**
      * The id->root resolver (C4). Defaults to the real one over the harness idMap; a window test injects a
      * PageRootResolver over an [AmbiguousIdMap] FAKE to pose the Ambiguous arm / a cross-root move it cannot make real.
      */
-    resolver: com.plainbase.domain.service.PageRootResolver = com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry),
+    resolver: com.plainbase.domain.service.PageRootResolver =
+        com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry, policies),
     /**
      * The 404-vs-503 classifier (C4, FIX 1). Defaults to the harness's own over the REAL idMap; a window test injects
      * an AbsenceClassifier over the SAME [AmbiguousIdMap] FAKE the resolver uses, so the limbo (503) path fires by
      * construction rather than reading the real rootsHoldingId and answering 404.
      */
-    absence: com.plainbase.domain.service.AbsenceClassifier = this.absence,
+    absence: com.plainbase.domain.service.AbsenceClassifier = com.plainbase.domain.service.AbsenceClassifier(idMap, policies),
     proposalRepository: com.plainbase.domain.repository.ProposalRepository = this.proposalRepository,
 ): RouteContext {
     val policy = PolicyService(
@@ -201,7 +205,12 @@ fun IndexHarness.testRouteContext(
         rootRegistry.roots.mapNotNull { root -> sourceByRoot[root.name]?.let { root.name to historiesByName(root.name) } }.toMap(),
     )
     val proposalReader =
-        com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, stores = stores, absence = absence)
+        com.plainbase.frameworks.ktor.IndexProposalBaseReader(
+            indexBuilder = builder,
+            stores = stores,
+            absence = absence,
+            policies = policies,
+        )
     val proposalService = com.plainbase.domain.service.ProposalService(
         repository = proposalRepository,
         citations = CitationFactory(),
@@ -209,9 +218,15 @@ fun IndexHarness.testRouteContext(
         proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
         clock = Clock.System,
         rootStatus = { root -> resolver.statusOf(root, availability.current()) },
+        proposalEligibility = resolver::proposalEligible,
     )
     val pageService = PageService(builder, registry, CitationFactory())
-    val searchService = SearchService(provider = searchProvider, indexBuilder = builder, availability = availability)
+    val searchService = SearchService(
+        provider = searchProvider,
+        indexBuilder = builder,
+        availability = availability,
+        policies = policies,
+    )
     val proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository)
     val auth = authServices(policy)
     val serving = ServingRuntime(
@@ -228,6 +243,7 @@ fun IndexHarness.testRouteContext(
             identity = identity,
             idProvider = idProvider,
             aliasRegistry = registry,
+            policies = policies,
         ),
         pageService = pageService,
         searchService = searchService,

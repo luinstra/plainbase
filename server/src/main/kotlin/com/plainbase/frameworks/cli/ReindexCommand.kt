@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.cli
 
 import app.cash.sqldelight.db.SqlDriver
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.root.BindingEpoch
@@ -16,6 +17,7 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
+import com.plainbase.frameworks.filesystem.contentPolicies
 import com.plainbase.frameworks.lifecycle.OfflineStoreResources
 import com.plainbase.frameworks.runtime.ContentRepositories
 import com.plainbase.frameworks.runtime.IndexRuntimeFactory
@@ -162,7 +164,9 @@ object ReindexCommand {
         val database = DatabaseFactory.createDatabase(driver)
         val repositories = ContentRepositories(database)
         val registry = RootRegistry.of(config.roots.list)
-        val stores = openStores(config, registry, repositories, decorate, operations, resources)
+        val ignoreRules = IgnoreRules()
+        val policies = contentPolicies(registry, config, ignoreRules)
+        val stores = openStores(config, registry, repositories, policies, ignoreRules, decorate, operations, resources)
         requireEveryRootAvailable(registry, stores, output)
         val aliasRegistry = IndexRuntimeFactory.aliasRegistry(repositories.aliases)
         val checkpoint = repositories.checkpoints
@@ -172,6 +176,7 @@ object ReindexCommand {
             splitter = SectionSplitter(),
             retiredUnboundIds = idMap::retiredUnboundIds,
             isRetiredUnbound = idMap::isRetiredUnbound,
+            policies = policies,
         )
         val idProvider = IndexRuntimeFactory.idProvider()
         val support = IndexSupport(
@@ -186,6 +191,7 @@ object ReindexCommand {
         )
         val builder = IndexRuntimeFactory.offlineReindex(
             registry = registry,
+            policies = policies,
             stores = stores,
             support = support,
             retirements = repositories.retirements,
@@ -208,19 +214,26 @@ object ReindexCommand {
         config: PlainbaseConfig,
         registry: RootRegistry,
         repositories: ContentRepositories,
+        policies: Map<RootName, ContentPathPolicy>,
+        ignoreRules: IgnoreRules,
         decorate: StoreDecorator,
         operations: OfflineStoreOperations,
         resources: OfflineStoreResources,
     ): RootStores {
-        val primary = decorate(registry.primary.name, mainStore(config, registry, repositories, operations, resources))
+        val primary = decorate(
+            registry.primary.name,
+            mainStore(config, registry, repositories, policies, ignoreRules, operations, resources),
+        )
         return RootStoreFactory.roots(registry, primary) { root ->
             decorate(
                 root.name,
                 operations.openLocal(
                     offlineLocalStoreInputs(
                         config,
+                        root,
+                        ignoreRules,
+                        policies.getValue(root.name),
                         requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
-                        root.name,
                     ),
                 ),
             )
@@ -232,18 +245,28 @@ object ReindexCommand {
         config: PlainbaseConfig,
         registry: RootRegistry,
         repositories: ContentRepositories,
+        policies: Map<RootName, ContentPathPolicy>,
+        ignoreRules: IgnoreRules,
         operations: OfflineStoreOperations,
         resources: OfflineStoreResources,
     ): ContentStore = RootStoreFactory.primary(
         backend = config.storage.backend,
         local = {
-            operations.openLocal(offlineLocalStoreInputs(config, config.mainContentRoot(), registry.primary.name))
+            operations.openLocal(
+                offlineLocalStoreInputs(
+                    config,
+                    registry.primary,
+                    ignoreRules,
+                    policies.getValue(registry.primary.name),
+                    config.mainContentRoot(),
+                ),
+            )
         },
         objectStore = {
             val store = resources.ownObject(
                 operations.openObject(
                     config,
-                    IgnoreRules(),
+                    ignoreRules,
                     { repositories.dirtyPages.all().map { it.path.path }.toSet() },
                     { path -> repositories.dirtyPages.isDirty(RootedPath(RootName.PRIMARY, path)) },
                     // Offline commands have no proof source; an empty snapshot cannot authorize absence.

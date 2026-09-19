@@ -1,6 +1,8 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.page.Citation
 import com.plainbase.domain.page.Heading
 import com.plainbase.domain.page.IndexedPage
@@ -40,6 +42,7 @@ class SearchService(
      * simply runs SHORT - the same documented shape as the §A2 narrow race a snapshot-departed page already produces.
      */
     private val availability: RootAvailability = RootAvailability(kotlin.time.Clock.System),
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) {
 
     sealed interface Outcome {
@@ -87,6 +90,7 @@ class SearchService(
                     // paired with another root's page.
                     snapshot.pageAt(RootedPageId(hit.root, hit.pageId))
                         ?.takeIf { available.isAvailable(it.root) }
+                        ?.takeIf { policies.allowsFile(it.root, it.path) }
                         ?.let { page -> assemble(hit, page) }
                 },
             ),

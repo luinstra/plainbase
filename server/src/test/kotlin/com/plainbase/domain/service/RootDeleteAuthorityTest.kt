@@ -374,7 +374,13 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
 
     val engine: SearchProvider = Fts5SearchProvider(searchDb)
-    val indexer = SearchIndexer(engine, SectionSplitter(), idMap::retiredUnboundIds, idMap::isRetiredUnbound)
+    val indexer = SearchIndexer(
+        engine,
+        SectionSplitter(),
+        idMap::retiredUnboundIds,
+        idMap::isRetiredUnbound,
+        allowAllPolicies(registry.roots.map { it.name }),
+    )
     val retirements = SqlDelightRetirementRepository(database)
 
     fun builder(
@@ -405,6 +411,7 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         ),
         searchIndexer = searchIndexer,
         availability = availability,
+        policies = allowAllPolicies(registry.roots.map { it.name }),
     )
 
     override fun close() {

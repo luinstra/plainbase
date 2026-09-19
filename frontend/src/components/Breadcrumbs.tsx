@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Fragment } from "react";
 import { treeQuery } from "../api/queries";
 import type { TreeFolder } from "../api/types";
-import { entryFor, folderTitle, foldersByPath, landingPage, treeFor } from "../lib/tree";
+import { entryFor, folderTitle, foldersByPath, landingPage, rootLabel, treeFor } from "../lib/tree";
 
 /**
  * Breadcrumb trail derived from the page's content-relative `path` (the API's value,
@@ -24,7 +24,7 @@ export function Breadcrumbs({ root, path, title }: { root: string; path: string;
   const segments = path.split("/").slice(0, -1);
   // The crumb names THIS page's root and links to that root's own server-issued URL. A hardcoded primary-root
   // address would name the wrong tree and walk an extra-root reader into the primary tree.
-  const rootCrumb = { key: `root:${root}`, label: root, url: entry?.tree.url ?? null };
+  const rootCrumb = { key: `root:${root}`, label: entry ? rootLabel(entry) : root, url: entry?.tree.url ?? null };
   const ancestors = segments.map((name, i) => {
     const folderPath = segments.slice(0, i + 1).join("/");
     const folder = folders.get(folderPath);

@@ -12,6 +12,8 @@ import com.plainbase.domain.root.Witness
  * not "this page was read", and the gap between those two sentences is where a corpus goes missing.
  *
  * [isLive] - may the pass treat this binding as a live claim at all (does it enter the duplicate contest)?
+ *  - an ineligible binding remains a live identity owner. Configuration hides content; it does not free the page's
+ *    durable id for an included copy to take;
  *  - a binding whose path this pass **WITNESSED** is live, whatever the file turned out to carry;
  *  - a binding under a root ABSENT from a KNOWN registry is detached (D2; the boot detached-root WARN is
  *    its visibility) and is not an owner at all. An EMPTY registry knows nothing and detaches nothing,
@@ -53,7 +55,9 @@ object BindingVisibility {
         scannedRoots: Set<RootName>,
         registered: Set<RootName>,
         supersession: Supersession,
+        eligible: (RootedPath) -> Boolean = { true },
     ): Boolean = when {
+        !eligible(owner.path) -> true
         owner.path in witnessed -> true
         // Guarded on a KNOWN registry, exactly as [Supersession]'s detached arm is: an EMPTY `registered` means
         // nobody told us what is configured, and "I do not know" is not a licence to call every root detached.
@@ -101,8 +105,9 @@ object BindingVisibility {
         scannedRoots: Set<RootName>,
         registered: Set<RootName>,
         supersession: Supersession,
+        eligible: (RootedPath) -> Boolean = { true },
     ): Boolean {
-        if (!isLive(owner, witnessed.keys, scannedRoots, registered, supersession)) return false
+        if (!isLive(owner, witnessed.keys, scannedRoots, registered, supersession, eligible)) return false
         val seen = witnessed[owner.path] ?: return true
         val brokePromise = seen.observedId == null && owner.materialized
         return !brokePromise

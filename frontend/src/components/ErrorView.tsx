@@ -101,11 +101,11 @@ export function QueryErrorView({ error, children }: { error: unknown; children?:
  * the path, restart), so the copy names the condition and stops. `data-pb-root-unavailable` is the
  * stable selector.
  */
-export function RootUnavailableView({ root, detail }: { root?: string; detail?: string }) {
+export function RootUnavailableView({ root, label, detail }: { root?: string; label?: string; detail?: string }) {
   return (
     <div className="py-16 text-center" data-pb-root-unavailable>
       <p className="text-sm font-semibold uppercase tracking-wide text-faint">{ROOT_UNAVAILABLE.eyebrow}</p>
-      <h1 className="mt-2 text-2xl font-bold text-ink">{ROOT_UNAVAILABLE.headline(root)}</h1>
+      <h1 className="mt-2 text-2xl font-bold text-ink">{ROOT_UNAVAILABLE.headline(label ?? root)}</h1>
       {/* The server's own message when there was a request to answer (it names the root and the remedy);
           the shared body otherwise. */}
       <p className="mt-3 text-muted">{detail ?? ROOT_UNAVAILABLE.body}</p>

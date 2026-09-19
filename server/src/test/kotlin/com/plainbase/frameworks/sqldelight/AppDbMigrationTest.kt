@@ -635,6 +635,7 @@ class AppDbMigrationTest : FunSpec({
                     registeredRoots = setOf(RootName.PRIMARY),
                     retirements = retirements,
                     limbo = limbo,
+                    policies = com.plainbase.domain.service.allowAllPolicies(),
                 )
 
                 val snapshot = builder.rebuild()

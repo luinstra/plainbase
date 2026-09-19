@@ -1233,6 +1233,7 @@ class IndexCollaboratorAuthorityTest : FunSpec({
             com.plainbase.domain.repository.IdMapRepository::class.java,
             PageIdentityService::class.java,
             FrontmatterPatcher::class.java,
+            kotlin.jvm.functions.Function1::class.java,
         )
         val violations = mutableListOf<String>()
         if (constructors.size != 1) {
@@ -1242,8 +1243,8 @@ class IndexCollaboratorAuthorityTest : FunSpec({
             if (constructor.parameterTypes.toList() != expectedConstructor) {
                 violations += "constructor[$index] types=${constructor.parameterTypes.toList()}, expected=$expectedConstructor"
             }
-            val directForbidden = constructor.parameterTypes.drop(1).mapNotNull { type -> type.authorityLabel() } +
-                constructor.genericParameterTypes.drop(1).flatMap { it.authorityNames() + it.deferredNames() }
+            val directForbidden = constructor.parameterTypes.drop(1).dropLast(1).mapNotNull { type -> type.authorityLabel() } +
+                constructor.genericParameterTypes.drop(1).dropLast(1).flatMap { it.authorityNames() + it.deferredNames() }
             if (directForbidden.isNotEmpty()) violations += "constructor[$index] forbidden types=$directForbidden"
         }
         val instanceFields = helper.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }.map { it.name to it.type.name }
@@ -1251,6 +1252,7 @@ class IndexCollaboratorAuthorityTest : FunSpec({
             "idMap" to com.plainbase.domain.repository.IdMapRepository::class.java.name,
             "identity" to PageIdentityService::class.java.name,
             "patcher" to FrontmatterPatcher::class.java.name,
+            "eligible" to kotlin.jvm.functions.Function1::class.java.name,
         )
         val sortedInstanceFields = instanceFields.sortedWith(compareBy({ it.first }, { it.second }))
         val sortedExpectedInstanceFields = expectedInstanceFields.sortedWith(compareBy({ it.first }, { it.second }))
@@ -1323,7 +1325,8 @@ class IndexCollaboratorAuthorityTest : FunSpec({
             "internal", "class", "IndexIdentityAssignments", "(",
             "private", "val", "idMap", ":", "IdMapRepository", ",",
             "private", "val", "identity", ":", "PageIdentityService", ",",
-            "private", "val", "patcher", ":", "FrontmatterPatcher", ",", ")",
+            "private", "val", "patcher", ":", "FrontmatterPatcher", ",",
+            "private", "val", "eligible", ":", "(", "RootedPath", ")", "-", ">", "Boolean", ",", ")",
         )
         val expectedResolveTokens = listOf(
             "fun", "resolveIdentities", "(", "scans", ":", "List", "<", "SourceScan", ">", ",",
@@ -1348,6 +1351,7 @@ class IndexCollaboratorAuthorityTest : FunSpec({
                 private val idMap: IdMapRepository,
                 private val identity: PageIdentityService,
                 private val patcher: FrontmatterPatcher,
+                private val eligible: (RootedPath) -> Boolean,
             ) {
                 fun resolveIdentities(
                     scans: List<SourceScan>,
@@ -4432,6 +4436,7 @@ private val EXPECTED_INDEX_BUILDER_FIELDS = mapOf(
     "limbo" to "com.plainbase.domain.root.RootLimbo",
     "epochs" to "com.plainbase.domain.root.ObservationEpoch",
     "bindings" to "com.plainbase.domain.root.BindingLatch",
+    "policies" to "java.util.Map",
     "sources" to "java.util.List",
     "sourcesByRoot" to "java.util.Map",
     "rootLoss" to "com.plainbase.domain.service.RootLossClassifier",
@@ -4440,6 +4445,7 @@ private val EXPECTED_INDEX_BUILDER_FIELDS = mapOf(
     "identityAssignments" to "com.plainbase.domain.service.IndexIdentityAssignments",
     "snapshotAssembler" to "com.plainbase.domain.service.IndexSnapshotAssembler",
     "corpusSeen" to "java.util.Set",
+    "hiddenGitWarnings" to "java.util.Set",
     "holder" to "java.util.concurrent.atomic.AtomicReference",
 )
 
@@ -4448,6 +4454,8 @@ private val EXPECTED_SERVICE_NON_CLASS_DECLARATIONS = setOf(
     "ApplyDisposition.kt|fun dispositionOf",
     "PageIdentityService.kt|fun requireDistinctIds",
     "ProposalService.kt|fun syntheticEmail",
+    "ProposalService.kt|fun toGuard",
+    "ProposalService.kt|fun toSummaryGuard",
     "UnifiedDiff.kt|fun unifiedDiff",
     "UnifiedDiff.kt|fun replaceEverythingScript",
     "UnifiedDiff.kt|fun finalNewlineOnlyScript",

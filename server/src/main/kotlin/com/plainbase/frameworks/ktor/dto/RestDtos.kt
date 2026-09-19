@@ -5,6 +5,7 @@ import com.plainbase.domain.service.TreeNode
 import com.plainbase.frameworks.protocol.CitationDto
 import com.plainbase.frameworks.protocol.HeadingDto
 import com.plainbase.frameworks.protocol.toDto
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -58,7 +59,14 @@ data class TreeResponse(val roots: List<RootTreeDto>)
  * `true`, guaranteed by `RootRegistry`'s construction-time resolution rather than by a search here.
  */
 @Serializable
-data class RootTreeDto(val root: String, val available: Boolean, val editable: Boolean, val primary: Boolean, val tree: TreeNodeDto)
+data class RootTreeDto(
+    val root: String,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val displayName: String? = null,
+    val available: Boolean,
+    val editable: Boolean,
+    val primary: Boolean,
+    val tree: TreeNodeDto,
+)
 
 /** A tree node; the `type` discriminator (`folder`/`page`) comes from the sealed serializer. */
 @Serializable

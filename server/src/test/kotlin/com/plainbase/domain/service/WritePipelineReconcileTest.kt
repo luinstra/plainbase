@@ -1,9 +1,11 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.repository.Stage
 import com.plainbase.domain.root.RootName
@@ -220,6 +222,33 @@ class WritePipelineReconcileTest : FunSpec({
                 pipeline.reconcileDirtyPages()
 
                 harness.dirtyPages.all().single().pageId shouldBe page.id
+            }
+        }
+    }
+
+    test("reconcile leaves a newly hidden recovery row untouched") {
+        withTempTree(::seedOne) { root ->
+            val hidden = ContentPathPolicy.create(
+                fileEligibility = { false },
+                traversalEligibility = { false },
+                metadataEligibility = { false },
+            )
+            IndexHarness(root, policies = mapOf(RootName.PRIMARY to hidden)).use { harness ->
+                val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+                val target = RootedPath(RootName.PRIMARY, TreePath.require("doc.md"))
+                val bytes = Files.readAllBytes(root.resolve("doc.md"))
+                harness.dirtyPages.mark(id, target, citations.contentHash(bytes), Stage.WRITING)
+                var committed = false
+
+                harness.writePipeline(
+                    historyHook = { _, _, _, _, _ ->
+                        committed = true
+                        null
+                    },
+                ).reconcileDirtyPages()
+
+                harness.dirtyPages.all().single().pageId shouldBe id
+                committed shouldBe false
             }
         }
     }

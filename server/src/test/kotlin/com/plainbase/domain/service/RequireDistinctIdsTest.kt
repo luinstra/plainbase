@@ -156,6 +156,7 @@ private class DistinctIdsWorld(private val root: Path) : AutoCloseable {
         citations = CitationFactory(),
         rootRank = registry::rank,
         registeredRoots = registry.roots.map { it.name }.toSet(),
+        policies = allowAllPolicies(),
     )
 
     fun adoption(collidingIds: Boolean): AdoptionPass = AdoptionPass(
@@ -167,6 +168,7 @@ private class DistinctIdsWorld(private val root: Path) : AutoCloseable {
         citations = CitationFactory(),
         rootRank = registry::rank,
         registeredRoots = registry.roots.map { it.name }.toSet(),
+        policies = allowAllPolicies(),
     )
 
     override fun close() = driver.close()

@@ -65,7 +65,7 @@ class RootPinRestTest : FunSpec({
         { idx -> PageRootResolver(AmbiguousIdMap(idx.idMap, id, liveRoots = liveRoots), idx.rootRegistry) }
 
     fun fakeFactoryAbsence(liveRoots: List<RootName>): (com.plainbase.domain.service.IndexHarness) -> AbsenceClassifier =
-        { idx -> AbsenceClassifier(AmbiguousIdMap(idx.idMap, id, liveRoots = liveRoots)) }
+        { idx -> AbsenceClassifier(AmbiguousIdMap(idx.idMap, id, liveRoots = liveRoots), idx.policies) }
 
     suspend fun io.ktor.client.statement.HttpResponse.errorCode(): String =
         Json.parseToJsonElement(bodyAsText()).jsonObject.getValue("error").jsonObject.getValue("code").jsonPrimitive.content

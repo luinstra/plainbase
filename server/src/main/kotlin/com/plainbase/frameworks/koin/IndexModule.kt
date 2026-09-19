@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.koin
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.page.FrontmatterParser
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IdProvider
@@ -48,6 +50,7 @@ val indexModule = module {
         )
         IndexRuntimeFactory.observed(
             registry = registry,
+            policies = get<Map<RootName, ContentPathPolicy>>(),
             stores = stores,
             histories = histories,
             support = support,

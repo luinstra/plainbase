@@ -122,7 +122,7 @@ data class IdBinding(
 
 /** One durable snapshot of every claim on an id: the roots holding it [live], and the [retired] tombstones (C5). */
 data class ClaimantState(
-    val live: List<RootName>,
+    val live: List<IdBinding>,
     val retired: List<RetiredBinding>,
 )
 
@@ -166,10 +166,12 @@ class Supersession(
     private val scannedRoots: Set<RootName>,
     private val registeredRoots: Set<RootName>,
     private val proven: Set<BindingRef> = emptySet(),
+    private val eligible: (RootedPath) -> Boolean = { true },
 ) {
 
     /** May this pass take [incumbent]'s id away from it? */
     fun mayDisplace(incumbent: IdBinding): Boolean = when {
+        !eligible(incumbent.path) -> false
         incumbent.path in witnessed -> true
         BindingRef(incumbent.path.path, incumbent.id) in proven -> true
         // DETACHED (D2): a binding under a root no longer in `roots {}` is not an OWNER at all, so there is no

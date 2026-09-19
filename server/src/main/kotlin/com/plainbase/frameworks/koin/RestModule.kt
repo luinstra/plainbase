@@ -53,16 +53,24 @@ internal fun createRestModule(
     }
     single {
         val index = get<ObservedIndexRuntime>()
-        SearchService(provider = get(), indexBuilder = index.builder, availability = index.availability)
+        SearchService(
+            provider = get(),
+            indexBuilder = index.builder,
+            availability = index.availability,
+            policies = index.policies,
+        )
     }
     // Page-root resolver; root status is evaluated from request-time snapshots.
     single {
         val index = get<ObservedIndexRuntime>()
-        PageRootResolver(get<IdMapRepository>(), index.registry)
+        PageRootResolver(get<IdMapRepository>(), index.registry, index.policies)
     }
     // The ONE owner of 404-vs-503 for an absent page (C1). ONE dep - the durable index - because that is the ONLY
     // party to this question that knows anything: every filesystem probe it replaces was the wrong KIND of fact.
-    single { AbsenceClassifier(get()) }
+    single {
+        val index = get<ObservedIndexRuntime>()
+        AbsenceClassifier(get(), index.policies)
+    }
     single {
         val index = get<ObservedIndexRuntime>()
         WritePipeline(
@@ -75,6 +83,7 @@ internal fun createRestModule(
             aliasRegistry = index.aliasRegistry,
             availability = index.availability,
             historyHook = get(),
+            policies = index.policies,
         )
     }
     single {
@@ -136,11 +145,17 @@ internal fun createRestModule(
     // inlined as Clock.System (no Clock single exists here, the ApiTokenService idiom).
     single<ProposalBaseReader> {
         val index = get<ObservedIndexRuntime>()
-        IndexProposalBaseReader(indexBuilder = index.builder, stores = index.stores::get, absence = get())
+        IndexProposalBaseReader(
+            indexBuilder = index.builder,
+            stores = index.stores::get,
+            absence = get(),
+            policies = index.policies,
+        )
     }
     single { ProposalAuthorLabeler(tokens = get(), users = get()) }
     single {
         val index = get<ObservedIndexRuntime>()
+        val resolver = get<PageRootResolver>()
         ProposalService(
             repository = get(),
             citations = get(),
@@ -150,7 +165,8 @@ internal fun createRestModule(
             // The D15 guard's narrow dependency. Evaluated PER CALL, so a watcher-failure flip landing DURING the
             // boot reconcile is seen - a pass-level snapshot would miss it and then rewrite a row for a root that
             // just went down. The resolver stays the ONE owner of `statusOf`: this is a call, not a second copy.
-            rootStatus = { root -> get<PageRootResolver>().statusOf(root, index.availability.current()) },
+            rootStatus = { root -> resolver.statusOf(root, index.availability.current()) },
+            proposalEligibility = resolver::proposalEligible,
         )
     }
     // P1b: the GuardedProposalFacade is assembled with the guarded MutatingFacade at the application boundary.

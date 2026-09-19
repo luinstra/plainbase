@@ -2,9 +2,11 @@
 
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.FrontmatterParser
@@ -90,6 +92,7 @@ class IndexBuilder(
     private val epochs: ObservationEpoch = ObservationEpoch(NoRetirements, RootConvergence()),
     /** Binding-latch proof source for deciding whether an object LIST describes this corpus. */
     private val bindings: BindingLatch = BindingLatch(NoTopology),
+    private val policies: Map<RootName, ContentPathPolicy>,
 ) {
 
     /** One root's topology entry, content store, history, and optional object manifest source. */
@@ -126,19 +129,21 @@ class IndexBuilder(
     private val rootLoss = RootLossClassifier(availability)
 
     /** Shared 404-vs-503 rule over the durable index. */
-    private val absence = AbsenceClassifier(idMap)
+    private val absence = AbsenceClassifier(idMap, policies)
 
     /** Eager source materializer using the shared classifiers. */
     private val sourceReader = IndexSourceReader(frontmatterParser, absence, availability, rootLoss)
 
     /** Identity resolver and binder using the builder's repositories and patcher. */
-    private val identityAssignments = IndexIdentityAssignments(idMap, identity, patcher)
+    private val identityAssignments = IndexIdentityAssignments(idMap, identity, patcher, ::allowsFile)
 
     /** Snapshot assembly; source reads, authority, and publication remain in this coordinator. */
     private val snapshotAssembler = IndexSnapshotAssembler(rendererFactory, citations)
 
     /** Serving-only hint: a previously seen corpus may treat an empty scan as 404, never as delete authority. */
     private val corpusSeen = mutableSetOf<RootName>()
+
+    private val hiddenGitWarnings = mutableSetOf<RootName>()
 
     /** The atomically published snapshot; authority evidence remains pass-local. */
     private val holder = AtomicReference<PageIndex>(PageIndex.EMPTY)
@@ -166,7 +171,17 @@ class IndexBuilder(
             }
 
         // Capture freshness once, before scanning or other evidence reads.
-        val pass = AbsencePass.capture(epochs, retirements, idMap, bindings, sources, localSources, gitOracleRoots)
+        val pass = AbsencePass.capture(
+            epochs,
+            retirements,
+            idMap,
+            bindings,
+            sources,
+            localSources,
+            gitOracleRoots,
+            eligible = ::allowsFile,
+            onHiddenGitStall = ::warnHiddenGitStall,
+        )
         val observed = sources.mapNotNull { sourceReader.read(it.root, it.store, it.history) }
         // Witness every rooted path read, including pages later excluded as suspect; the latch uses this full view.
         val seen: Map<RootedPath, Witness> = observed.flatMap { scan ->
@@ -279,7 +294,8 @@ class IndexBuilder(
 
     /** Confirms complete local scans for the epoch source; skipped or incomplete scans break the epoch. */
     private fun confirmEpochs(scans: List<SourceScan>): Map<RootName, ObservationEpoch.EpochConfirmation> {
-        val durable = idMap.bindings().groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
+        val durable = idMap.bindings().filter { allowsFile(it.path) }
+            .groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
         return localSources
             .mapNotNull { source ->
                 val root = source.root.name
@@ -303,12 +319,14 @@ class IndexBuilder(
     @OptIn(InferredProofMint::class)
     private class AbsencePass private constructor(
         private val proven: (RootName, ObjectManifest, Map<RootedPath, Witness>) -> Set<BindingRef>,
-        private val durable: () -> List<IdBinding>,
         private val gitCheckpoint: (RootName) -> String?,
         private val histories: Map<RootName, GitReads>,
         private val observationStamps: Map<RootName, ObservationId>,
         private val bindingEpochs: Map<RootName, BindingEpoch>,
         private val headsBefore: Map<RootName, String>,
+        private val allDurable: () -> List<IdBinding>,
+        private val eligible: (RootedPath) -> Boolean,
+        private val onHiddenGitStall: (RootName, Set<RootedPath>) -> Unit,
     ) {
         /** GIT proofs and checkpoint advances applied together. */
         data class GitMint(val proofs: List<AbsenceProof>, val advances: List<GitCheckpointAdvance>)
@@ -369,9 +387,13 @@ class IndexBuilder(
          * still advances after the range is safely resolved.
          */
         fun mintGit(scans: List<SourceScan>): GitMint {
-            val durableByRoot = durable().groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
+            val bindings = allDurable()
+            val durableByRoot = bindings.filter { eligible(it.path) }
+                .groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
+            val hiddenByRoot = bindings.filterNot { eligible(it.path) }
+                .groupBy({ it.path.root }, { it.path })
             val minted = histories.entries.mapNotNull { (root, git) ->
-                mintGitForSource(root, git, scans, durableByRoot)
+                mintGitForSource(root, git, scans, durableByRoot, hiddenByRoot)
             }
             return GitMint(
                 proofs = minted.flatMap(GitMint::proofs),
@@ -384,6 +406,7 @@ class IndexBuilder(
             git: GitReads,
             scans: List<SourceScan>,
             durable: Map<RootName, List<BindingRef>>,
+            hidden: Map<RootName, List<RootedPath>>,
         ): GitMint? {
             val preHead = headsBefore[root]
             val postHead = git.currentHead()
@@ -395,7 +418,7 @@ class IndexBuilder(
                 else -> {
                     val token = observationStamps.getValue(root)
                     val epoch = bindingEpochs.getValue(root)
-                    mintGitRange(git, scan, root, postHead, token, epoch, durable[root].orEmpty())
+                    mintGitRange(git, scan, root, postHead, token, epoch, durable[root].orEmpty(), hidden[root].orEmpty())
                 }
             }
         }
@@ -408,6 +431,7 @@ class IndexBuilder(
             token: ObservationId,
             epoch: BindingEpoch,
             durable: List<BindingRef>,
+            hidden: List<RootedPath>,
         ): GitMint? {
             val oldHead = gitCheckpoint(root)
             return when {
@@ -433,8 +457,10 @@ class IndexBuilder(
                             covers = it,
                         )
                     }
+                    val hiddenDeleted = hidden.filterTo(mutableSetOf()) { it.path in deleted }
+                    if (hiddenDeleted.isNotEmpty()) onHiddenGitStall(root, hiddenDeleted)
                     val advance = GitCheckpointAdvance(root, token, epoch, postHead)
-                        .takeIf { (deleted intersect scan.unread).isEmpty() }
+                        .takeIf { (deleted intersect scan.unread).isEmpty() && hiddenDeleted.isEmpty() }
                     GitMint(listOfNotNull(proof), listOfNotNull(advance))
                 }
             }
@@ -456,6 +482,8 @@ class IndexBuilder(
                 sources: List<Source>,
                 localSources: List<Source>,
                 gitOracleRoots: List<Source>,
+                eligible: (RootedPath) -> Boolean,
+                onHiddenGitStall: (RootName, Set<RootedPath>) -> Unit,
             ): AbsencePass {
                 val established = localSources.associate { it.root.name to epochs.establish(it.root.name) }
                 val observationStamps = sources.associate { source ->
@@ -474,7 +502,9 @@ class IndexBuilder(
                 }
                 return AbsencePass(
                     proven = latch::proven,
-                    durable = idMap::bindings,
+                    allDurable = idMap::bindings,
+                    eligible = eligible,
+                    onHiddenGitStall = onHiddenGitStall,
                     gitCheckpoint = retirements::gitHead,
                     histories = histories,
                     observationStamps = observationStamps,
@@ -506,6 +536,7 @@ class IndexBuilder(
     /** Publishes `durableRows - witnessed - retired` as limbo and derives the root-level serving hint. */
     private fun publishLimbo(witnessed: Map<RootedPath, Witness>, scannedRoots: Set<RootName>) {
         val stranded = idMap.bindings()
+            .filter { allowsFile(it.path) }
             .filterNot { it.path in witnessed }
             .groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
             .mapValues { (_, refs) -> refs.toSet() }
@@ -531,6 +562,17 @@ class IndexBuilder(
                     "its citations were never real. Check the mount at $where."
             }
         }
+    }
+
+    private fun allowsFile(path: RootedPath): Boolean = policies.allowsFile(path)
+
+    private fun warnHiddenGitStall(root: RootName, paths: Set<RootedPath>) {
+        val message = {
+            "root '$root' retained its git checkpoint because ${paths.size} durable path(s) are hidden by root policy; " +
+                "restore or reinclude those paths, or deliberately force-retire their ids; " +
+                "the deletedIn range will be reconsidered on the next pass"
+        }
+        if (hiddenGitWarnings.add(root)) logger.warn(message) else logger.debug(message)
     }
 
     /** Manage-gated rescan entry; internal callers use the no-arg [rebuild]. */

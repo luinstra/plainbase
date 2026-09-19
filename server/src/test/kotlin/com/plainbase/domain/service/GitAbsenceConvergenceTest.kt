@@ -1,5 +1,10 @@
 package com.plainbase.domain.service
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.StoreRead
@@ -11,6 +16,7 @@ import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.root.AbsenceProof
+import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ProofSource
@@ -24,9 +30,13 @@ import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
+import org.slf4j.Logger.ROOT_LOGGER_NAME
+import org.slf4j.LoggerFactory
 
 /**
  * **C4, end to end: the chunk that restores OFFLINE delete convergence.**
@@ -75,6 +85,145 @@ class GitAbsenceConvergenceTest : FunSpec({
                 }
                 world.limbo.count(extra) shouldBe 0
                 world.retirements.gitHead(extra) shouldBe "B" // the checkpoint advances with the deletion it proved
+            }
+        }
+    }
+
+    test("a hidden git deletion retains its binding and checkpoint warns once then retires when re-included") {
+        withAbsenceTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                val admitted = mutableSetOf("notes")
+                val policy = firstSegmentPolicy(admitted)
+                val policies = mapOf(RootName.PRIMARY to ContentPathPolicy.ALL, extra to policy)
+                val git = FakeHistory(head = "A")
+                val builder = world.builder(
+                    mainDir,
+                    LocalContentStore(extraDir, policy = policy),
+                    world.indexer,
+                    extraHistory = git,
+                    policies = policies,
+                )
+                val id = builder.rebuild().byPath.getValue(RootedPath(extra, rollback)).id
+
+                extraDir.resolve("notes/rollback.md").toFile().delete()
+                admitted.clear()
+                git.head = "B"
+                git.deleted = setOf(rollback)
+                val rootLogger = LoggerFactory.getLogger(ROOT_LOGGER_NAME) as Logger
+                val previousLevel = rootLogger.level
+                val appender = ListAppender<ILoggingEvent>().apply { start() }
+                rootLogger.addAppender(appender)
+                rootLogger.level = Level.DEBUG
+                try {
+                    builder.rebuild()
+                    builder.rebuild()
+                } finally {
+                    rootLogger.level = previousLevel
+                    rootLogger.detachAppender(appender)
+                }
+
+                world.idMap.bindingInRoot(extra, id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
+                world.idMap.retiredAt(extra, id).shouldBeNull()
+                world.retirements.gitHead(extra) shouldBe "A"
+                appender.list.filter {
+                    it.level == Level.WARN && "retained its git checkpoint" in it.formattedMessage
+                } shouldHaveSize 1
+                appender.list.filter {
+                    it.level == Level.DEBUG && "retained its git checkpoint" in it.formattedMessage
+                } shouldHaveSize 1
+
+                admitted += "notes"
+                builder.rebuild()
+
+                world.idMap.bindingInRoot(extra, id).shouldBeNull()
+                world.idMap.retiredAt(extra, id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
+                world.retirements.gitHead(extra) shouldBe "B"
+            }
+        }
+    }
+
+    test("force-retiring a hidden git deletion lets the retained checkpoint advance") {
+        withAbsenceTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                val admitted = mutableSetOf("notes")
+                val policy = firstSegmentPolicy(admitted)
+                val policies = mapOf(RootName.PRIMARY to ContentPathPolicy.ALL, extra to policy)
+                val git = FakeHistory(head = "A")
+                val builder = world.builder(
+                    mainDir,
+                    LocalContentStore(extraDir, policy = policy),
+                    world.indexer,
+                    extraHistory = git,
+                    policies = policies,
+                )
+                val id = builder.rebuild().byPath.getValue(RootedPath(extra, rollback)).id
+
+                extraDir.resolve("notes/rollback.md").toFile().delete()
+                admitted.clear()
+                git.head = "B"
+                git.deleted = setOf(rollback)
+                builder.rebuild()
+                world.retirements.gitHead(extra) shouldBe "A"
+
+                val binding = world.idMap.bindingInRoot(extra, id).shouldNotBeNull()
+                val proof = AbsenceProof.accepted(
+                    root = extra,
+                    source = ProofSource.OPERATOR,
+                    observationId = world.retirements.observation(extra),
+                    bindingEpoch = world.retirements.bindingEpoch(extra),
+                    covers = setOf(BindingRef(binding.path.path, id)),
+                )
+                world.retirements.applyProofs(
+                    proofs = listOf(proof),
+                    witnessed = emptySet(),
+                    unavailableNow = { emptySet() },
+                ) shouldBe setOf(RootedPageId(extra, id))
+
+                builder.rebuild()
+
+                world.idMap.retiredAt(extra, id).shouldNotBeNull()
+                world.retirements.gitHead(extra) shouldBe "B"
+            }
+        }
+    }
+
+    test("a deletion without an ancestral checkpoint or epoch remains limbo after re-inclusion") {
+        withAbsenceTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                val admitted = mutableSetOf("notes")
+                val policy = firstSegmentPolicy(admitted)
+                val policies = mapOf(RootName.PRIMARY to ContentPathPolicy.ALL, extra to policy)
+                val store = LocalContentStore(extraDir, policy = policy)
+                val id = world.builder(mainDir, store, world.indexer, policies = policies)
+                    .rebuild().byPath.getValue(RootedPath(extra, rollback)).id
+
+                extraDir.resolve("notes/rollback.md").toFile().delete()
+                admitted.clear()
+                world.builder(mainDir, store, world.indexer, policies = policies).rebuild()
+                world.retirements.gitHead(extra).shouldBeNull()
+
+                admitted += "notes"
+                val git = FakeHistory(head = "B")
+                val snapshot = world.builder(
+                    mainDir,
+                    store,
+                    world.indexer,
+                    extraHistory = git,
+                    policies = policies,
+                ).rebuild()
+
+                world.idMap.bindingInRoot(extra, id).shouldNotBeNull()
+                world.idMap.retiredAt(extra, id).shouldBeNull()
+                world.limbo.holds(extra, id) shouldBe true
+                world.retirements.gitHead(extra) shouldBe "B"
+                shouldThrowAny { AbsenceClassifier(world.idMap, policies).requireVerifiedAbsence(extra, id, snapshot) }
+                    .shouldBeInstanceOf<AbsenceUnverified>()
             }
         }
     }

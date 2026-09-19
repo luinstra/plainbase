@@ -328,7 +328,7 @@ class ObjectContentStoreQ8Test : FunSpec({
         HybridFixture().use { hybrid ->
             val path = TreePath.require("q8c-write.md")
             val key = hybrid.mirror.resolveRepoRelativePath(path)
-            hybrid.mirror.write(path, "seed".toByteArray()) // mirror-only - the bucket has never seen this key
+            hybrid.mirror.writeMirror(path, "seed".toByteArray()) // mirror-only - the bucket has never seen this key
             hybrid.mirror.scan()
 
             hybrid.store.write(path, "unconditional".toByteArray()) // HEAD sees null (bucket-absent) - must not gate

@@ -1,6 +1,7 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.CasResult
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.StoreRead
@@ -424,6 +425,35 @@ class AdoptionPassTest : FunSpec({
         }
     }
 
+    test("a visible duplicate cannot displace a hidden materialized incumbent and reinclude restores it") {
+        withHarness { h ->
+            val fixedId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b72")
+            writePage(h.root, "hidden/original.md", "---\nid: ${fixedId.value}\n---\noriginal\n")
+            val admitted = mutableSetOf("hidden")
+            val membership = firstSegmentPolicy(admitted)
+            val store = LocalContentStore(h.root, policy = membership)
+            val policies = mapOf(RootName.PRIMARY to membership)
+
+            h.pass(store = store, policies = policies).run(AdoptionPass.Mode.RECORD)
+            h.idMap.bindingInRoot(RootName.PRIMARY, fixedId)?.path shouldBe
+                RootedPath(RootName.PRIMARY, TreePath.require("hidden/original.md"))
+            writePage(h.root, "visible/copy.md", "---\nid: ${fixedId.value}\n---\ncopy\n")
+
+            admitted.clear()
+            admitted += "visible"
+            val claimant = h.pass(store = store, policies = policies).run(AdoptionPass.Mode.RECORD).pages.single()
+            claimant.path shouldBe TreePath.require("visible/copy.md")
+            claimant.id shouldNotBe fixedId
+            h.idMap.bindingInRoot(RootName.PRIMARY, fixedId)?.path shouldBe
+                RootedPath(RootName.PRIMARY, TreePath.require("hidden/original.md"))
+
+            admitted += "hidden"
+            val reIncluded = h.pass(store = store, policies = policies).run(AdoptionPass.Mode.RECORD)
+            reIncluded.pages.single { it.path.value == "hidden/original.md" }.id shouldBe fixedId
+            reIncluded.pages.single { it.path == claimant.path }.id shouldBe claimant.id
+        }
+    }
+
     test("the dry run IS the write: PREVIEW's planned bytes are exactly the bytes MATERIALIZE puts on disk") {
         withTwoRoots { h, extra ->
             addRefusalPage(h.root)
@@ -686,6 +716,7 @@ private class Harness(val root: Path, val driver: app.cash.sqldelight.db.SqlDriv
         registry: RootRegistry = RootRegistry.of(listOf(localRoot("docs", root))),
         extras: List<AdoptionPass.Source> = emptyList(),
         idMap: IdMapRepository = this.idMap,
+        policies: Map<RootName, ContentPathPolicy> = allowAllPolicies(registry.roots.map { it.name }),
     ): AdoptionPass =
         AdoptionPass(
             sources = listOf(AdoptionPass.Source(RootName.PRIMARY, store)) + extras,
@@ -696,6 +727,7 @@ private class Harness(val root: Path, val driver: app.cash.sqldelight.db.SqlDriv
             citations = CitationFactory(),
             rootRank = registry::rank,
             registeredRoots = registry.roots.map { it.name }.toSet(),
+            policies = policies,
         )
 }
 

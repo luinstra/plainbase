@@ -164,6 +164,37 @@ Per-root keys:
 | `path` | the directory the root serves (**required**, non-blank) | - | - |
 | `editable` | whether pages in this root can be edited/created. **Topology, not authorization**: it is enforced in EVERY auth mode, `off` included, and a write to a read-only root answers 403 `root_not_editable` | `true` | `false` |
 | `history` | `off` \| `auto` \| `native` git history mode | `auto` (today's repo auto-detection) | `off` (Plainbase never commits into a repo it does not own) |
+| `displayName` | optional human-facing label for the root; the root name remains the URL and identity | omitted | omitted |
+| `includes` | optional list of JDK glob patterns selecting files; omitted keeps the legacy default, while `[]` selects no files | omitted | omitted |
+| `excludes` | list of JDK glob patterns subtracted from the selected files | `[]` | `[]` |
+| `folderLabels` | exact NFC-normalized relative folder paths mapped to display labels; labels do not change URLs or `_folder.yaml` | `{}` | `{}` |
+
+Root content filtering is evaluated at boot and applies consistently to scans, filesystem reads and writes, watches,
+index publication, durable identity resolution, and search. Patterns use `/` separators, are relative, and cannot
+contain `..` segments or backslashes. For includes, `docs/**` selects the subtree while `docs` alone selects only
+that exact file-shaped path. Excludes also apply to ancestors, so excluding `docs` removes the entire `docs` subtree.
+`includes` and `excludes` apply only to local roots; a synthesized object-backed primary keeps its existing object-store
+membership behavior and is not filtered by these keys.
+The keys are plural because bare `include` is a HOCON directive, not an ordinary field name.
+JDK glob matching is whole-path matching: `**/*.md` matches nested Markdown but misses a top-level `a.md`, so select
+both shapes when both are intended. Dot-prefixed entries remain hidden unless an include contains the literal
+dot-prefixed prefix (for example `.crew/**`; `**/*.md` does not authorize `.crew`). Internally supplied legacy ignore
+rules remain additive; there is no live `content.ignore` configuration key in this release.
+`_folder.yaml` is metadata only and is read for an admitted folder. The configuration is restart-only.
+Quote `folderLabels` keys that contain dots (for example, `folderLabels { "v1.2" = "Version 1.2" }`);
+unquoted dots are HOCON path separators rather than part of one folder key.
+
+An excluded file that already has a durable identity is hidden from the published tree and search but its binding is
+retained. If the physical file is moved from a hidden path to a visible path, the hidden incumbent is protected and
+the visible path receives a fresh identity; the old hidden permalink is not revived. Dirty-page reconciliation keeps
+hidden targets journaled without reading or rewriting them. A deletion that happened while a path was hidden is not,
+by itself, deletion evidence. Reinclude or restore the path so Plainbase can establish its state. If the deletion was
+intentional and the binding remains in `absence_unverified` limbo, stop `serve` and run
+`plainbase admin force-retire <root> <id>`; this records the existing explicit operator proof instead of guessing from
+the filter change.
+
+Removing a root also hides its durable proposals from list, detail, and actions without deleting or rewriting them;
+re-adding the root makes those proposals visible again.
 
 ### The ORDER of the block decides SOURCE PRECEDENCE, not permalinks
 
@@ -222,6 +253,10 @@ Three consequences worth stating outright:
 - **`roots.conf` (the CLI's file) always ranks after `plainbase.conf`'s block**, and `plainbase root
   add` **appends**, so a newly added root ranks last. There is NO rename operation: an extra root's name
   is IMMUTABLE, because it is part of every permalink into it, so Plainbase ships no `root rename`/`mv`.
+
+  Moving a managed root declaration from `DATA_DIR/roots.conf` into `plainbase.conf` changes its registry rank because
+  the hand-written block is ordered before the managed roots. That may change SOURCE precedence and bare-id candidate
+  ordering, but it does not change rooted page identity or rooted permalink paths.
 
   > **Root rename/mv rots rooted citations.** A root's name is part of every permalink into it
   > (`/p/{root}/{id}`), so removing and re-adding a root under a different name, or `mv`-ing files
@@ -300,6 +335,12 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error (the same conventi
   coming from a hand-written `roots {}` block in `plainbase.conf`, or from `CONTENT_DIR` when there is none.
 - **Restart to apply.** `root add`/`remove` edit a file; they do not talk to a running server, and the
   server does not hot-reload topology. Nothing changes until the next restart.
+
+The root CLI has no flags for `displayName`, `includes`, `excludes`, or `folderLabels`. To add those settings to an
+existing managed root, stop `serve`, run `plainbase root remove <name>`, then declare that same name and path with the
+new settings in `plainbase.conf` before restarting. Declare the required `docs` root there as well when using an
+explicit `roots {}` block. Do not hand-edit `roots.conf`, and do not leave the same root name in both files: removal
+preserves its durable bindings, while duplicate declarations make startup refuse.
 
 `root add` refuses outright (an error message, not a silent skip) on:
 

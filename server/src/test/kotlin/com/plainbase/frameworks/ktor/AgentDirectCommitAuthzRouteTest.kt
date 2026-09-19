@@ -350,10 +350,10 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
     }
 
     test("PUT-path stale_base 400: a COMMIT agent out-of-glob whose base_hash no longer matches disk → 400 stale_base; no proposal") {
-        withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, store, _, _ ->
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, _, _, root ->
             val staleHash = app.hashOf(outId)
             // Drift the OUT-of-glob page underneath so the degrade's proposeEdit sees a stale base.
-            store.write(TreePath.require("notes/out.md"), "---\ntitle: Out\n---\n\n# Out\n\nDRIFTED.\n".toByteArray())
+            Files.writeString(root.resolve("notes/out.md"), "---\ntitle: Out\n---\n\n# Out\n\nDRIFTED.\n")
             harness.builder.rebuild()
             val resp = app.putEdit(outId, staleHash)
             resp.status shouldBe HttpStatusCode.BadRequest

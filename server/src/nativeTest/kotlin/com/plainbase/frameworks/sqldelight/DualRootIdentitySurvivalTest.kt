@@ -83,7 +83,11 @@ class DualRootIdentitySurvivalTest {
                         Root(extra, RootBackend.Local(extraDir), editable = true, history = HistoryMode.OFF),
                     ),
                 )
-                val resolution = PageRootResolver(repo, registry).resolve(x)
+                val resolution = PageRootResolver(
+                    repo,
+                    registry,
+                    com.plainbase.domain.service.allowAllNativePolicies(registry.roots.map { it.name }),
+                ).resolve(x)
                 assertTrue(resolution is IdResolution.Ambiguous, "expected Ambiguous, was $resolution")
                 assertTrue(resolution.hasRetiredCandidate, "the extra-root tombstone must set hasRetiredCandidate")
             }

@@ -1,10 +1,17 @@
 package com.plainbase.frameworks.filesystem
 
+import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanIssue
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.Root
+import com.plainbase.domain.root.RootBackend
+import com.plainbase.domain.root.RootName
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
@@ -98,6 +105,71 @@ class LocalContentStoreTest : FunSpec({
         }
     }
 
+    test("a DATA_DIR spelled through a root alias is excluded from a physical root") {
+        val base = Files.createTempDirectory("pb-data-alias")
+        try {
+            val real = Files.createDirectories(base.resolve("real"))
+            val alias = base.resolve("alias")
+            try {
+                Files.createSymbolicLink(alias, real)
+            } catch (_: IOException) {
+                return@test
+            }
+            val data = Files.createDirectories(real.resolve("state"))
+            val databaseBytes = "database sentinel".encodeToByteArray()
+            Files.write(data.resolve("plainbase.db"), databaseBytes)
+            Files.writeString(real.resolve("page.md"), "# Allowed")
+            val declaredData = alias.resolve("state")
+            val rootConfig = Root(RootName.PRIMARY, RootBackend.Local(real), editable = true, history = HistoryMode.OFF)
+            val policy = localContentPathPolicy(rootConfig, real, IgnoreRules(), listOf(declaredData))
+            val store = LocalContentStore(real, exclusions = listOf(declaredData), policy = policy)
+
+            policy.allowsFile(TreePath.require("state/plainbase.db")) shouldBe false
+            store.scan().files.map { it.path.value } shouldContainExactly listOf("page.md")
+            store.read(TreePath.require("state/plainbase.db")).shouldBeNull()
+            store.createExclusive(TreePath.require("state/new.md"), "blocked".encodeToByteArray()) { it.size.toString() }
+                .shouldBeInstanceOf<CreateResult.Rejected>()
+            Files.readAllBytes(data.resolve("plainbase.db")).toList() shouldBe databaseBytes.toList()
+            Files.exists(data.resolve("new.md"), LinkOption.NOFOLLOW_LINKS) shouldBe false
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    test("a prospective DATA_DIR through an alias is excluded before it exists") {
+        val base = Files.createTempDirectory("pb-data-alias-future")
+        try {
+            val real = Files.createDirectories(base.resolve("real"))
+            val alias = base.resolve("alias")
+            try {
+                Files.createSymbolicLink(alias, real)
+            } catch (_: IOException) {
+                return@test
+            }
+            val declaredData = alias.resolve("future-state")
+            val rootConfig = Root(RootName.PRIMARY, RootBackend.Local(real), editable = true, history = HistoryMode.OFF)
+            val policy = localContentPathPolicy(rootConfig, real, IgnoreRules(), listOf(declaredData))
+            val store = LocalContentStore(real, exclusions = listOf(declaredData), policy = policy)
+            val hidden = TreePath.require("future-state/plainbase.db")
+
+            policy.mayTraverse(TreePath.require("future-state")) shouldBe false
+            policy.allowsFile(hidden) shouldBe false
+            val data = Files.createDirectories(real.resolve("future-state"))
+            val databaseBytes = "future database sentinel".encodeToByteArray()
+            Files.write(data.resolve("plainbase.db"), databaseBytes)
+            Files.writeString(real.resolve("page.md"), "# Allowed")
+
+            store.scan().files.map { it.path.value } shouldContainExactly listOf("page.md")
+            store.read(hidden).shouldBeNull()
+            store.createExclusive(TreePath.require("future-state/new.md"), "blocked".encodeToByteArray()) { it.size.toString() }
+                .shouldBeInstanceOf<CreateResult.Rejected>()
+            Files.readAllBytes(data.resolve("plainbase.db")).toList() shouldBe databaseBytes.toList()
+            Files.exists(data.resolve("new.md"), LinkOption.NOFOLLOW_LINKS) shouldBe false
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
     test("content.ignore globs exclude matching paths") {
         val tmp = Files.createTempDirectory("pb-glob")
         try {
@@ -109,6 +181,152 @@ class LocalContentStoreTest : FunSpec({
             val result = store.scan()
 
             result.files.map { it.path.value } shouldContainExactly listOf("keep.md")
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    test("configured membership scans admitted pages and assets without opening nested hidden paths") {
+        val tmp = Files.createTempDirectory("pb-root-policy")
+        try {
+            Files.createDirectories(tmp.resolve("docs"))
+            Files.writeString(tmp.resolve("docs/page.md"), "# Page")
+            Files.writeString(tmp.resolve("docs/diagram.svg"), "svg")
+            Files.writeString(tmp.resolve("outside.md"), "# Outside")
+            Files.createDirectories(tmp.resolve(".crew/reviews"))
+            Files.createDirectories(tmp.resolve(".crew/.private"))
+            Files.writeString(tmp.resolve(".crew/plan.md"), "# Plan")
+            Files.writeString(tmp.resolve(".crew/reviews/rejected.md"), "# Rejected")
+            Files.writeString(tmp.resolve(".crew/.private/secret.md"), "# Secret")
+            val root = Root(
+                name = RootName.PRIMARY,
+                backend = RootBackend.Local(tmp),
+                editable = true,
+                history = HistoryMode.OFF,
+                includes = listOf("docs/**", ".crew/**"),
+                excludes = listOf(".crew/reviews/**"),
+            )
+            val ignoreRules = IgnoreRules()
+            val policy = localContentPathPolicy(root, tmp, ignoreRules, emptyList())
+
+            val result = LocalContentStore(tmp, ignoreRules = ignoreRules, policy = policy).scan()
+
+            result.files.map { it.path.value }.toSet() shouldBe setOf("docs/page.md", "docs/diagram.svg", ".crew/plan.md")
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    test("configured membership rejects a prospective create before making parents") {
+        val tmp = Files.createTempDirectory("pb-root-policy-create")
+        try {
+            val root = Root(
+                name = RootName.PRIMARY,
+                backend = RootBackend.Local(tmp),
+                editable = true,
+                history = HistoryMode.OFF,
+                includes = listOf("docs/**"),
+            )
+            val policy = localContentPathPolicy(root, tmp, IgnoreRules(), emptyList())
+            val store = LocalContentStore(tmp, policy = policy).also { it.scan() }
+
+            store.createExclusive(TreePath.require("private/new/page.md"), "# No".encodeToByteArray()) { "hash" }
+                .shouldBeInstanceOf<CreateResult.Rejected>()
+            Files.exists(tmp.resolve("private")) shouldBe false
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    test("asset writes reject configured excludes and paths outside includes without changing existing parents") {
+        val tmp = Files.createTempDirectory("pb-root-policy-assets")
+        val hasher: (ByteArray) -> String = { it.size.toString() }
+        try {
+            val docs = Files.createDirectories(tmp.resolve("docs"))
+            val private = Files.createDirectories(docs.resolve("private"))
+            val outside = Files.createDirectories(tmp.resolve("outside"))
+            Files.writeString(private.resolve("keep.txt"), "private marker")
+            Files.writeString(outside.resolve("keep.txt"), "outside marker")
+            val root = Root(
+                name = RootName.PRIMARY,
+                backend = RootBackend.Local(tmp),
+                editable = true,
+                history = HistoryMode.OFF,
+                includes = listOf("docs/**"),
+                excludes = listOf("docs/private/**"),
+            )
+            val policy = localContentPathPolicy(root, tmp, IgnoreRules(), emptyList())
+            val store = LocalContentStore(tmp, policy = policy).also { it.scan() }
+            val rootBefore = entryNames(tmp)
+            val docsBefore = entryNames(docs)
+            val privateBefore = entryNames(private)
+            val outsideBefore = entryNames(outside)
+
+            store.writeAssetExclusive(
+                grantForTests(),
+                TreePath.require("docs/private/blocked.bin"),
+                "blocked".encodeToByteArray(),
+                hasher,
+            ).shouldBeInstanceOf<CreateResult.Rejected>()
+            store.writeAssetExclusive(
+                grantForTests(),
+                TreePath.require("outside/blocked.bin"),
+                "blocked".encodeToByteArray(),
+                hasher,
+            ).shouldBeInstanceOf<CreateResult.Rejected>()
+
+            Files.exists(private.resolve("blocked.bin"), LinkOption.NOFOLLOW_LINKS) shouldBe false
+            Files.exists(outside.resolve("blocked.bin"), LinkOption.NOFOLLOW_LINKS) shouldBe false
+            entryNames(tmp) shouldBe rootBefore
+            entryNames(docs) shouldBe docsBefore
+            entryNames(private) shouldBe privateBefore
+            entryNames(outside) shouldBe outsideBefore
+            Files.readString(private.resolve("keep.txt")) shouldBe "private marker"
+            Files.readString(outside.resolve("keep.txt")) shouldBe "outside marker"
+
+            val allowed = "allowed asset".encodeToByteArray()
+            store.writeAssetExclusive(grantForTests(), TreePath.require("docs/allowed.bin"), allowed, hasher)
+                .shouldBeInstanceOf<CreateResult.Created>()
+            Files.readAllBytes(docs.resolve("allowed.bin")).toList() shouldBe allowed.toList()
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    test("a post-scan in-root ancestor symlink cannot redirect reads stats or CAS into an excluded path") {
+        val tmp = Files.createTempDirectory("pb-policy-ancestor-symlink")
+        try {
+            val publicBytes = "# Public\n".encodeToByteArray()
+            val secretBytes = "# Private secret\n".encodeToByteArray()
+            Files.createDirectories(tmp.resolve("docs"))
+            Files.createDirectories(tmp.resolve("private"))
+            Files.write(tmp.resolve("docs/page.md"), publicBytes)
+            Files.write(tmp.resolve("private/page.md"), secretBytes)
+            val root = Root(
+                name = RootName.PRIMARY,
+                backend = RootBackend.Local(tmp),
+                editable = true,
+                history = HistoryMode.OFF,
+                includes = listOf("docs/**"),
+            )
+            val policy = localContentPathPolicy(root, tmp, IgnoreRules(), emptyList())
+            val store = LocalContentStore(tmp, policy = policy).also { it.scan() }
+            val path = TreePath.require("docs/page.md")
+
+            Files.delete(tmp.resolve("docs/page.md"))
+            Files.delete(tmp.resolve("docs"))
+            try {
+                Files.createSymbolicLink(tmp.resolve("docs"), tmp.resolve("private"))
+            } catch (_: IOException) {
+                return@test
+            }
+
+            store.read(path).shouldBeNull()
+            store.readClassified(path) shouldBe StoreRead.NoBytes
+            store.stat(path).shouldBeNull()
+            store.compareAndSwapWrite(path, publicBytes.size.toString(), "changed".encodeToByteArray()) { it.size.toString() } shouldBe
+                CasResult.Deleted
+            Files.readAllBytes(tmp.resolve("private/page.md")).toList() shouldBe secretBytes.toList()
         } finally {
             tmp.toFile().deleteRecursively()
         }
@@ -257,14 +475,60 @@ class LocalContentStoreTest : FunSpec({
         }
     }
 
+    test("configured exclusions suppress folder metadata while admitted metadata still loads") {
+        val tmp = Files.createTempDirectory("pb-folder-meta-policy")
+        try {
+            val visible = Files.createDirectories(tmp.resolve("visible"))
+            val sidecarExcluded = Files.createDirectories(tmp.resolve("docs"))
+            val folderExcluded = Files.createDirectories(tmp.resolve("private"))
+            Files.writeString(visible.resolve("_folder.yaml"), "title: Visible title\n")
+            Files.writeString(visible.resolve("page.md"), "# Visible\n")
+            Files.writeString(sidecarExcluded.resolve("_folder.yaml"), "title: Must stay hidden\n")
+            Files.writeString(sidecarExcluded.resolve("page.md"), "# Docs\n")
+            Files.writeString(folderExcluded.resolve("_folder.yaml"), "title: Private title\n")
+            Files.writeString(folderExcluded.resolve("page.md"), "# Private\n")
+            val root = Root(
+                name = RootName.PRIMARY,
+                backend = RootBackend.Local(tmp),
+                editable = true,
+                history = HistoryMode.OFF,
+                includes = listOf("visible/**", "docs/**", "private/**"),
+                excludes = listOf("docs/_folder.yaml", "private/**"),
+            )
+            val policy = localContentPathPolicy(root, tmp, IgnoreRules(), emptyList())
+
+            val result = LocalContentStore(tmp, policy = policy).scan()
+
+            result.folders.single { it.path.value == "visible" }.meta.shouldNotBeNull().title shouldBe "Visible title"
+            result.folders.single { it.path.value == "docs" }.meta.shouldBeNull()
+            result.folders.none { it.path.value == "private" } shouldBe true
+            result.files.map { it.path.value }.toSet() shouldBe setOf("visible/page.md", "docs/page.md")
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
     // ---- Write path: atomic write round-trips ----------------------------------------------
 
-    test("write then read round-trips, creating parent directories") {
+    test("authoritative local roots reject unconditional write before mutation") {
+        val tmp = Files.createTempDirectory("pb-write-rejected")
+        try {
+            val store = LocalContentStore(tmp)
+            val path = TreePath.require("a/b/note.md")
+
+            shouldThrow<IllegalStateException> { store.write(path, "blocked".toByteArray()) }
+            Files.exists(tmp.resolve(path.value)) shouldBe false
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    test("mirror write then read round-trips, creating parent directories") {
         val tmp = Files.createTempDirectory("pb-write")
         try {
             val store = LocalContentStore(tmp)
             val path = TreePath.require("a/b/note.md")
-            store.write(path, "hello".toByteArray(Charsets.UTF_8))
+            store.writeMirror(path, "hello".toByteArray(Charsets.UTF_8))
             store.scan()
             String(store.read(path).shouldNotBeNull(), Charsets.UTF_8) shouldBe "hello"
         } finally {
@@ -286,7 +550,7 @@ class LocalContentStoreTest : FunSpec({
 
             // PROBE the FS regime: on a normalization-preserving FS the on-disk name stays NFD;
             // on APFS/HFS+ it landed NFC. Either way there is exactly ONE file before and after.
-            store.write(TreePath.require(nfcName), "REPLACED".toByteArray(Charsets.UTF_8))
+            store.writeMirror(TreePath.require(nfcName), "REPLACED".toByteArray(Charsets.UTF_8))
 
             val onDisk = Files.newDirectoryStream(tmp).use { stream -> stream.map { it.fileName.toString() }.toSet() }
             onDisk shouldHaveSize 1 // exactly one file remains — no NFC sibling was created
@@ -432,6 +696,32 @@ class LocalContentStoreTest : FunSpec({
             dirStat.sizeBytes shouldBe 0L
 
             store.stat(TreePath.require("missing.md")).shouldBeNull()
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    test("stat requires scan membership for in-root symlinks metadata and post-scan files") {
+        val tmp = Files.createTempDirectory("pb-stat-membership")
+        try {
+            Files.writeString(tmp.resolve("real.md"), "real")
+            val section = Files.createDirectory(tmp.resolve("section"))
+            Files.writeString(section.resolve("_folder.yaml"), "title: Section\n")
+            val symlinkCreated = try {
+                Files.createSymbolicLink(tmp.resolve("link.md"), tmp.resolve("real.md"))
+                true
+            } catch (_: IOException) {
+                false
+            }
+
+            val store = LocalContentStore(tmp)
+            store.scan()
+            Files.writeString(tmp.resolve("late.md"), "late")
+
+            if (symlinkCreated) store.stat(TreePath.require("link.md")).shouldBeNull()
+            store.stat(TreePath.require("section/_folder.yaml")).shouldBeNull()
+            store.stat(TreePath.require("late.md")).shouldBeNull()
+            store.stat(TreePath.require("real.md")).shouldNotBeNull()
         } finally {
             tmp.toFile().deleteRecursively()
         }
@@ -805,6 +1095,30 @@ class LocalContentStoreTest : FunSpec({
         }
     }
 
+    test("alias-equivalent and physical ancestor exclusions remain no-ops") {
+        val base = Files.createTempDirectory("pb-alias-exclusion-noop")
+        try {
+            val real = Files.createDirectories(base.resolve("real"))
+            val alias = base.resolve("alias")
+            try {
+                Files.createSymbolicLink(alias, real)
+            } catch (_: IOException) {
+                return@test
+            }
+            val rootConfig = Root(RootName.PRIMARY, RootBackend.Local(alias), editable = true, history = HistoryMode.OFF)
+            val exclusions = listOf(real, base)
+            val policy = localContentPathPolicy(rootConfig, alias, IgnoreRules(), exclusions)
+            val store = LocalContentStore(alias, exclusions = exclusions, policy = policy)
+
+            policy.allowsFile(TreePath.require("page.md")) shouldBe true
+            store.createExclusive(TreePath.require("page.md"), "# Allowed\n".encodeToByteArray()) { it.size.toString() }
+                .shouldBeInstanceOf<CreateResult.Created>()
+            store.scan().files.map { it.path.value } shouldContainExactly listOf("page.md")
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
     test("a DATA_DIR strictly INSIDE root still rejects a create targeting under it (no over-correction)") {
         val tmp = Files.createTempDirectory("pb-nested-data-create")
         val hasher: (ByteArray) -> String = { it.size.toString() }
@@ -861,3 +1175,6 @@ private fun createWithRawName(dir: Path, name: String, content: String): String 
     }
     return landed
 }
+
+private fun entryNames(dir: Path): Set<String> =
+    Files.newDirectoryStream(dir).use { stream -> stream.map { it.fileName.toString() }.toSet() }

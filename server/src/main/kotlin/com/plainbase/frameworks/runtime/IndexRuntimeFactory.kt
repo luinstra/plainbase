@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.runtime
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.repository.IdMapRepository
@@ -58,6 +59,7 @@ internal object IndexRuntimeFactory {
 
     fun observed(
         registry: RootRegistry,
+        policies: Map<RootName, ContentPathPolicy>,
         stores: RootStores,
         histories: HistoryProviders,
         support: IndexSupport,
@@ -73,6 +75,7 @@ internal object IndexRuntimeFactory {
     ): ObservedIndexRuntime {
         val builder = build(
             registry = registry,
+            policies = policies,
             stores = stores,
             history = histories::get,
             manifests = stores::manifestsOrNull,
@@ -99,12 +102,14 @@ internal object IndexRuntimeFactory {
             identity = support.identity,
             idProvider = support.idProvider,
             aliasRegistry = support.aliasRegistry,
+            policies = policies,
         )
     }
 
     /** Offline publishes checkpoints using real durable repositories, without live absence authority or incremental search sync. */
     fun offlineReindex(
         registry: RootRegistry,
+        policies: Map<RootName, ContentPathPolicy>,
         stores: RootStores,
         support: IndexSupport,
         retirements: RetirementRepository,
@@ -112,6 +117,7 @@ internal object IndexRuntimeFactory {
         sourceObserver: (List<IndexBuilder.Source>, Set<RootName>, (RootName) -> Int) -> Unit = noSourceObserver,
     ): IndexBuilder = build(
         registry = registry,
+        policies = policies,
         stores = stores,
         history = { NoOpHistoryProvider },
         manifests = { null },
@@ -128,6 +134,7 @@ internal object IndexRuntimeFactory {
 
     private fun build(
         registry: RootRegistry,
+        policies: Map<RootName, ContentPathPolicy>,
         stores: RootStores,
         history: (RootName) -> HistoryProvider,
         manifests: (RootName) -> ObjectManifestProvider?,
@@ -173,6 +180,7 @@ internal object IndexRuntimeFactory {
             limbo = limbo,
             epochs = epochs,
             bindings = bindings,
+            policies = policies,
         )
     }
 }
@@ -201,6 +209,7 @@ internal class ObservedIndexRuntime(
     val identity: PageIdentityService,
     val idProvider: IdProvider,
     val aliasRegistry: UrlAliasRegistry,
+    val policies: Map<RootName, ContentPathPolicy>,
 )
 
 internal class ServingRuntime(

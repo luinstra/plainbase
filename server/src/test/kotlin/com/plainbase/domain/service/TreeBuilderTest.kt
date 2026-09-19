@@ -52,6 +52,25 @@ class TreeBuilderTest : FunSpec({
         }
     }
 
+    test("configured folder labels override sidecar titles without changing canonical urls") {
+        IndexHarness(Fixtures.demoDocs).use { harness ->
+            val index = harness.builder.rebuild()
+            val baseline = TreeBuilder.build(index, RootName.PRIMARY)
+            val labeled = TreeBuilder.build(
+                index,
+                RootName.PRIMARY,
+                folderLabels = mapOf("guides" to "Planning", "missing" to "Inert"),
+            )
+            val baselineGuides = baseline.children.filterIsInstance<TreeNode.Folder>().single { it.name == "guides" }
+            val labeledGuides = labeled.children.filterIsInstance<TreeNode.Folder>().single { it.name == "guides" }
+
+            baselineGuides.title shouldBe "Guides"
+            labeledGuides.title shouldBe "Planning"
+            labeledGuides.url shouldBe baselineGuides.url
+            labeled.children.none { it is TreeNode.Folder && it.name == "missing" } shouldBe true
+        }
+    }
+
     test("a folder containing only assets is omitted (infra/assets), and empty folders never appear") {
         withFixtureTree { root ->
             val infra = root.children.filterIsInstance<TreeNode.Folder>().single { it.name == "infra" }

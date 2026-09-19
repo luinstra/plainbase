@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.UnavailableCause
@@ -69,6 +70,31 @@ class SearchServiceTest : FunSpec({
                 val payload = resultsOf(service.search("shared"))
                 payload.hits shouldBe emptyList()
                 payload.total shouldBe 1L // the engine's count is untouched - the documented §A2 short-page shape
+            }
+        }
+    }
+
+    test("a stale engine hit for a path hidden by root policy is dropped during hydration") {
+        withTempTree(seed = { root -> writePage(root, "alpha.md", "# Alpha\n\nshared body text.\n") }) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val alpha = harness.builder.current.pages.single()
+                val hidden = ContentPathPolicy.create(
+                    fileEligibility = { false },
+                    traversalEligibility = { true },
+                    metadataEligibility = { true },
+                )
+                val service = SearchService(
+                    provider = providerReturning(hit(alpha.id, "alpha")),
+                    indexBuilder = harness.builder,
+                    availability = harness.availability,
+                    policies = mapOf(RootName.PRIMARY to hidden),
+                )
+
+                val payload = resultsOf(service.search("shared"))
+
+                payload.hits shouldBe emptyList()
+                payload.total shouldBe 1L
             }
         }
     }

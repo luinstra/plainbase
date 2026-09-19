@@ -184,6 +184,7 @@ private class GuardedTestGraph(
     val proposalService: ProposalService = mockk(relaxed = true)
     private val searchProvider: SearchProvider = mockk(relaxed = true)
     private val proposalLabeler: ProposalAuthorLabeler = mockk(relaxed = true)
+    private val policies = harness.policies
     private val serving = ServingRuntime(
         index = ObservedIndexRuntime(
             builder = harness.builder,
@@ -198,12 +199,13 @@ private class GuardedTestGraph(
             identity = harness.identity,
             idProvider = harness.identityProvider,
             aliasRegistry = harness.registry,
+            policies = policies,
         ),
         pageService = PageService(harness.builder, harness.registry, CitationFactory()),
-        searchService = SearchService(searchProvider, harness.builder, harness.availability),
+        searchService = SearchService(searchProvider, harness.builder, harness.availability, policies),
         writePipeline = writePipeline,
-        resolver = PageRootResolver(harness.idMap, harness.rootRegistry),
-        absence = AbsenceClassifier(harness.idMap),
+        resolver = PageRootResolver(harness.idMap, harness.rootRegistry, policies),
+        absence = AbsenceClassifier(harness.idMap, policies),
         proposalService = proposalService,
         proposalLabeler = proposalLabeler,
         agentDirectCommitGlobs = emptyList(),

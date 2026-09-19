@@ -54,6 +54,7 @@ class AuthRouteHarness(
     val sessionService: SessionService get() = harness.sessionService
 
     val context: RouteContext = run {
+        val policies = harness.policies
         val policy = PolicyService(
             roles = harness.roleRepository,
             apiTokens = harness.apiTokenRepository,
@@ -63,8 +64,8 @@ class AuthRouteHarness(
             enforced = enforced,
         )
         val auth = harness.authServices(policy)
-        val resolver = PageRootResolver(harness.idMap, harness.rootRegistry)
-        val absence = AbsenceClassifier(harness.idMap)
+        val resolver = PageRootResolver(harness.idMap, harness.rootRegistry, policies)
+        val absence = AbsenceClassifier(harness.idMap, policies)
         val stores = RootStores(
             mapOf(harness.rootRegistry.primary.name to harness.stores(harness.rootRegistry.primary.name)),
         )
@@ -74,11 +75,12 @@ class AuthRouteHarness(
             provider = harness.fts(),
             indexBuilder = harness.builder,
             availability = harness.availability,
+            policies = policies,
         )
         val proposalService = ProposalService(
             repository = harness.proposalRepository,
             citations = CitationFactory(),
-            baseReader = IndexProposalBaseReader(harness.builder, harness.stores, absence),
+            baseReader = IndexProposalBaseReader(harness.builder, harness.stores, absence, policies),
             proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
             clock = Clock.System,
             rootStatus = { root -> resolver.statusOf(root, harness.availability.current()) },
@@ -99,6 +101,7 @@ class AuthRouteHarness(
                     identity = harness.identity,
                     idProvider = harness.identityProvider,
                     aliasRegistry = harness.registry,
+                    policies = policies,
                 ),
                 pageService = pageService,
                 searchService = searchService,

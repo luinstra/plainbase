@@ -16,6 +16,7 @@ internal class IndexIdentityAssignments(
     private val idMap: IdMapRepository,
     private val identity: PageIdentityService,
     private val patcher: FrontmatterPatcher,
+    private val eligible: (RootedPath) -> Boolean,
 ) {
     /**
      * Resolves all drafts before binding, using the `AdoptionPass` RECORD order: roots by rank, then within each root
@@ -34,7 +35,12 @@ internal class IndexIdentityAssignments(
     ): Map<RootedPath, Identity> {
         // Share one [Supersession] between resolution and binding. Proofs are applied before this call, so their
         // bindings are gone; that ordering also lets the tombstone arm see this pass's retirements.
-        val supersession = Supersession(witnessed = witnessed.keys, scannedRoots = scannedRoots, registeredRoots = registeredRoots)
+        val supersession = Supersession(
+            witnessed = witnessed.keys,
+            scannedRoots = scannedRoots,
+            registeredRoots = registeredRoots,
+            eligible = eligible,
+        )
         val claimed = HashMap<RootedPageId, RootedPath>()
         val resolved = LinkedHashMap<RootedPath, PageIdentityService.Assignment>() // rank-then-frontmatter-then-path = the bind order
         for (scan in scans) {
@@ -55,7 +61,7 @@ internal class IndexIdentityAssignments(
                         claimed[RootedPageId(path.root, id)]
                             ?: idMap.bindingInRoot(path.root, id)
                                 ?.takeIf { binding ->
-                                    BindingVisibility.isOwner(binding, witnessed, scannedRoots, registeredRoots, supersession)
+                                    BindingVisibility.isOwner(binding, witnessed, scannedRoots, registeredRoots, supersession, eligible)
                                 }
                                 ?.path
                             ?: idMap.retiredAt(path.root, id)?.path

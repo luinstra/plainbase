@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.IndexedPage
@@ -71,12 +72,13 @@ class SearchIndexerTest : FunSpec({
     fun harness(
         engineState: Map<RootedPageId, PageSearchState>,
         retired: Set<RootedPageId> = NO_RETIREMENT,
+        policies: Map<RootName, ContentPathPolicy> = allowAllPolicies(),
     ): Pair<SearchProvider, SearchIndexer> {
         val provider = mockk<SearchProvider>()
         every { provider.indexedState() } returns engineState
         justRun { provider.index(any()) }
         justRun { provider.delete(any()) }
-        return provider to SearchIndexer(provider, SectionSplitter(), { retired }, { it in retired })
+        return provider to SearchIndexer(provider, SectionSplitter(), { retired }, { it in retired }, policies)
     }
 
     test("add: a page the engine lacks is indexed; nothing is deleted") {
@@ -172,6 +174,26 @@ class SearchIndexerTest : FunSpec({
 
         verify(exactly = 0) { provider.delete(any()) }
         verify(exactly = 0) { provider.index(any()) }
+    }
+
+    test("a bound engine row hidden by policy is deleted even when the snapshot still contains it") {
+        val hiddenPage = page(idA, "hidden/page.md", hash('a'))
+        val hiddenPolicy = ContentPathPolicy.create(
+            fileEligibility = { !it.value.startsWith("hidden/") },
+            traversalEligibility = { true },
+            metadataEligibility = { true },
+        )
+        val (provider, indexer) = harness(
+            engineState = mapOf(rooted(idA) to state(hiddenPage)),
+            policies = mapOf(RootName.PRIMARY to hiddenPolicy),
+        )
+
+        indexer.sync(snapshot(hiddenPage))
+
+        val deleted = slot<Collection<RootedPageId>>()
+        verify(exactly = 1) { provider.delete(capture(deleted)) }
+        verify(exactly = 0) { provider.index(any()) }
+        deleted.captured shouldBe listOf(rooted(idA))
     }
 
     test("unchanged corpus: the no-op fast path makes ZERO engine calls beyond the state read") {
@@ -337,7 +359,7 @@ class SearchIndexerTest : FunSpec({
 
         accepted shouldBe 2
         authorityReads shouldBe 1
-        provider.indexedStateCalls shouldBe 0
+        provider.indexedStateCalls shouldBe 1
         provider.rebuilt.map { it.pageId } shouldBe listOf(idA, idC)
         provider.rebuildRetired shouldBe retiredIds
         order shouldBe listOf("authority", "rebuild", "split:$idA", "split:$idC")

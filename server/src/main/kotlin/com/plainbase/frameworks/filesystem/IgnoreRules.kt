@@ -33,15 +33,16 @@ class IgnoreRules(
             logger.debug { "Ignoring dot-prefixed entry: $relativePath" }
             return true
         }
-        if (matchers.isNotEmpty()) {
-            val candidate = Path.of(relativePath)
-            if (matchers.any { it.matches(candidate) }) {
-                logger.debug { "Ignoring entry matching content.ignore glob: $relativePath" }
-                return true
-            }
+        if (isGlobIgnored(relativePath)) {
+            logger.debug { "Ignoring entry matching content.ignore glob: $relativePath" }
+            return true
         }
         return false
     }
+
+    /** The configured legacy glob half, excluding the always-hidden dot-entry rule. */
+    fun isGlobIgnored(relativePath: String): Boolean =
+        matchers.any { it.matches(Path.of(relativePath)) }
 
     companion object {
         private val logger = KotlinLogging.logger {}

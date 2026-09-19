@@ -93,6 +93,7 @@ class Phase1AcceptanceNativeTest {
             citations = CitationFactory(),
             rootRank = registry::rank,
             registeredRoots = registry.roots.map { it.name }.toSet(),
+            policies = com.plainbase.domain.service.allowAllNativePolicies(registry.roots.map { it.name }),
         )
     }
 

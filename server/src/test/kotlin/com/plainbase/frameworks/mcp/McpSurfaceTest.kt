@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.mcp
 
+import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.frameworks.protocol.CANONICAL_PROPOSAL_ID
 import com.plainbase.frameworks.protocol.ProposeChangeRequest
 import com.plainbase.frameworks.protocol.ProposeChangeResponse
@@ -182,6 +183,35 @@ class McpSurfaceTest : FunSpec({
                 mcp.text() shouldBe expected
                 rest shouldBe expected
             }
+        }
+    }
+
+    test("excluded create proposals keep the invalid-request code with an accurate REST and MCP message") {
+        val policy = ContentPathPolicy.create(
+            fileEligibility = { it.value == "doc.md" },
+            traversalEligibility = { true },
+            metadataEligibility = { true },
+        )
+        val expected =
+            "{\"error\":{\"code\":\"invalid_propose_request\",\"message\":\"target_path is excluded by the root content policy.\"}}"
+        val mcpArgs = mapOf<String, Any?>(
+            "operation" to "create",
+            "root" to "docs",
+            "target_path" to "private/new.md",
+            "proposed_content" to "# New",
+            "rationale" to "add",
+        )
+        val restJson =
+            """{"operation":"create","root":"docs","target_path":"private/new.md","proposed_content":"# New","rationale":"add"}"""
+
+        McpHarness(primaryPolicy = policy).use { harness ->
+            val mcp = harness.session(harness.proposeBearer) { client -> client.call("propose_change", mcpArgs) }
+            val rest = harness.restPost("/api/v1/changes", harness.proposeBearer, restJson)
+
+            mcp.isErr() shouldBe true
+            mcp.text() shouldBe expected
+            rest shouldBe expected
+            harness.proposalRows().isEmpty() shouldBe true
         }
     }
 

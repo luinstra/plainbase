@@ -1,12 +1,13 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type { RootTree } from "../api/types";
+import { rootOptionLabel } from "../lib/tree";
 
 const LABEL_ID = "pb-root-selector-label";
 const LISTBOX_ID = "pb-root-selector-listbox";
 const VALUE_ID = "pb-root-selector-value";
 
 function labelOf(entry: RootTree): string {
-  return `${entry.root}${entry.available ? "" : " (unavailable)"}`;
+  return rootOptionLabel(entry);
 }
 
 /**

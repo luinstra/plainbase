@@ -313,6 +313,7 @@ private fun adoptionPass(store: ContentStore, idMap: IdMapRepository) = Adoption
     citations = CitationFactory(),
     rootRank = { 0 },
     registeredRoots = setOf(RootName.PRIMARY),
+    policies = com.plainbase.domain.service.allowAllPolicies(),
 )
 
 /** An in-memory SQLDelight-backed [IdMapRepository] scoped to [block] (the AdoptionPassTest idiom). */
