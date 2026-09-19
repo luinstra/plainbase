@@ -3,7 +3,7 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.AssetReadOutcome
 import com.plainbase.frameworks.ktor.RouteContext
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
+import com.plainbase.frameworks.protocol.ErrorCodes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes

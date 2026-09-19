@@ -1,4 +1,4 @@
-package com.plainbase.frameworks.ktor.dto
+package com.plainbase.frameworks.protocol
 
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.service.SearchHitPayload
@@ -6,12 +6,7 @@ import com.plainbase.domain.service.SearchPayload
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-/**
- * `GET /api/v1/search` wire shape (PB-SEARCH-1 §A2, FROZEN — golden snapshots, parsed-tree
- * comparison; `score` VALUES and snippet content selection are the deliberate non-frozen ledger,
- * §A4). Encodes through the scoped [RestJson] like every frozen shape: the §A2 nullable fields
- * (`url`, `heading_id`, `heading_text`, `commit`) serialize present-and-`null`.
- */
+/** `GET /api/v1/search` wire shape (PB-SEARCH-1 §A2, FROZEN). */
 @Serializable
 data class SearchResponse(
     val query: String,

@@ -16,11 +16,12 @@ import com.plainbase.frameworks.ktor.Source
 import com.plainbase.frameworks.ktor.dto.AmbiguousCandidate
 import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdBody
 import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdEnvelope
-import com.plainbase.frameworks.ktor.dto.ErrorBody
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
-import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
-import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.isSecureContext
+import com.plainbase.frameworks.protocol.CANONICAL_PAGE_ID
+import com.plainbase.frameworks.protocol.ErrorBody
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.ErrorEnvelope
+import com.plainbase.frameworks.protocol.RestJson
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -93,16 +94,6 @@ private const val MAX_AUTH_BODY_BYTES: Long = 64 * 1024
 internal fun ApplicationCall.setContentHashETag(contentHash: String) {
     response.header(HttpHeaders.ETag, "\"$contentHash\"")
 }
-
-/**
- * The §A4 canonical id shape: the 36-char hyphenated UUID form, ANY case (an UPPERCASE path param
- * resolves to the same lowercase id — RestGoldenTest). Deliberately STRICTER than [PageId.of] /
- * `Uuid.parseOrNull`, which also accepts the 32-char hyphenless hex form: the HTTP boundary admits
- * only the canonical hyphenated shape, so a `1-1-1-1-1` AND a 32-hex-no-hyphen id are both
- * `invalid_page_id`, never silently routed to the index lookup. The regex decides 400-vs-404, never
- * JDK leniency.
- */
-internal val CANONICAL_PAGE_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 /**
  * Parses the `{id}` path parameter via the §A4 canonical-shape gate, or itself responds 400

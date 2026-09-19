@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.dto
 
+import com.plainbase.frameworks.protocol.RestJson
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe

@@ -43,7 +43,7 @@ import com.plainbase.domain.service.SaveRequest
 import com.plainbase.domain.service.SaveResult
 import com.plainbase.domain.service.WriteClass
 import com.plainbase.domain.service.WriteOrigin
-import com.plainbase.frameworks.ktor.dto.WriteConflictReason
+import com.plainbase.frameworks.protocol.WriteConflictReason
 
 /**
  * The frameworks-side [ProposalFacade] impl (P1a, the A3 choke point — the [GuardedReadFacade] shape): it holds the

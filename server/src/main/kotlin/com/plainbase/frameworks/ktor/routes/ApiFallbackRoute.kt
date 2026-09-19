@@ -1,7 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.root.ServerTopLevel
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
+import com.plainbase.frameworks.protocol.ErrorCodes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.path
 import io.ktor.server.routing.Route

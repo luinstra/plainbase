@@ -2,13 +2,14 @@ package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageHtmlResponse
-import com.plainbase.frameworks.ktor.dto.PageMetadataResponse
-import com.plainbase.frameworks.ktor.dto.PageResponse
-import com.plainbase.frameworks.ktor.dto.ValidateLinksResponse
 import com.plainbase.frameworks.ktor.dto.toDto
-import com.plainbase.frameworks.ktor.dto.toMetadataDto
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.PageMetadataResponse
+import com.plainbase.frameworks.protocol.PageResponse
+import com.plainbase.frameworks.protocol.ValidateLinksResponse
+import com.plainbase.frameworks.protocol.toDto
+import com.plainbase.frameworks.protocol.toMetadataDto
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get

@@ -9,7 +9,8 @@ import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.AmbiguousCandidate
 import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdBody
 import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdEnvelope
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
+import com.plainbase.frameworks.protocol.CANONICAL_PAGE_ID
+import com.plainbase.frameworks.protocol.ErrorCodes
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall

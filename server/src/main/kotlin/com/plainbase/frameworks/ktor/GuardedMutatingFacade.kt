@@ -49,7 +49,7 @@ import com.plainbase.domain.service.WriteOrigin
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.domain.service.agentWriteDecision
 import com.plainbase.domain.service.syntheticEmail
-import com.plainbase.frameworks.ktor.dto.WriteConflictReason
+import com.plainbase.frameworks.protocol.WriteConflictReason
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi

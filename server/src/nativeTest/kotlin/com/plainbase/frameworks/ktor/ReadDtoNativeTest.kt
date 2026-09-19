@@ -4,11 +4,11 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
-import com.plainbase.frameworks.ktor.dto.BrokenLinkDto
-import com.plainbase.frameworks.ktor.dto.HeadingDto
-import com.plainbase.frameworks.ktor.dto.PageMetadataResponse
-import com.plainbase.frameworks.ktor.dto.RestJson
-import com.plainbase.frameworks.ktor.dto.ValidateLinksResponse
+import com.plainbase.frameworks.protocol.BrokenLinkDto
+import com.plainbase.frameworks.protocol.HeadingDto
+import com.plainbase.frameworks.protocol.PageMetadataResponse
+import com.plainbase.frameworks.protocol.RestJson
+import com.plainbase.frameworks.protocol.ValidateLinksResponse
 import org.junit.jupiter.api.Tag
 import kotlin.test.Test
 import kotlin.test.assertEquals

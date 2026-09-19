@@ -8,17 +8,20 @@ import com.plainbase.domain.service.RebaseOutcome
 import com.plainbase.domain.service.RejectOutcome
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ApplyResultResponse
-import com.plainbase.frameworks.ktor.dto.ChangeDetail
 import com.plainbase.frameworks.ktor.dto.ConflictedResponse
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
-import com.plainbase.frameworks.ktor.dto.ListChangesResponse
-import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
-import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
-import com.plainbase.frameworks.ktor.dto.ProposeChangeResponse
 import com.plainbase.frameworks.ktor.dto.RebasedResponse
 import com.plainbase.frameworks.ktor.dto.RejectChangeRequest
-import com.plainbase.frameworks.ktor.dto.RestJson
-import com.plainbase.frameworks.ktor.dto.toDto
+import com.plainbase.frameworks.protocol.CANONICAL_PROPOSAL_ID
+import com.plainbase.frameworks.protocol.ChangeDetail
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.ListChangesResponse
+import com.plainbase.frameworks.protocol.ProposalStatusWire
+import com.plainbase.frameworks.protocol.ProposeChangeRequest
+import com.plainbase.frameworks.protocol.ProposeChangeResponse
+import com.plainbase.frameworks.protocol.ProposeCommandParse
+import com.plainbase.frameworks.protocol.RestJson
+import com.plainbase.frameworks.protocol.parseProposeCommand
+import com.plainbase.frameworks.protocol.toDto
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -234,9 +237,6 @@ private suspend fun ApplicationCall.proposalId(): ProposalId? {
     if (id == null) invalidProposeRequest("Not a canonical-shape UUID: '$raw'")
     return id
 }
-
-/** The §A4 canonical proposal-id shape — `internal` so the `frameworks.mcp` `get_change` tool reuses it (same module). */
-internal val CANONICAL_PROPOSAL_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 internal suspend fun ApplicationCall.invalidProposeRequest(message: String) =
     respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PROPOSE_REQUEST, message)

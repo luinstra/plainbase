@@ -1,12 +1,9 @@
-package com.plainbase.frameworks.ktor.routes
+package com.plainbase.frameworks.protocol
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.ProposeCommand
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
-import com.plainbase.frameworks.ktor.dto.ProposalOperationWire
-import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
 
 /**
  * Validates a decoded [ProposeChangeRequest] into a typed [ProposeCommand], or returns [ProposeCommandParse.Invalid].

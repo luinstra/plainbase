@@ -5,8 +5,8 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
-import com.plainbase.frameworks.ktor.dto.RestJson
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.RestJson
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode

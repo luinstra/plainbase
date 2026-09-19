@@ -14,12 +14,12 @@ import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.ktor.dto.CreatedButUnindexedResponse
 import com.plainbase.frameworks.ktor.dto.DegradedToProposalResponse
-import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
-import com.plainbase.frameworks.ktor.dto.RestJson
-import com.plainbase.frameworks.ktor.dto.WriteConflictReason
 import com.plainbase.frameworks.ktor.dto.WriteWarning
 import com.plainbase.frameworks.ktor.dto.WriteWarningCode
 import com.plainbase.frameworks.ktor.routes.createdIdentity
+import com.plainbase.frameworks.protocol.ProposalStatusWire
+import com.plainbase.frameworks.protocol.RestJson
+import com.plainbase.frameworks.protocol.WriteConflictReason
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldNotBeNull

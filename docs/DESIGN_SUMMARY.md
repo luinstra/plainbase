@@ -1,5 +1,9 @@
 # Plainbase Design Summary
 
+> **Historical vision and proposal vocabulary — reviewed 2026-09-18.** This document preserves the original product
+> framing and future directions. For current shipped authority, roles, search and transport behavior, see the
+> [backend architecture map](backend-architecture.md); do not read proposals below as a current implementation contract.
+
 ## Concept
 
 Plainbase is an internal documentation and knowledge product built for both humans and AI agents.
@@ -113,7 +117,7 @@ Useful actions:
 - `approve`: approve proposed edits
 - `manage`: change metadata, policy, integrations, or access settings
 
-Useful initial roles:
+Useful initial roles (original proposal vocabulary; current enforced roles are `ADMIN`, `EDITOR`, and `VIEWER`):
 
 - Admin
 - Maintainer
@@ -121,7 +125,7 @@ Useful initial roles:
 - Viewer
 - Agent
 
-Useful agent modes:
+Useful agent modes (original proposal vocabulary; current token modes are policy inputs, not separate human roles):
 
 - Read only
 - Propose edits
@@ -146,7 +150,9 @@ Plainbase should support fast, typo-tolerant text search across:
 - Asset names
 - Extracted media text
 
-Meilisearch is a reasonable first search engine because it is simple, fast, and supports a path toward hybrid semantic search.
+**Future search proposal, not the current engine:** Meilisearch is a reasonable first search engine because it is simple,
+fast, and supports a path toward hybrid semantic search. Current Plainbase search is embedded SQLite FTS5; see the
+[backend architecture map](backend-architecture.md).
 
 Media search can become a meaningful differentiator. Plainbase can index extracted content from:
 

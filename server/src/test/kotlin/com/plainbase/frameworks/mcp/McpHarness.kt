@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.mcp
 
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.repository.ProposalRepository
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.UnavailableCause
@@ -68,6 +69,7 @@ class McpHarness(
      * Ambiguous with `hasRetiredCandidate = true`, so the ambiguous body carries the STATUS-NEUTRAL retired note.
      */
     retiredRoots: List<RootName> = emptyList(),
+    proposalRepositoryDecorator: (ProposalRepository) -> ProposalRepository = { it },
 ) : AutoCloseable {
 
     private val root = Files.createTempDirectory("plainbase-mcp-test")
@@ -143,6 +145,7 @@ class McpHarness(
             enforced = true,
             resolver = PageRootResolver(idMap, index.rootRegistry),
             absence = AbsenceClassifier(idMap),
+            proposalRepository = proposalRepositoryDecorator(index.proposalRepository),
         )
         server = onThread { embeddedServer(ServerCIO, host = "127.0.0.1", port = 0) { plainbaseModule(ctx) }.start(wait = false) }
         port = blocking { server.engine.resolvedConnectors().first().port }
@@ -197,12 +200,19 @@ class McpHarness(
         }
     }
 
-    /** A REST GET with the bearer (for the REST↔MCP byte-parity comparison). */
-    fun restGet(path: String, bearer: String): String = blocking {
+    /** The immutable status/body pair captured before the HTTP client scope closes. */
+    data class RestResponse(val status: Int, val body: String)
+
+    /** A REST GET with the bearer, retaining status for REST↔MCP boundary characterization. */
+    fun restGetResponse(path: String, bearer: String): RestResponse = blocking {
         HttpClient(ClientCIO).use { http ->
-            http.get("http://127.0.0.1:$port$path") { header(HttpHeaders.Authorization, "Bearer $bearer") }.bodyAsText()
+            val response = http.get("http://127.0.0.1:$port$path") { header(HttpHeaders.Authorization, "Bearer $bearer") }
+            RestResponse(response.status.value, response.bodyAsText())
         }
     }
+
+    /** A body-only REST GET for byte-parity comparisons. */
+    fun restGet(path: String, bearer: String): String = restGetResponse(path, bearer).body
 
     /** A REST JSON POST with the bearer (for the propose_change structural-parity comparison). */
     fun restPost(path: String, bearer: String, json: String): String = blocking {

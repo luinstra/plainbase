@@ -16,14 +16,14 @@ import com.plainbase.frameworks.ktor.dto.CreatePageRequest
 import com.plainbase.frameworks.ktor.dto.CreatedButUnindexedResponse
 import com.plainbase.frameworks.ktor.dto.CreatedResponse
 import com.plainbase.frameworks.ktor.dto.DegradedToProposalResponse
-import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageExistsBody
 import com.plainbase.frameworks.ktor.dto.PageExistsEnvelope
-import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
-import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.WriteWarning
 import com.plainbase.frameworks.ktor.dto.WriteWarningCode
 import com.plainbase.frameworks.ktor.dto.WriteWire
+import com.plainbase.frameworks.protocol.ErrorCodes
+import com.plainbase.frameworks.protocol.ProposalStatusWire
+import com.plainbase.frameworks.protocol.RestJson
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall

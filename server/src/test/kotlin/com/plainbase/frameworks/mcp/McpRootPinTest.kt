@@ -140,7 +140,9 @@ class McpRootPinTest : FunSpec({
                 client.call("read_page", mapOf("id" to harness.seedPageId, "root" to "ghost")).text() shouldContain "invalid_root"
             }
             // REST over the SAME server: 404, the deferred-registration answer.
-            harness.restGet("/api/v1/pages/${harness.seedPageId}?root=ghost", harness.readOnlyBearer) shouldContain "page_not_found"
+            val rest = harness.restGetResponse("/api/v1/pages/${harness.seedPageId}?root=ghost", harness.readOnlyBearer)
+            rest.status shouldBe 404
+            rest.body shouldContain "page_not_found"
         }
     }
 })

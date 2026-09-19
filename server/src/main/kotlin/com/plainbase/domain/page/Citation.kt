@@ -19,7 +19,7 @@ import com.plainbase.domain.root.RootName
  *    Phase 1's ref is always the [contentHash] form (git-sha refs arrive with the Phase 3 commit field).
  *
  * Citations are ID-based and unaffected by path-based routing (owner decision: IDs for
- * durability). Pure domain code; the wire shape lives in `frameworks/ktor/dto`.
+ * durability). Pure domain code; the wire shape lives in `frameworks/protocol/RestDtos.kt`.
  */
 data class Citation(
     val root: RootName,
