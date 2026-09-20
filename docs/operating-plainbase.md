@@ -46,6 +46,24 @@ ranked, section-granular, and cited - never a gatekeeper between you and your fi
 is down, your content is still fully readable, searchable, and editable with the tools you already
 have.
 
+### Embedded Mermaid diagrams
+
+Markdown pages may include a lowercase `mermaid` fence. Plainbase renders supported diagrams in the
+browser while keeping the Markdown source authoritative and readable when a diagram is malformed or
+unsupported:
+
+~~~markdown
+```mermaid
+flowchart LR
+  author[Markdown file] --> page[Plainbase page]
+```
+~~~
+
+Each diagram is limited to 50,000 source characters. Mermaid also enforces a 500-edge limit for
+flowcharts and agent-flow diagrams; other diagram types do not share that edge limit. Rejected
+diagrams remain visible as source. Rendering runs in the browser, so complex diagrams can briefly
+delay interaction even within these limits.
+
 ## Search freshness: editing files outside Plainbase
 
 Plainbase watches **every root that is available at startup** (`CONTENT_DIR`, or each `roots.*.path`

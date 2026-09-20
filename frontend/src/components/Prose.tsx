@@ -1,6 +1,7 @@
 import hljs from "highlight.js/lib/common";
 import { useEffect, useRef } from "react";
 import { useDeepLinkHighlight } from "../lib/deepLink";
+import { renderMermaidBlocks } from "../lib/mermaid";
 
 /**
  * Server-rendered page HTML inside the stable `.pb-prose` selector. The server is the
@@ -9,6 +10,7 @@ import { useDeepLinkHighlight } from "../lib/deepLink";
  *  - highlight.js over `pre code[class^=language-]` (§C5 — an unregistered language
  *    falls back to hljs auto-detection; either way styling flows through the
  *    `--pb-syntax-*` semantic tokens, never a bundled hljs theme)
+ *  - Mermaid rendering for canonical lowercase `mermaid` fences, with source fallback
  *  - heading anchor links on the ids the server emitted
  *  - deep-link `#fragment` scroll + pulse once the content is in the DOM (Resolution 1)
  */
@@ -20,6 +22,7 @@ export function Prose({ html }: { html: string }) {
     if (!container) return;
     highlightCodeBlocks(container);
     injectHeadingAnchors(container);
+    return renderMermaidBlocks(container);
   }, [html]);
 
   // `ready` is a synchronous derived value (NOT useState): the content for THIS html is
@@ -34,6 +37,7 @@ export function Prose({ html }: { html: string }) {
 export function highlightCodeBlocks(container: HTMLElement): void {
   container.querySelectorAll<HTMLElement>('pre code[class^="language-"], pre code[class*=" language-"]').forEach((block) => {
     const language = [...block.classList].find((c) => c.startsWith("language-"))?.slice("language-".length);
+    if (language === "mermaid") return;
     if (language && hljs.getLanguage(language)) {
       hljs.highlightElement(block);
     } else {
