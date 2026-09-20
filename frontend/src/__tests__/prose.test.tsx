@@ -7,7 +7,7 @@ import {
 import { cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { Prose } from "../components/Prose";
+import { highlightCodeBlocks, Prose } from "../components/Prose";
 
 /**
  * `.pb-prose` stable-selector + presentation-enhancement checks. The HTML is what the
@@ -54,5 +54,20 @@ describe("Prose", () => {
     const code = container.querySelector("pre code")!;
     expect(code.classList.contains("hljs")).toBe(true);
     expect(code.querySelectorAll("span[class^='hljs-']").length).toBeGreaterThan(0);
+  });
+
+  it("leaves canonical Mermaid fences untouched for the async renderer", () => {
+    const container = document.createElement("article");
+    const pre = document.createElement("pre");
+    const code = document.createElement("code");
+    code.className = "language-mermaid";
+    code.textContent = "flowchart LR\nA --> B";
+    pre.append(code);
+    container.append(pre);
+
+    highlightCodeBlocks(container);
+
+    expect(code.classList.contains("hljs")).toBe(false);
+    expect(code.textContent).toBe("flowchart LR\nA --> B");
   });
 });
