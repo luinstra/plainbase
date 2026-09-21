@@ -100,6 +100,7 @@ dependencies {
     implementation(libs.flexmark)
     implementation(libs.flexmark.ext.gfm.tables)
     implementation(libs.flexmark.ext.gfm.strikethrough)
+    implementation(libs.flexmark.ext.gfm.tasklist)
     implementation(libs.flexmark.ext.yaml.front.matter)
     implementation(libs.flexmark.ext.anchorlink)
 

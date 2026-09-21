@@ -244,6 +244,66 @@ body {
   color: var(--pb-text-muted);
 }
 
+/* Markdown alerts and GFM task items. The server owns the AST and emits these stable hooks; the
+ * controls remain display-only so Markdown stays the source of truth. */
+.pb-prose .pb-callout {
+  min-width: 0;
+  margin: 0 0 1.125rem;
+  padding: 0.75rem 1rem 0.125rem;
+  border: 1px solid var(--pb-border);
+  border-left: 3px solid var(--pb-accent);
+  border-radius: 0.375rem;
+  background: var(--pb-accent-soft);
+  color: var(--pb-text);
+  overflow-wrap: break-word;
+}
+
+.pb-prose .pb-callout[data-pb-callout="important"],
+.pb-prose .pb-callout[data-pb-callout="warning"] {
+  border-left-color: var(--pb-warning);
+  background: var(--pb-warning-soft);
+}
+
+.pb-prose .pb-callout[data-pb-callout="caution"] {
+  border-left-color: var(--pb-danger);
+  background: var(--pb-danger-soft);
+}
+
+.pb-prose .pb-callout-title {
+  margin: 0 0 0.5rem;
+  color: var(--pb-text);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.pb-prose .pb-callout > :last-child,
+.pb-prose .pb-callout pre,
+.pb-prose .pb-callout table,
+.pb-prose .pb-callout .pb-mermaid {
+  margin-bottom: 0.75rem;
+  max-width: 100%;
+}
+
+.pb-prose ul > li.task-list-item {
+  list-style: none;
+  margin-left: -1.5rem;
+  padding-left: 1.5rem;
+}
+
+.pb-prose .task-list-item-checkbox {
+  width: 1rem;
+  height: 1rem;
+  margin: 0 0.45rem 0 0;
+  vertical-align: -0.125em;
+  accent-color: var(--pb-accent);
+  pointer-events: none;
+}
+
+.pb-prose li.task-list-item > p {
+  margin-bottom: 0.75rem;
+}
+
 .pb-prose hr {
   margin: 2rem 0;
   border: 0;

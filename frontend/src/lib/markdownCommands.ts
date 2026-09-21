@@ -1,3 +1,4 @@
+import { isolateHistory } from "@codemirror/commands";
 import { EditorSelection, type EditorState, type TransactionSpec } from "@codemirror/state";
 import type { Command, EditorView } from "@codemirror/view";
 
@@ -270,3 +271,79 @@ export const insertTableCore = (state: EditorState): TransactionSpec | null => {
 };
 
 export const insertTable = commandFromCore(insertTableCore);
+
+// ---- callout ------------------------------------------------------------------------------------
+
+const CALLOUT_TYPES = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"] as const;
+export type CalloutType = (typeof CALLOUT_TYPES)[number];
+export { CALLOUT_TYPES };
+
+const CALLOUT_PLACEHOLDER = "Callout text";
+
+/** The line span touched by a non-empty main selection, excluding an endpoint at the next line's start. */
+function calloutSelectionSpan(state: EditorState): { from: number; to: number } {
+  const rawFrom = state.selection.main.from;
+  const rawTo = state.selection.main.to;
+  const from = Math.min(rawFrom, rawTo);
+  const to = Math.max(rawFrom, rawTo);
+  const firstLine = state.doc.lineAt(from);
+  const endLine = state.doc.lineAt(to);
+  const lastLineNumber = to > from && to === endLine.from ? endLine.number - 1 : endLine.number;
+  return { from: firstLine.from, to: state.doc.line(lastLineNumber).to };
+}
+
+/** Add only the newline(s) needed to make the block's preceding neighbor an unquoted blank line. */
+function calloutPrefix(doc: EditorState["doc"], from: number, atLineStart: boolean): string {
+  if (from === 0) return "";
+  if (!atLineStart) return "\n\n";
+  return doc.lineAt(from - 1).text.length === 0 ? "" : "\n";
+}
+
+/** Add only the newline(s) needed to make the block's following neighbor an unquoted blank line. */
+function calloutLineEndSuffix(doc: EditorState["doc"], to: number): string {
+  if (to === doc.length) return "";
+  const currentLine = doc.lineAt(to);
+  const nextLine = doc.line(currentLine.number + 1);
+  return nextLine.text.length === 0 ? "" : "\n";
+}
+
+function calloutBlankLineSuffix(doc: EditorState["doc"], line: ReturnType<EditorState["doc"]["line"]>): string {
+  if (line.text.length === 0) return line.to === doc.length ? "" : "\n";
+  return line.to === doc.length ? "\n" : "\n\n";
+}
+
+function calloutBlock(type: CalloutType, body: string): string {
+  const quotedBody = body.split("\n").map((line) => `> ${line}`).join("\n");
+  return `> [!${type}]\n>\n${quotedBody}`;
+}
+
+/** Insert a standalone inline callout block, preserving source bytes outside the selected line span. */
+export function insertCalloutCore(state: EditorState, type: CalloutType = "NOTE"): TransactionSpec | null {
+  const { from, to } = state.selection.main;
+  const doc = state.doc;
+  const line = doc.lineAt(from);
+  const isSelection = from !== to;
+  const span = isSelection ? calloutSelectionSpan(state) : null;
+  const rangeFrom = span?.from ?? (line.text.trim().length === 0 ? line.from : line.to);
+  const rangeTo = span?.to ?? rangeFrom;
+  const body = span ? doc.sliceString(span.from, span.to) : CALLOUT_PLACEHOLDER;
+  const atLineStart = span !== null || rangeFrom === line.from;
+  const prefix = calloutPrefix(doc, rangeFrom, atLineStart);
+  const suffix = span !== null || line.text.trim().length > 0 ? calloutLineEndSuffix(doc, rangeTo) : calloutBlankLineSuffix(doc, line);
+  const block = calloutBlock(type, body);
+  const insert = `${prefix}${block}${suffix}`;
+  const bodyStart = rangeFrom + prefix.length + `> [!${type}]\n>\n> `.length;
+  const selection = span
+    ? EditorSelection.cursor(rangeFrom + prefix.length + block.length)
+    : EditorSelection.range(bodyStart, bodyStart + CALLOUT_PLACEHOLDER.length);
+  return {
+    changes: { from: rangeFrom, to: rangeTo, insert },
+    selection,
+    annotations: isolateHistory.of("full"),
+  };
+}
+
+/** Build a callout insertion command for the selected marker type. */
+export function insertCallout(type: CalloutType = "NOTE"): Command {
+  return commandFromCore((state) => insertCalloutCore(state, type));
+}

@@ -9,6 +9,7 @@ import { pageByPathQuery, treeQuery } from "../api/queries";
 import { splitFrontmatter } from "../lib/frontmatter";
 import type { PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
+import { EditorToolbar } from "../components/EditorToolbar";
 
 const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 
@@ -124,6 +125,8 @@ describe("C3 formatting toolbar + keymap", () => {
       "[data-pb-fmt-quote]",
       "[data-pb-fmt-codeblock]",
       "[data-pb-fmt-table]",
+      "[data-pb-callout-type]",
+      "[data-pb-fmt-callout]",
     ]) {
       expect(view.container.querySelector(selector), selector).not.toBeNull();
     }
@@ -131,6 +134,43 @@ describe("C3 formatting toolbar + keymap", () => {
     expect(view.container.querySelector("[data-pb-fmt-bold]")?.getAttribute("aria-label")).toBe("Bold");
     // The ⌘S hint lives on the toolbar row, pushed to the far right.
     expect(view.container.querySelector("[data-pb-save-hint]")?.textContent).toContain("to save");
+  });
+
+  it("offers five callout types, keeps chooser changes non-mutating, and inserts the chosen type", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
+    const { view } = renderSeeded();
+    const cm = await bodyView(view);
+    const type = view.container.querySelector<HTMLSelectElement>("[data-pb-callout-type]")!;
+    expect(type.value).toBe("NOTE");
+    expect(Array.from(type.options, (option) => option.value)).toEqual(["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"]);
+
+    const before = cm.state.doc.toString();
+    await act(async () => {
+      fireEvent.change(type, { target: { value: "CAUTION" } });
+    });
+    expect(cm.state.doc.toString()).toBe(before);
+
+    await select(cm, cm.state.doc.length, cm.state.doc.length);
+    await act(async () => {
+      fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-fmt-callout]")!);
+    });
+    expect(cm.state.doc.toString()).toContain("> [!CAUTION]");
+    expect(cm.state.doc.sliceString(cm.state.selection.main.from, cm.state.selection.main.to)).toBe("Callout text");
+    expect(cm.hasFocus).toBe(true);
+  });
+
+  it("inserts the default NOTE around the current whole-line selection", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
+    const { view } = renderSeeded();
+    const cm = await bodyView(view);
+    const source = cm.state.doc.toString();
+    const from = source.indexOf("body.");
+    await select(cm, from, from + "body.".length);
+    await act(async () => {
+      fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-fmt-callout]")!);
+    });
+    expect(cm.state.doc.toString()).toContain("> [!NOTE]\n>\n> body.");
+    expect(cm.state.selection.main.empty).toBe(true);
   });
 
   it("Mod-b on a body selection wraps it in ** and the buffer reflects it", async () => {
@@ -266,6 +306,34 @@ describe("C3 formatting toolbar + keymap", () => {
     expect(putBody!).toContain("**body**");
   });
 
+  it("keeps callout insertion in the dirty body until the explicit Save", async () => {
+    let putBody: string | null = null;
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        putBody = init.body as string;
+        return jsonResponse({ content_hash: hashOf("x"), commit: null });
+      }
+      return jsonResponse({ html: "", headings: [] });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    const { view } = renderSeeded();
+    const cm = await bodyView(view);
+    await select(cm, cm.state.doc.length, cm.state.doc.length);
+    await act(async () => {
+      fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-fmt-callout]")!);
+    });
+    expect(putBody).toBeNull();
+
+    fireEvent.click(await waitFor(() => {
+      const button = view.container.querySelector<HTMLButtonElement>("[data-pb-save]")!;
+      expect(button.disabled).toBe(false);
+      return button;
+    }));
+    await waitFor(() => expect(putBody).not.toBeNull());
+    expect(splitFrontmatter(putBody!).frontmatter).toBe(splitFrontmatter(SEED).frontmatter);
+    expect(putBody!).toContain("> [!NOTE]");
+  });
+
   it("the toolbar is hidden while the preview overlay is open", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "<p>rendered</p>", headings: [] })));
     const { view } = renderSeeded();
@@ -284,5 +352,11 @@ describe("C3 formatting toolbar + keymap", () => {
     fireEvent.click(toggle);
     await waitFor(() => expect(view.container.querySelector("[data-pb-preview]")).toBeNull());
     expect(view.container.querySelector("[data-pb-toolbar]")).not.toBeNull();
+  });
+
+  it("disables callout controls without a live editor view", () => {
+    const { container } = render(<EditorToolbar view={null} disabled={false} />);
+    expect(container.querySelector<HTMLSelectElement>("[data-pb-callout-type]")?.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>("[data-pb-fmt-callout]")?.disabled).toBe(true);
   });
 });

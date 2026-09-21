@@ -1,6 +1,8 @@
 import type { Command, EditorView } from "@codemirror/view";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
+  CALLOUT_TYPES,
+  insertCallout,
   insertLink,
   insertTable,
   toggleBlockquote,
@@ -11,6 +13,7 @@ import {
   toggleHeading,
   toggleItalic,
   toggleNumberedList,
+  type CalloutType,
 } from "../lib/markdownCommands";
 
 /**
@@ -127,6 +130,7 @@ const ITEMS: ToolbarItem[] = [
 ];
 
 export function EditorToolbar({ view, disabled }: { view: EditorView | null; disabled: boolean }) {
+  const [calloutType, setCalloutType] = useState<CalloutType>("NOTE");
   if (disabled) return null;
   return (
     <div className="flex flex-wrap items-center gap-1" data-pb-toolbar role="toolbar" aria-label="Formatting">
@@ -152,6 +156,35 @@ export function EditorToolbar({ view, disabled }: { view: EditorView | null; dis
           </button>
         ),
       )}
+      <select
+        className="rounded-md border border-edge bg-surface px-1.5 py-1.5 text-xs text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        aria-label="Callout type"
+        data-pb-callout-type
+        value={calloutType}
+        disabled={!view}
+        onChange={(event) => setCalloutType(event.target.value as CalloutType)}
+      >
+        {CALLOUT_TYPES.map((type) => (
+          <option key={type} value={type}>
+            {type}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="rounded-md border border-edge bg-surface px-2 py-1.5 text-xs text-muted hover:text-ink disabled:opacity-50"
+        data-pb-fmt-callout
+        title="Insert callout"
+        aria-label="Insert callout"
+        disabled={!view}
+        onClick={() => {
+          if (!view) return;
+          insertCallout(calloutType)(view);
+          view.focus();
+        }}
+      >
+        Callout
+      </button>
       <span className="ml-auto text-xs text-muted" data-pb-save-hint>
         <kbd className="font-mono">⌘S</kbd> to save
       </span>

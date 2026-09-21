@@ -1,6 +1,9 @@
-import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
+import { history, redo, undo } from "@codemirror/commands";
+import { EditorSelection, EditorState, Transaction, type TransactionSpec } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import {
+  CALLOUT_TYPES,
+  insertCalloutCore,
   insertLinkCore,
   insertTableCore,
   toggleBlockquoteCore,
@@ -31,6 +34,19 @@ function applyCore(core: (state: EditorState) => TransactionSpec | null, state: 
   expect(spec).not.toBeNull();
   const next = state.update(spec!);
   return { doc: next.state.doc.toString(), from: next.state.selection.main.from, to: next.state.selection.main.to };
+}
+
+function withTime(spec: TransactionSpec, time: number): TransactionSpec {
+  const annotations = spec.annotations;
+  return {
+    ...spec,
+    annotations:
+      annotations === undefined
+        ? Transaction.time.of(time)
+        : Array.isArray(annotations)
+          ? [...annotations, Transaction.time.of(time)]
+          : [annotations, Transaction.time.of(time)],
+  };
 }
 
 describe("inline wrap-toggle", () => {
@@ -189,5 +205,110 @@ describe("table", () => {
     const r = applyCore(insertTableCore, stateOf("pick", 0, 4));
     expect(r.doc).toBe(`pick\n\n${SKELETON}\n`);
     expect(r.doc.slice(r.from, r.to)).toBe("Column");
+  });
+});
+
+describe("callout insertion", () => {
+  it("serializes the five supported markers and selects the placeholder in an empty document", () => {
+    for (const type of CALLOUT_TYPES) {
+      const r = applyCore((state) => insertCalloutCore(state, type), stateOf("", 0));
+      const expected = `> [!${type}]\n>\n> Callout text`;
+      expect(r.doc).toBe(expected);
+      const placeholder = expected.indexOf("> Callout text") + 2;
+      expect([r.from, r.to]).toEqual([placeholder, placeholder + "Callout text".length]);
+    }
+  });
+
+  it("preserves a nonblank line when the cursor is in the middle of a word", () => {
+    const r = applyCore(insertCalloutCore, stateOf("before", 2));
+    expect(r.doc).toBe("before\n\n> [!NOTE]\n>\n> Callout text");
+    const placeholder = r.doc.indexOf("> Callout text") + 2;
+    expect([r.from, r.to]).toEqual([placeholder, placeholder + "Callout text".length]);
+  });
+
+  it("inserts on a whitespace-only line without consuming its spaces", () => {
+    const source = "before\n   \nafter";
+    const r = applyCore(insertCalloutCore, stateOf(source, "before\n".length));
+    expect(r.doc).toBe("before\n\n> [!NOTE]\n>\n> Callout text\n\n   \nafter");
+  });
+
+  it("wraps the complete touched line span, reverses selections, and excludes a next-line endpoint", () => {
+    const reversed = applyCore(insertCalloutCore, stateOf("aa\nbb\ncc", 8, 1));
+    expect(reversed.doc).toBe("> [!NOTE]\n>\n> aa\n> bb\n> cc");
+    expect([reversed.from, reversed.to]).toEqual([reversed.doc.length, reversed.doc.length]);
+
+    const endpoint = applyCore(insertCalloutCore, stateOf("a\nb\nc", 0, 2));
+    expect(endpoint.doc).toBe("> [!NOTE]\n>\n> a\n\nb\nc");
+  });
+
+  it("quotes blank body lines and preserves Markdown markers, indentation, and Unicode", () => {
+    const source = "**β**\n  indented\n\n- item";
+    const r = applyCore(insertCalloutCore, stateOf(source, 0, source.length));
+    expect(r.doc).toBe("> [!NOTE]\n>\n> **β**\n>   indented\n> \n> - item");
+    expect([r.from, r.to]).toEqual([r.doc.length, r.doc.length]);
+
+    const setext = applyCore(insertCalloutCore, stateOf("===", 0, 3));
+    expect(setext.doc).toBe("> [!NOTE]\n>\n> ===");
+    const thematic = applyCore(insertCalloutCore, stateOf("---", 0, 3));
+    expect(thematic.doc).toBe("> [!NOTE]\n>\n> ---");
+  });
+
+  it("keeps existing quote/callout neighbors separated and uses only missing newlines", () => {
+    const source = "> [!TIP]\n> existing\n\nnext";
+    const atEnd = applyCore(insertCalloutCore, stateOf(source, source.length));
+    expect(atEnd.doc).toBe("> [!TIP]\n> existing\n\nnext\n\n> [!NOTE]\n>\n> Callout text");
+
+    const alreadySeparated = applyCore(insertCalloutCore, stateOf("before\n\nafter", "before\n".length));
+    expect(alreadySeparated.doc).toBe("before\n\n> [!NOTE]\n>\n> Callout text\n\nafter");
+  });
+
+  it("acts on the main selection only", () => {
+    const selection = EditorSelection.create([EditorSelection.range(0, 1), EditorSelection.range(2, 3)], 0);
+    const normalized = EditorState.create({ doc: "a\nb", selection });
+    expect(normalized.selection.ranges).toHaveLength(1);
+    const initial = EditorState.create({
+      doc: "a\nb",
+      selection,
+      extensions: [EditorState.allowMultipleSelections.of(true)],
+    });
+    expect(initial.selection.ranges).toHaveLength(2);
+    const spec = insertCalloutCore(initial);
+    expect(spec).not.toBeNull();
+    const next = initial.update(spec!);
+    expect(next.state.doc.toString()).toBe("> [!NOTE]\n>\n> a\n\nb");
+    expect(next.state.selection.ranges).toHaveLength(1);
+  });
+
+  it("keeps adjacent typing and callout insertion in separate undo history groups", () => {
+    let state = EditorState.create({
+      doc: "before",
+      selection: EditorSelection.cursor("before".length),
+      extensions: [history()],
+    });
+    state = state.update({
+      changes: { from: "before".length, insert: " typed" },
+      selection: EditorSelection.cursor("before typed".length),
+      annotations: Transaction.time.of(1_000),
+    }).state;
+    const spec = insertCalloutCore(state);
+    expect(spec).not.toBeNull();
+    state = state.update(withTime(spec!, 1_100)).state;
+
+    const target = {
+      get state() {
+        return state;
+      },
+      dispatch(transaction: Transaction) {
+        state = state.update(transaction).state;
+      },
+    } as Parameters<typeof undo>[0];
+    undo(target);
+    expect(state.doc.toString()).toBe("before typed");
+    undo(target);
+    expect(state.doc.toString()).toBe("before");
+    redo(target);
+    expect(state.doc.toString()).toBe("before typed");
+    redo(target);
+    expect(state.doc.toString()).toContain("> [!NOTE]");
   });
 });
