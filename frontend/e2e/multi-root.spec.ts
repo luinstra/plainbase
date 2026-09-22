@@ -70,7 +70,7 @@ test("both roots are selectable and navigable from the one sidebar", async ({ pa
   await expandAllSidebarFolders(docs);
   const docsHrefs = await docs.locator("a[href]").evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href")));
   expect(docsHrefs.length).toBeGreaterThan(0);
-  for (const href of docsHrefs) expect(href).toMatch(/^\/(?:docs(?:$|\/)|p\/docs(?:$|\/))/);
+  for (const href of docsHrefs) expect(href).toMatch(/^\/(?:docs(?:$|\/)|p\/docs(?:$|\/)|browse\/docs\/.+\.mmd$)/);
 
   await selectSidebarRoot(page, "extra");
   await expect(page).toHaveURL("/extra");
@@ -78,7 +78,7 @@ test("both roots are selectable and navigable from the one sidebar", async ({ pa
   await expandAllSidebarFolders(extra);
   const hrefs = await extra.locator("a[href]").evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href")));
   expect(hrefs.length).toBeGreaterThan(0);
-  for (const href of hrefs) expect(href).toMatch(/^\/(?:extra(?:$|\/)|p\/extra(?:$|\/))/);
+  for (const href of hrefs) expect(href).toMatch(/^\/(?:extra(?:$|\/)|p\/extra(?:$|\/)|browse\/extra\/.+\.mmd$)/);
 
   await extra.getByRole("link", { name: "Deploy Guide" }).click();
   await expect(page).toHaveURL("/extra/guides/deploy-guide");
