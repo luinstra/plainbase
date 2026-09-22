@@ -1,0 +1,17 @@
+[
+  {"raw":"docs/diagrams/flow.mmd","valid":true,"root":"docs","path":"diagrams/flow.mmd"},
+  {"raw":"docs/a%20b/flow%20chart.mmd","valid":true,"root":"docs","path":"a b/flow chart.mmd"},
+  {"raw":"docs/100%25/flow%23%3F.mmd","valid":true,"root":"docs","path":"100%/flow#?.mmd"},
+  {"raw":"docs/cafe%CC%81/flow.mmd","valid":true,"root":"docs","path":"café/flow.mmd"},
+  {"raw":"docs/literal%252Fslash.mmd","valid":true,"root":"docs","path":"literal%2Fslash.mmd"},
+  {"raw":"docs/a%2Fb.mmd","valid":false},
+  {"raw":"docs/%2E%2E/flow.mmd","valid":false},
+  {"raw":"docs/a%5Cb/flow.mmd","valid":false},
+  {"raw":"docs/%C3%28/flow.mmd","valid":false},
+  {"raw":"docs//flow.mmd","valid":false},
+  {"raw":"docs/flow%ZZ.mmd","valid":false},
+  {"raw":"docs/flow.MMD","valid":false},
+  {"raw":"docs/","valid":false},
+  {"raw":"docs","valid":false},
+  {"raw":"diagrams/flow.mmd","valid":true,"root":"diagrams","path":"flow.mmd"}
+]

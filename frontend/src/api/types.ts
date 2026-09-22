@@ -37,7 +37,18 @@ export interface TreePage {
   updated: string | null;
 }
 
-export type TreeNode = TreeFolder | TreePage;
+export interface TreeDiagram {
+  type: "diagram";
+  title: string;
+  /** Exact content-relative `.mmd` path. */
+  path: string;
+  /** Root-qualified browser view URL. */
+  url: string;
+  /** Root-qualified guarded raw source URL. */
+  source_url: string;
+}
+
+export type TreeNode = TreeFolder | TreePage | TreeDiagram;
 
 /** One root's tree entry (multi-root C3): the root-name slug + its synthetic root folder node. */
 export interface RootTree {

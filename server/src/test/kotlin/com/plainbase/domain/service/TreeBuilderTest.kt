@@ -1,10 +1,12 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import java.nio.file.Files
 
 /**
  * Nav-tree criteria (chunk 5).
@@ -155,6 +157,31 @@ class TreeBuilderTest : FunSpec({
             }
         }
     }
+
+    test("lowercase mmd files are typed leaves, retain exact source paths, and do not affect pageCount") {
+        withTempTree({ root ->
+            writePage(root, "diagrams/flow.mmd", "graph TD\n  A --> B\n")
+            writePage(root, "diagrams/flow.md", "# Flow\n")
+            writePage(root, "diagrams/ignored.MMD", "graph TD\n")
+        }) { root ->
+            IndexHarness(root).use { harness ->
+                val tree = TreeBuilder.build(harness.builder.rebuild(), RootName.PRIMARY)
+                val diagrams = tree.children.filterIsInstance<TreeNode.Folder>().single { it.name == "diagrams" }
+                    .children.filterIsInstance<TreeNode.Diagram>()
+                diagrams shouldBe listOf(
+                    TreeNode.Diagram(
+                        title = "flow.mmd",
+                        path = TreePath.require("diagrams/flow.mmd"),
+                        url = "/browse/docs/diagrams/flow.mmd",
+                        sourceUrl = "/assets/docs/diagrams/flow.mmd",
+                    ),
+                )
+                diagrams.first().path shouldBe TreePath.require("diagrams/flow.mmd")
+                diagrams.first().let { Files.readString(root.resolve(it.path.value)) } shouldBe "graph TD\n  A --> B\n"
+                tree.children.filterIsInstance<TreeNode.Folder>().single { it.name == "diagrams" }.pageCount shouldBe 1
+            }
+        }
+    }
 })
 
 /**
@@ -173,6 +200,9 @@ private fun shapeDump(node: TreeNode, indent: String = ""): String = when (node)
     is TreeNode.Page ->
         "${indent}page path='${node.path.value}' title='${node.title}' slug='${node.slug}' " +
             "url=${quoted(node.url)} status='${node.status}' updated=${quoted(node.updated)}"
+    is TreeNode.Diagram ->
+        "${indent}diagram path='${node.path.value}' title='${node.title}' url=${quoted(node.url)} " +
+            "sourceUrl=${quoted(node.sourceUrl)}"
 }
 
 private fun quoted(value: String?): String = if (value == null) "-" else "'$value'"
@@ -180,4 +210,5 @@ private fun quoted(value: String?): String = if (value == null) "-" else "'$valu
 private fun nameOf(node: TreeNode): String = when (node) {
     is TreeNode.Folder -> node.name
     is TreeNode.Page -> node.path.name
+    is TreeNode.Diagram -> node.path.name
 }

@@ -33,6 +33,13 @@
                   "url": "/docs/guides/deploy-guide",
                   "status": "published",
                   "updated": "2026-06-01"
+                },
+                {
+                  "type": "diagram",
+                  "title": "flow.mmd",
+                  "path": "guides/flow.mmd",
+                  "url": "/browse/docs/guides/flow.mmd",
+                  "source_url": "/assets/docs/guides/flow.mmd"
                 }
               ]
             },

@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.DiagramAsset
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
@@ -65,6 +66,13 @@ class FixtureIndexStub(root: Path) : PageIndexView {
 
     override fun assetUrl(asset: TreePath): String =
         "/assets/" + RootName.PRIMARY.value + "/" + PercentCoding.encodePath(asset.value)
+
+    override fun assetDisplayUrl(asset: TreePath): String =
+        if (DiagramAsset.isBrowserAddressable(asset)) {
+            DiagramAsset.browserUrl(RootName.PRIMARY, asset)
+        } else {
+            assetUrl(asset)
+        }
 
     override fun caseInsensitiveMatches(path: TreePath): List<TreePath> {
         val target = path.value.lowercase()

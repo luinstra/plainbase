@@ -1,5 +1,5 @@
 import type { RootTree, SearchHit } from "../api/types";
-import { rootLabelFor, type PageEntry } from "../lib/tree";
+import { rootLabelFor, type QuickSwitchEntry } from "../lib/tree";
 import { JumpToItem } from "./JumpToItem";
 import { SearchResultItem } from "./SearchResultItem";
 
@@ -39,7 +39,7 @@ export function SearchList({
   onActivateBridge,
 }: {
   stage: "jump" | "search";
-  jumpPages?: PageEntry[];
+  jumpPages?: QuickSwitchEntry[];
   query?: string;
   bridgeEnabled?: boolean;
   bridgeIndex?: number;
@@ -69,7 +69,7 @@ export function SearchList({
           )}
           {(jumpPages ?? []).map((entry, index) => (
             <JumpToItem
-              key={`${entry.root}:${entry.page.id}`}
+              key={`${entry.root}:${"page" in entry ? entry.page.id : entry.diagram.path}`}
               entry={entry}
               rootLabel={rootLabelFor(roots, entry.root)}
               showRoot={showRoots}

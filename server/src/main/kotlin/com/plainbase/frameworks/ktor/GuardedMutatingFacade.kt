@@ -6,6 +6,7 @@ import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
+import com.plainbase.domain.content.DiagramAsset
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.history.CommitIdentity
@@ -407,6 +408,7 @@ class GuardedMutatingFacade(
         if (principal !is Principal.Agent || origin == WriteOrigin.PROPOSAL_APPLY) {
             val grant = policy.checkCreate(principal, WriteClass.PageCreate, resource)
             requireAvailable(intent.root)
+            if (DiagramAsset.isStandalone(intent.path)) return unsupportedDiagramCreate()
             if (!policies.allowsFile(RootedPath(intent.root, intent.path))) return excludedCreate()
             return CreateOutcome.DirectCreated(writePipeline.create(grant, intent))
         }
@@ -426,6 +428,7 @@ class GuardedMutatingFacade(
                 val identity = agentCommitIdentity(principal)
                 val grant = policy.checkCreate(principal, WriteClass.PageCreate, resource)
                 requireAvailable(intent.root)
+                if (DiagramAsset.isStandalone(intent.path)) return unsupportedDiagramCreate()
                 if (!policies.allowsFile(RootedPath(intent.root, intent.path))) return excludedCreate()
                 CreateOutcome.DirectCreated(
                     writePipeline.create(grant, intent.copy(author = identity, committer = identity)),
@@ -464,6 +467,9 @@ class GuardedMutatingFacade(
 
     private fun excludedCreate(): CreateOutcome =
         CreateOutcome.DirectCreated(WriteOutcome.InvalidLocation("target_path is excluded by the root content policy."))
+
+    private fun unsupportedDiagramCreate(): CreateOutcome =
+        CreateOutcome.DirectCreated(WriteOutcome.InvalidLocation("standalone Mermaid diagram document writes are unsupported"))
 
     override fun writeAsset(
         principal: Principal,

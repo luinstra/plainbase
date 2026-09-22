@@ -15,7 +15,7 @@ test("sidebar links are root-qualified URLs from the tree; clicking navigates wi
   await expandAllSidebarFolders(sidebar);
   const hrefs = await sidebar.locator("a[href]").evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href")));
   expect(hrefs.length).toBeGreaterThan(30); // the whole fixture tree is in the nav
-  for (const href of hrefs) expect(href).toMatch(/^\/(?:docs(?:$|\/)|p\/docs(?:$|\/))/); // tree urls verbatim (incl. bare /docs home); losers via /p/docs/{id}
+  for (const href of hrefs) expect(href).toMatch(/^\/(?:docs(?:$|\/)|p\/docs(?:$|\/)|browse\/docs\/.+\.mmd$)/);
 
   await plantNoReloadMarker(page);
   await sidebar.getByRole("link", { name: "Deploy Guide" }).click();

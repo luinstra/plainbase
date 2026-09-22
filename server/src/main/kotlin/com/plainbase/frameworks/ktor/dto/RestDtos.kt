@@ -68,7 +68,7 @@ data class RootTreeDto(
     val tree: TreeNodeDto,
 )
 
-/** A tree node; the `type` discriminator (`folder`/`page`) comes from the sealed serializer. */
+/** A tree node; the `type` discriminator comes from the sealed serializer. */
 @Serializable
 sealed interface TreeNodeDto {
 
@@ -99,6 +99,15 @@ sealed interface TreeNodeDto {
         // editorial author-declared date, validated YYYY-MM-DD; provisional — Phase-3 Git may add a
         // distinct last_modified (never a repoint of updated).
         val updated: String?,
+    ) : TreeNodeDto
+
+    @Serializable
+    @SerialName("diagram")
+    data class Diagram(
+        val title: String,
+        val path: String,
+        val url: String,
+        @SerialName("source_url") val sourceUrl: String,
     ) : TreeNodeDto
 }
 
@@ -142,8 +151,16 @@ fun TreeNode.Folder.toDto(): TreeNodeDto.Folder = TreeNodeDto.Folder(
         when (child) {
             is TreeNode.Folder -> child.toDto()
             is TreeNode.Page -> child.toDto()
+            is TreeNode.Diagram -> child.toDto()
         }
     },
+)
+
+fun TreeNode.Diagram.toDto(): TreeNodeDto.Diagram = TreeNodeDto.Diagram(
+    title = title,
+    path = path.value,
+    url = url,
+    sourceUrl = sourceUrl,
 )
 
 fun TreeNode.Page.toDto(): TreeNodeDto.Page = TreeNodeDto.Page(

@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.content.DiagramAsset
 import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.protocol.ErrorCodes
@@ -17,22 +18,39 @@ import io.ktor.server.routing.get
  * A path-space collision loser has no canonical URL; its permalink is the page's one durable URL,
  * so the 302 targets `/p/{root}/{id}` instead — same contract (a redirect to where the page lives now).
  *
- * A3: `read`-gated — the resolve goes through a dedicated guarded facade OPERATION (never a route-side snapshot
- * walk), so the gate fires (401/403) BEFORE it and the 302 cannot leak page existence to an unauthorized caller.
- * That is also what lets it availability-gate: a root-blind snapshot walk would happily 302 to a carried-forward
- * page in a root that answers 503 everywhere else. An unavailable root answers 503 through the existing
- * `guarded {}` wrap; anonymous still gets its 401, unchanged.
+ * Lowercase `.mmd` tails are the standalone diagram browser arm: after the root/path grammar is validated, they
+ * receive the public SPA shell without a content read. The shell's guarded `/assets` request owns authorization,
+ * availability, membership and live bytes. Malformed or unknown diagram addresses receive a 404 shell.
+ *
+ * A3: the Markdown redirect arm is `read`-gated — its resolve goes through a dedicated guarded facade OPERATION
+ * (never a route-side snapshot walk), so the gate fires (401/403) before the 302 and cannot leak page existence.
+ * The standalone diagram arm is a public shell lookup: valid rooted diagram addresses return 200, while malformed
+ * or unknown diagram addresses return the 404 shell. Diagram source content remains guarded by the `/assets` route.
+ * The Markdown arm also availability-gates: a root-blind snapshot walk would happily 302 to a carried-forward page
+ * in a root that answers 503 everywhere else. An unavailable root answers 503 through `guarded {}`; anonymous still
+ * gets its 401, unchanged.
  */
 fun Route.browseRedirectRoute(ctx: RouteContext) {
     get("/${ServerTopLevel.BROWSE}/{path...}") {
-        val principal = ctx.principalOrRefuse(call) ?: return@get
+        val principal = when (val extracted = ctx.principalOrRefuseToShell(call)) {
+            is ExtractedPrincipal.Resolved -> extracted.principal
+            ExtractedPrincipal.Refused -> return@get
+        }
+        val raw = call.rawPathAfter("/${ServerTopLevel.BROWSE}/")
+            ?: return@get call.respondError(
+                HttpStatusCode.BadRequest,
+                ErrorCodes.INVALID_PATH,
+                "Expected a content file path: /browse/{file-path}",
+            )
+        val decodedForShape = decodedTreePath(raw)
+        val diagramAddress = raw.endsWith(".mmd") || decodedForShape?.let(DiagramAsset::isStandalone) == true
+        if (diagramAddress) {
+            val decoded = decodedForShape ?: return@get call.respondShellNotFound()
+            val (root, path) = splitRootTail(decoded, ctx.roots) ?: return@get call.respondShellNotFound()
+            if (path == null || !DiagramAsset.isBrowserAddressable(path)) return@get call.respondShellNotFound()
+            return@get call.respondSpaShell()
+        }
         call.guarded {
-            val raw = call.rawPathAfter("/${ServerTopLevel.BROWSE}/")
-                ?: return@guarded call.respondError(
-                    HttpStatusCode.BadRequest,
-                    ErrorCodes.INVALID_PATH,
-                    "Expected a content file path: /browse/{file-path}",
-                )
             val decoded = decodedTreePath(raw)
                 ?: return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid file path: '$raw'")
             // A first segment naming no registered root names no file: a 404 miss, not a guess at the

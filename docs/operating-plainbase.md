@@ -64,6 +64,17 @@ flowcharts and agent-flow diagrams; other diagram types do not share that edge l
 diagrams remain visible as source. Rendering runs in the browser, so complex diagrams can briefly
 delay interaction even within these limits.
 
+### Standalone Mermaid files
+
+Lowercase `.mmd` files are indexed as read-only diagram leaves. The tree and folder listings link to
+`/browse/{root}/{path}`; that route serves the SPA shell, which fetches the guarded raw source from
+`/assets/{root}/{path}` and renders it with the same Mermaid limits as embedded fences. The source
+download remains the file on disk, including its original bytes. Missing, unavailable, or unauthorized
+source reads are shown as the normal error state; a valid browser address can still load the shell.
+
+Standalone Mermaid document creation and proposals are intentionally unsupported. Edit or add the `.mmd`
+file with filesystem tools, then let the normal watcher or a manual rescan update navigation.
+
 ### Callouts and task lists
 
 Use one of the five fixed callout markers as the first line of a quoted block. The remaining lines are
@@ -303,7 +314,8 @@ misconfigure in a proxy or health check:
 | Browser content | `/{root}` or `/{root}/{path}` for a registered root | 200 with the SPA shell, except a live alias redirects 301 within that root. |
 | Asset files | `/assets` | 400 `invalid_path`, because an asset path is required. `/assets/{unknown-root}/...` and `/assets/{registered-root}` answer 404; a registered root plus a path is required, such as `/assets/docs/infra/assets/diagram.svg`. |
 | Embedded bundle | `/assets/index-<hash>.js` or the corresponding CSS path | 200 from the embedded bundle before the root split and before the content-asset read gate. The bundle check is root-blind. |
-| File-path lookup | `/browse` | 400 `invalid_path`, because a content file path is required. `/browse/{unknown-root}/...` answers 404, while `/browse/{registered-root}` answers 400 `invalid_path`; a registered root plus a file path, such as `/browse/docs/guides/deploy-guide.md`, redirects 302 to its current page URL. |
+| Markdown file-path lookup | `/browse/{root}/{path}.md` | 400 `invalid_path` for a missing or bare root, 404 for an unknown root or missing page, and 302 to the current Markdown page URL for a readable registered-root path. The redirect is read-gated. |
+| Standalone Mermaid shell | `/browse/{root}/{path}.mmd` | 200 with the SPA shell for a valid rooted diagram address, including a missing source; 404 shell for malformed or unknown diagram addresses. The source read remains guarded at `/assets/{root}/{path}`. |
 | Agent page lookup | `/api/v1/pages/by-path` | 400 `invalid_path`, because a page path is required. A path whose first segment is not a registered root, or a bare registered root, is 404 `page_not_found`, never a lookup under `docs`; `/api/v1/pages/by-path/docs/guides/deploy-guide` is the rooted form. |
 | Permalink | `/p/<id>` or `/p/<root>/<id>` | 302 when the page is found, 200 for a live path-collision loser, 300 for an ambiguous bare id, 404 for an unknown id, 400 for a malformed shape, 410 for a retired id, and 503 when a live page's root is unavailable. |
 

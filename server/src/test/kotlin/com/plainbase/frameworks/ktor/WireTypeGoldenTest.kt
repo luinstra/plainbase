@@ -112,6 +112,12 @@ class WireTypeGoldenTest : FunSpec({
                                             status = "published",
                                             updated = "2026-06-01",
                                         ),
+                                        TreeNodeDto.Diagram(
+                                            title = "flow.mmd",
+                                            path = "guides/flow.mmd",
+                                            url = "/browse/docs/guides/flow.mmd",
+                                            sourceUrl = "/assets/docs/guides/flow.mmd",
+                                        ),
                                     ),
                                 ),
                                 TreeNodeDto.Folder(

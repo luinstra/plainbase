@@ -596,6 +596,7 @@ describe("routing flows", () => {
       { address: "/review/123", routePath: "/review/$id", routeId: "/review/$id", params: { id: "123" } },
       { address: "/p/docs/abc", routePath: "/p/$", routeId: "/p/$", params: { _splat: "docs/abc" } },
       { address: "/p/abc", routePath: "/p/$", routeId: "/p/$", params: { _splat: "abc" } },
+      { address: "/browse/docs/diagrams/flow.mmd", routePath: "/browse/$", routeId: "/browse/$", params: { _splat: "docs/diagrams/flow.mmd" } },
       { address: "/docs", routePath: "/$", routeId: "/$", params: { _splat: "docs" } },
       { address: "/docs/", routePath: "/$", routeId: "/$", params: { _splat: "docs" } },
       { address: "/docs/guides/deploy-guide", routePath: "/$", routeId: "/$", params: { _splat: "docs/guides/deploy-guide" } },

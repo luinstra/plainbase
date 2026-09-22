@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
-import type { PageResponse, TreeFolder, TreePage } from "../api/types";
+import type { PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
 import { parsePermalink, permalinkOf } from "../lib/permalink";
 import {
   folderByUrl,
@@ -163,6 +163,7 @@ function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
 function FolderListingGroups({ root, folder }: { root: string; folder: TreeFolder }) {
   const subfolders = folder.children.filter((c): c is TreeFolder => c.type === "folder");
   const pages = folder.children.filter((c): c is TreePage => c.type === "page");
+  const diagrams = folder.children.filter((c): c is TreeDiagram => c.type === "diagram");
 
   return (
     <div className="pb-listing" data-pb-folder-children>
@@ -196,15 +197,32 @@ function FolderListingGroups({ root, folder }: { root: string; folder: TreeFolde
             </div>
           </section>
         )}
+        {diagrams.length > 0 && (
+          <section className="pb-listing-group">
+            <div className="pb-listing-label">Diagrams</div>
+            <div className="pb-page-grid">
+              {diagrams.map((child) => (
+                <a key={child.path} href={child.url} data-pb-folder-child="diagram" className="pb-page-row">
+                  <span className="pb-pdot" aria-hidden="true" />
+                  <span className="pt">{child.title}</span>
+                </a>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
   );
 }
 
-/** A subfolder landing card: icon + name + optional description + `path/ · N pages` meta. A
+/** A subfolder landing card: icon + name + optional description + recursive content counts. A
  * collision-loser subfolder has `url === null` and renders inert (no link). */
 function FolderCard({ folder }: { folder: TreeFolder }) {
   const name = folderTitle(folder);
-  const pageLabel = folder.page_count === 1 ? "1 page" : `${folder.page_count} pages`;
+  const diagramCount = folderDiagramCount(folder);
+  const labels = [
+    ...(folder.page_count > 0 || diagramCount === 0 ? [folder.page_count === 1 ? "1 page" : `${folder.page_count} pages`] : []),
+    ...(diagramCount > 0 ? [diagramCount === 1 ? "1 diagram" : `${diagramCount} diagrams`] : []),
+  ];
   const body = (
     <>
       <span className="ficon" aria-hidden="true">
@@ -214,7 +232,7 @@ function FolderCard({ folder }: { folder: TreeFolder }) {
         <span className="fn">{name}</span>
         {folder.description && <span className="fm">{folder.description}</span>}
         <span className="fc">
-          {folder.path}/ · {pageLabel}
+          {folder.path}/ · {labels.join(" · ")}
         </span>
       </span>
     </>
@@ -228,6 +246,13 @@ function FolderCard({ folder }: { folder: TreeFolder }) {
       {body}
     </div>
   );
+}
+
+function folderDiagramCount(folder: TreeFolder): number {
+  return folder.children.reduce((count, child) => {
+    if (child.type === "diagram") return count + 1;
+    return child.type === "folder" ? count + folderDiagramCount(child) : count;
+  }, 0);
 }
 
 /** The landing-card folder icon — `currentColor` stroke SVG (the design accepts this icon, unlike

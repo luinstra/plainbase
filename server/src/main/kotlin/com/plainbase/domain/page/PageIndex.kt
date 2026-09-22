@@ -1,6 +1,7 @@
 package com.plainbase.domain.page
 
 import com.plainbase.domain.content.ContentFolder
+import com.plainbase.domain.content.DiagramAsset
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.PageLink
@@ -8,7 +9,6 @@ import com.plainbase.domain.render.RenderedSection
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
-import com.plainbase.domain.root.ServerTopLevel
 
 /** One root's slice of a snapshot, in the builder's per-root scan order. */
 data class RootSection(
@@ -129,7 +129,10 @@ class PageIndex(sections: List<RootSection>) {
         }
 
         override fun assetUrl(asset: TreePath): String =
-            "/${ServerTopLevel.ASSETS}/" + root.value + "/" + PercentCoding.encodePath(asset.value)
+            DiagramAsset.sourceUrl(root, asset)
+
+        override fun assetDisplayUrl(asset: TreePath): String =
+            if (DiagramAsset.isBrowserAddressable(asset)) DiagramAsset.browserUrl(root, asset) else assetUrl(asset)
 
         override fun caseInsensitiveMatches(path: TreePath): List<TreePath> =
             byLowercaseValue[path.value.lowercase()].orEmpty().filterNot { it == path }

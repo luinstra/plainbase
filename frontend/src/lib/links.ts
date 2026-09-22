@@ -1,4 +1,5 @@
 import type { RootTree } from "../api/types";
+import { parseDiagramPath } from "./diagramPath";
 import { rootEntryOfUrl } from "./tree";
 
 /**
@@ -28,11 +29,13 @@ export function interceptableHref(event: MouseEvent, roots: RootTree[] | undefin
   if (anchor.origin !== window.location.origin) return null;
 
   const path = anchor.pathname;
+  const diagram = parseDiagramPath(path);
   const internal =
     path === "/" ||
     path === "/new" ||
     path.startsWith("/p/") ||
-    (roots !== undefined && rootEntryOfUrl(roots, path) !== null);
+    (roots !== undefined &&
+      (rootEntryOfUrl(roots, path) !== null || (diagram !== null && roots.some((root) => root.root === diagram.root))));
   if (!internal) return null;
 
   // A percent-escape in a `/p/` address is the one thing a soft navigation cannot carry, and THIS anchor is

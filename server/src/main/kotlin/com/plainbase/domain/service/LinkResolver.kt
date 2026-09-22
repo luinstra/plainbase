@@ -19,13 +19,15 @@ import com.plainbase.domain.page.PageIndexView
  */
 class LinkResolver(private val index: PageIndexView) {
 
+    enum class LinkContext { ORDINARY, IMAGE }
+
     /**
      * Resolves [rawLink] as written in the page at [sourcePath] (a content-relative `.md` file path).
      * The classification order is frozen (§A2): scheme/protocol-relative → same-page anchor →
      * empty target → internal.
      */
-    fun resolve(sourcePath: TreePath, rawLink: String): LinkOutcome =
-        classify(rawLink) ?: resolveInternal(sourcePath, rawLink)
+    fun resolve(sourcePath: TreePath, rawLink: String, context: LinkContext = LinkContext.ORDINARY): LinkOutcome =
+        classify(rawLink) ?: resolveInternal(sourcePath, rawLink, context)
 
     /**
      * The frozen classification prefix (§A2): scheme/protocol-relative and same-page anchor cases
@@ -50,7 +52,7 @@ class LinkResolver(private val index: PageIndexView) {
     }
 
     /** §A2 steps 1–6 for an internal target (path/query/fragment split, decode, lexical resolve, match). */
-    private fun resolveInternal(sourcePath: TreePath, rawLink: String): LinkOutcome {
+    private fun resolveInternal(sourcePath: TreePath, rawLink: String, context: LinkContext): LinkOutcome {
         // Step 1: split on the RAW link string — fragment at the first UNENCODED '#', query at the
         // first UNENCODED '?'. Encoded %23/%3F therefore remain path data. The query is discarded
         // for page targets but PRESERVED (raw, still-encoded — never decoded, so it is never emitted
@@ -69,7 +71,7 @@ class LinkResolver(private val index: PageIndexView) {
                 val emittedFragment = decodedFragment?.let(PercentCoding::encodeSegment)
                 when (val resolved = ContentRoot.resolve(sourcePath.parent, decodedPath)) {
                     is ContentRoot.ResolveResult.Resolved ->
-                        resolveTarget(resolved.path, decodedPath.endsWith("/"), emittedFragment, rawQuery)
+                        resolveTarget(resolved.path, decodedPath.endsWith("/"), emittedFragment, rawQuery, context)
                     ContentRoot.ResolveResult.Outside ->
                         LinkOutcome.Broken(BrokenReason.OUTSIDE_CONTENT_ROOT)
                     ContentRoot.ResolveResult.Root -> resolveDirectory(null, emittedFragment)
@@ -79,7 +81,13 @@ class LinkResolver(private val index: PageIndexView) {
     }
 
     /** §A2 step 5/6 — match a resolved [path] against the index by target form, then classify. */
-    private fun resolveTarget(path: TreePath, trailingSlash: Boolean, fragment: String?, rawQuery: String?): LinkOutcome {
+    private fun resolveTarget(
+        path: TreePath,
+        trailingSlash: Boolean,
+        fragment: String?,
+        rawQuery: String?,
+        context: LinkContext,
+    ): LinkOutcome {
         val name = path.name
         return when {
             trailingSlash -> resolveDirectory(path, fragment)
@@ -88,17 +96,22 @@ class LinkResolver(private val index: PageIndexView) {
                 else -> rescue(path)
             }
             index.kindOf(path) == PageIndexView.EntryKind.DIRECTORY -> resolveDirectory(path, fragment)
-            !name.contains('.') -> resolveExtensionless(path, fragment, rawQuery)
-            index.kindOf(path) == PageIndexView.EntryKind.ASSET -> assetOutcome(path, fragment, rawQuery)
+            !name.contains('.') -> resolveExtensionless(path, fragment, rawQuery, context)
+            index.kindOf(path) == PageIndexView.EntryKind.ASSET -> assetOutcome(path, fragment, rawQuery, context)
             else -> rescue(path)
         }
     }
 
-    private fun resolveExtensionless(path: TreePath, fragment: String?, rawQuery: String?): LinkOutcome {
+    private fun resolveExtensionless(
+        path: TreePath,
+        fragment: String?,
+        rawQuery: String?,
+        context: LinkContext,
+    ): LinkOutcome {
         val asMd = TreePath.childOf(path.parent, "${path.name}.md")
         return when {
             index.kindOf(asMd) == PageIndexView.EntryKind.PAGE -> pageOutcome(asMd, fragment)
-            index.kindOf(path) == PageIndexView.EntryKind.ASSET -> assetOutcome(path, fragment, rawQuery)
+            index.kindOf(path) == PageIndexView.EntryKind.ASSET -> assetOutcome(path, fragment, rawQuery, context)
             else -> rescue(asMd, path)
         }
     }
@@ -145,8 +158,13 @@ class LinkResolver(private val index: PageIndexView) {
      * table) and emitted RAW — it was never decoded, so the "never emitted raw" rule holds trivially.
      * The query is appended BEFORE the fragment, matching URL grammar (`?query#fragment`).
      */
-    private fun assetOutcome(asset: TreePath, fragment: String?, rawQuery: String?): LinkOutcome {
-        val base = index.assetUrl(asset)
+    private fun assetOutcome(
+        asset: TreePath,
+        fragment: String?,
+        rawQuery: String?,
+        context: LinkContext,
+    ): LinkOutcome {
+        val base = if (context == LinkContext.IMAGE) index.assetUrl(asset) else index.assetDisplayUrl(asset)
         val withQuery = if (rawQuery == null) base else "$base?$rawQuery"
         return LinkOutcome.Resolved.Asset(asset, appendFragment(withQuery, fragment))
     }
