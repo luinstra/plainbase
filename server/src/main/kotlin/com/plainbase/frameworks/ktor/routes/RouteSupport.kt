@@ -339,7 +339,8 @@ internal sealed interface ExtractedPrincipal {
  *    root holding ONE page whose absence nobody has proven. A separate code, because it is a separate fact and a
  *    separate remedy: nothing to restore, nothing to restart, and it clears itself.
  *  - [AmbiguousPageId] → 409 `ambiguous_page_id` + one candidate root/URL per holding root (C4). The ONE arm here
- *    that is thrown AFTER the resolve rather than before it, because ambiguity is a fact about the resolution.
+ *    that is thrown AFTER the resolve rather than before it, because ambiguity is a fact about the resolution. A
+ *    protocol-specific permalink re-read may catch this inside [body] to preserve the permalink 300/Link contract.
  *
  * The other three are thrown BEFORE any resolve/membership work (or, for availability, immediately after the gate passes), so
  * a denied read never leaks page existence and an unauthenticated prober never learns a root's topology.

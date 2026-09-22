@@ -70,6 +70,7 @@ import kotlin.time.Clock
  */
 fun withRestServices(
     pages: Map<String, String> = emptyMap(),
+    rawPages: Map<String, ByteArray> = emptyMap(),
     seedAdmin: Pair<String, String>? = null, // (username, password) — seeds a builtin ADMIN before the block runs
     authMode: AuthMode = AuthMode.BUILTIN,
     seedProxyAdmin: String? = null, // A4b: grant ADMIN to a proxy/<subject> identity (the grant-role first-admin seam)
@@ -86,6 +87,11 @@ fun withRestServices(
             val target = content.resolve(relativePath)
             Files.createDirectories(target.parent)
             Files.writeString(target, body)
+        }
+        for ((relativePath, body) in rawPages) {
+            val target = content.resolve(relativePath)
+            Files.createDirectories(target.parent)
+            Files.write(target, body)
         }
         DatabaseFactory.createInMemoryDriver().use { driver ->
             val database = DatabaseFactory.createDatabase(driver)

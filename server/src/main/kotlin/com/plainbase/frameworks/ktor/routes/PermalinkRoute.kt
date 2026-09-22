@@ -1,9 +1,11 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.ServerTopLevel
+import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.PermalinkResolution
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.AmbiguousCandidate
@@ -42,16 +44,22 @@ import io.ktor.server.routing.get
  *
  * **Collision losers (documented reading):** a path-space collision loser has `url = null`; §A4 promises the loser
  * "remains fully reachable via its permalink" (the rooted `/p/{root}/{id}`, and the bare form too),
- * so we serve the SPA shell directly at the permalink (200).
+ * so the default HTML representation serves the SPA shell directly at the permalink (200); opted-in Markdown reads
+ * the guarded page and returns its indexed source.
  *
  * A3: `read`-gated — the resolution goes through the guarded facade, so the gate fires (401/403) BEFORE the resolve.
  * **A root that is not serving answers 503, never 404** (ADR-0011 D5): the facade throws and `guarded {}` maps it.
  */
 fun Route.permalinkRoute(ctx: RouteContext) {
-    get("/${ServerTopLevel.PERMALINK}/{segments...}") { call.handlePermalinkDispatch(ctx) }
+    get("/${ServerTopLevel.PERMALINK}/{segments...}") {
+        call.appendAcceptVary()
+        val representation = call.selectPageRepresentation(PageDefaultRepresentation.HTML)
+        if (representation == PageRepresentation.MARKDOWN) call.markdownCacheHeaders()
+        call.handlePermalinkDispatch(ctx, representation)
+    }
 }
 
-private suspend fun ApplicationCall.handlePermalinkDispatch(ctx: RouteContext) {
+private suspend fun ApplicationCall.handlePermalinkDispatch(ctx: RouteContext, representation: PageRepresentation) {
     val principal = ctx.principalOrRefuse(this) ?: return
     guarded {
         val raw = rawPathAfter("/${ServerTopLevel.PERMALINK}/")
@@ -74,7 +82,7 @@ private suspend fun ApplicationCall.handlePermalinkDispatch(ctx: RouteContext) {
         if (bareId != null) {
             return@guarded when (val resolution = ctx.read.permalink(principal, bareId)) {
                 is PermalinkResolution.Found -> respondRedirectPreservingQuery(resolution.url, permanent = false)
-                PermalinkResolution.LoserNoUrl -> respondSpaShell()
+                PermalinkResolution.LoserNoUrl -> respondLoser(bareId, null, principal, ctx, representation)
                 is PermalinkResolution.Retired -> respondRetired(bareId, resolution)
                 PermalinkResolution.Unknown ->
                     respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${bareId.value}")
@@ -93,7 +101,7 @@ private suspend fun ApplicationCall.handlePermalinkDispatch(ctx: RouteContext) {
                 )
             return@guarded when (val resolution = ctx.read.permalinkAt(principal, root, id)) {
                 is PermalinkResolution.Found -> respondRedirectPreservingQuery(resolution.url, permanent = false)
-                PermalinkResolution.LoserNoUrl -> respondSpaShell()
+                PermalinkResolution.LoserNoUrl -> respondLoser(id, root, principal, ctx, representation)
                 is PermalinkResolution.Retired -> respondRetired(id, resolution)
                 PermalinkResolution.Unknown ->
                     respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
@@ -106,6 +114,27 @@ private suspend fun ApplicationCall.handlePermalinkDispatch(ctx: RouteContext) {
         } else {
             respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_ROOT, "Not a valid root name: '$first'")
         }
+    }
+}
+
+private suspend fun ApplicationCall.respondLoser(
+    id: PageId,
+    root: RootName?,
+    principal: Principal,
+    ctx: RouteContext,
+    representation: PageRepresentation,
+) {
+    if (representation != PageRepresentation.MARKDOWN) {
+        respondSpaShell()
+        return
+    }
+    try {
+        val payload = ctx.read.pageById(principal, id, root)
+            ?: return respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
+        respondMarkdown(payload.page.markdown)
+    } catch (ambiguous: AmbiguousPageId) {
+        // This re-read is protocol-specific: a permalink collision must retain its 300/Link shape, not REST's 409.
+        respondAmbiguousPermalink(ambiguous.id, ambiguous.candidates, ambiguous.hasRetiredCandidate)
     }
 }
 

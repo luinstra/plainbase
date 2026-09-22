@@ -196,20 +196,24 @@ title: X
                 resolverFactory = resolverFor(listOf(notes, main), emptyList()),
                 absenceFactory = absenceFor(listOf(notes, main)),
             ) { _ ->
-                val res = createClient { followRedirects = false }.get("/p/$dupId")
-                res.status shouldBe HttpStatusCode.MultipleChoices
-                res.headers.getAll(HttpHeaders.Link) shouldContainExactly listOf(
-                    "</p/docs/$dupId>; rel=\"alternate\"",
-                    "</p/notes/$dupId>; rel=\"alternate\"",
-                )
-                withClue("ambiguity is transient, and 300 is heuristically cacheable - no intermediary may keep it") {
-                    res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
+                listOf(null, "text/markdown").forEach { accept ->
+                    val res = createClient { followRedirects = false }.get("/p/$dupId") {
+                        accept?.let { header(HttpHeaders.Accept, it) }
+                    }
+                    res.status shouldBe HttpStatusCode.MultipleChoices
+                    res.headers.getAll(HttpHeaders.Link) shouldContainExactly listOf(
+                        "</p/docs/$dupId>; rel=\"alternate\"",
+                        "</p/notes/$dupId>; rel=\"alternate\"",
+                    )
+                    withClue("ambiguity is transient, and 300 is heuristically cacheable - no intermediary may keep it") {
+                        res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
+                    }
+                    // The 300 body is the SAME wrapped envelope the REST 409 sends, only with permalink candidate urls.
+                    val body = res.errorBody()
+                    body.getValue("code").jsonPrimitive.content shouldBe "ambiguous_page_id"
+                    body.getValue("candidates").jsonArray.map { it.jsonObject.getValue("url").jsonPrimitive.content } shouldContainExactly
+                        listOf("/p/docs/$dupId", "/p/notes/$dupId")
                 }
-                // The 300 body is the SAME wrapped envelope the REST 409 sends, only with permalink candidate urls.
-                val body = res.errorBody()
-                body.getValue("code").jsonPrimitive.content shouldBe "ambiguous_page_id"
-                body.getValue("candidates").jsonArray.map { it.jsonObject.getValue("url").jsonPrimitive.content } shouldContainExactly
-                    listOf("/p/docs/$dupId", "/p/notes/$dupId")
             }
         }
     }
@@ -222,9 +226,13 @@ title: X
                 resolverFactory = resolverFor(emptyList(), listOf(notes, main)),
                 absenceFactory = absenceFor(emptyList()),
             ) { _ ->
-                val res = createClient { followRedirects = false }.get("/p/$dupId")
-                withClue("a retired-Ambiguous id disambiguates WHICH tombstone via 300") {
-                    res.status shouldBe HttpStatusCode.MultipleChoices
+                listOf(null, "text/markdown").forEach { accept ->
+                    val res = createClient { followRedirects = false }.get("/p/$dupId") {
+                        accept?.let { header(HttpHeaders.Accept, it) }
+                    }
+                    withClue("a retired-Ambiguous id disambiguates WHICH tombstone via 300") {
+                        res.status shouldBe HttpStatusCode.MultipleChoices
+                    }
                 }
             }
         }

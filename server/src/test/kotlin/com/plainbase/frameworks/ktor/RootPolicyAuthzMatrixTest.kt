@@ -300,12 +300,25 @@ class RootPolicyAuthzMatrixTest : FunSpec({
 
             client.get("/api/v1/pages/${rollback.id.value}").let {
                 it.status shouldBe HttpStatusCode.Unauthorized
-                withClue("a 503 would tell an unauthenticated prober which of the operator's disks is unmounted") {
-                    it.errorCode() shouldBe "unauthorized"
+                it.errorCode() shouldBe "unauthorized"
+            }
+            client.get("/api/v1/pages/by-path/open/notes/rollback").let {
+                it.status shouldBe HttpStatusCode.Unauthorized
+                it.errorCode() shouldBe "unauthorized"
+            }
+            listOf(
+                "/api/v1/pages/${rollback.id.value}",
+                "/api/v1/pages/by-path/open/notes/rollback",
+                "/open/notes/rollback",
+            ).forEach { path ->
+                client.get(path) { header(HttpHeaders.Accept, "text/markdown") }.let {
+                    it.status shouldBe HttpStatusCode.Unauthorized
+                    withClue("a 503 would tell an unauthenticated prober which of the operator's disks is unmounted") {
+                        it.errorCode() shouldBe "unauthorized"
+                    }
                 }
             }
             client.get("/browse/open/notes/rollback.md").status shouldBe HttpStatusCode.Unauthorized
-            client.get("/api/v1/pages/by-path/open/notes/rollback").status shouldBe HttpStatusCode.Unauthorized
         }
     }
 
@@ -327,7 +340,7 @@ class RootPolicyAuthzMatrixTest : FunSpec({
     // correctly. The root-content surface `/{root}/...` is the BROWSER surface: its answer is the shell. The honest 503 stays on the API surfaces
     // the SPA and the agents consume, which rows 9 and 13-17 pin.
 
-    test("11b. an AUTHENTICATED reader gets the SHELL on /{unavailable-root}/{path}, never raw 503 JSON") {
+    test("11b. an AUTHENTICATED reader gets the HTML shell by default, while Markdown gets structured 503") {
         withRoots(human, role = Role.VIEWER) { harness ->
             harness.availability.markUnavailable(RootName.require("open"), UnavailableCause.VANISHED)
 
@@ -337,8 +350,20 @@ class RootPolicyAuthzMatrixTest : FunSpec({
             withClue("a browser navigating to a page URL must get HTML - the SPA renders the outage from the tree") {
                 shell.headers[HttpHeaders.ContentType] shouldContain "text/html"
             }
-            withClue("the API surface the SPA fetches from is where the honest 503 belongs, and it is untouched") {
-                client.get("/api/v1/pages/by-path/open/notes/rollback").status shouldBe HttpStatusCode.ServiceUnavailable
+            client.get("/api/v1/pages/by-path/open/notes/rollback").status shouldBe HttpStatusCode.ServiceUnavailable
+            withClue("Markdown reads expose the honest structured outage with its retry hint") {
+                val markdownApi = client.get("/api/v1/pages/by-path/open/notes/rollback") {
+                    header(HttpHeaders.Accept, "text/markdown")
+                }
+                markdownApi.status shouldBe HttpStatusCode.ServiceUnavailable
+                markdownApi.errorCode() shouldBe "root_unavailable"
+                markdownApi.headers[HttpHeaders.RetryAfter] shouldBe "300"
+                val markdownCanonical = client.get("/open/notes/rollback") {
+                    header(HttpHeaders.Accept, "text/markdown")
+                }
+                markdownCanonical.status shouldBe HttpStatusCode.ServiceUnavailable
+                markdownCanonical.errorCode() shouldBe "root_unavailable"
+                markdownCanonical.headers[HttpHeaders.RetryAfter] shouldBe "300"
             }
         }
     }

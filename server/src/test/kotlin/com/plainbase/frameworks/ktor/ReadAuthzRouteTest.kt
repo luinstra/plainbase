@@ -9,7 +9,9 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
@@ -86,6 +88,43 @@ class ReadAuthzRouteTest : FunSpec({
     suspend fun io.ktor.server.testing.ApplicationTestBuilder.docId(): String =
         Json.parseToJsonElement(client.get("/api/v1/pages/by-path/docs/doc").bodyAsText())
             .jsonObject.getValue("id").jsonPrimitive.content
+
+    test("enforced Markdown reads deny anonymous present and absent pages before validators on every document surface") {
+        withApp(enforced = true, principal = Principal.Anonymous) { app, harness ->
+            val id = harness.builder.current.pages.single().id.value
+            listOf(
+                "/api/v1/pages/$id",
+                "/api/v1/pages/$absentId",
+                "/api/v1/pages/by-path/docs/doc",
+                "/api/v1/pages/by-path/docs/missing",
+                "/docs/doc",
+                "/docs/missing",
+            ).forEach { path ->
+                val response = app.client.get(path) {
+                    header(HttpHeaders.Accept, "text/markdown")
+                    header(HttpHeaders.IfNoneMatch, "\"sha256:${"0".repeat(64)}\"")
+                }
+                response.status shouldBe HttpStatusCode.Unauthorized
+                Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                    .getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe "unauthorized"
+            }
+        }
+    }
+
+    test("an enforced READ_ONLY agent receives the same Markdown source through ID, by-path, and canonical URLs") {
+        withApp(enforced = true, principal = null, seedAgentMode = AgentMode.READ_ONLY) { app, _ ->
+            listOf(
+                "/api/v1/pages/${app.docId()}",
+                "/api/v1/pages/by-path/docs/doc",
+                "/docs/doc",
+            ).forEach { path ->
+                val response = app.client.get(path) { header(HttpHeaders.Accept, "text/markdown") }
+                response.status shouldBe HttpStatusCode.OK
+                response.headers[HttpHeaders.ContentType] shouldContain "text/markdown"
+                response.bodyAsText() shouldBe docSource
+            }
+        }
+    }
 
     test("enforced permalink auth defers registered and unregistered root lookup until after checkRead") {
         withApp(enforced = true, principal = Principal.Anonymous) { app, harness ->
