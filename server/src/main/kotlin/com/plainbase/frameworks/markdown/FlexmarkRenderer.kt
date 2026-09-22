@@ -19,8 +19,8 @@ import com.vladsch.flexmark.ast.LinkNodeBase
 import com.vladsch.flexmark.ast.LinkRef
 import com.vladsch.flexmark.ast.MailLink
 import com.vladsch.flexmark.ast.RefNode
-import com.vladsch.flexmark.ast.Reference
 import com.vladsch.flexmark.ext.gfm.strikethrough.StrikethroughExtension
+import com.vladsch.flexmark.ext.gfm.tasklist.TaskListExtension
 import com.vladsch.flexmark.ext.tables.TablesExtension
 import com.vladsch.flexmark.html.AttributeProvider
 import com.vladsch.flexmark.html.HtmlRenderer
@@ -74,7 +74,18 @@ class FlexmarkRenderer(private val index: PageIndexView) : MarkdownRenderer {
     // flexmark's own lenient notion to the slice — re-opening the disagreement the bridging closes.
     private val bodyOptions =
         MutableDataSet()
-            .set(Parser.EXTENSIONS, listOf(TablesExtension.create(), StrikethroughExtension.create()))
+            .set(
+                Parser.EXTENSIONS,
+                listOf(TablesExtension.create(), StrikethroughExtension.create(), TaskListExtension.create()),
+            )
+            .set(
+                TaskListExtension.ITEM_DONE_MARKER,
+                "<input type=\"checkbox\" class=\"task-list-item-checkbox\" checked=\"checked\" disabled=\"disabled\" aria-label=\"Completed task\" />",
+            )
+            .set(
+                TaskListExtension.ITEM_NOT_DONE_MARKER,
+                "<input type=\"checkbox\" class=\"task-list-item-checkbox\" disabled=\"disabled\" aria-label=\"Incomplete task\" />",
+            )
             // §C3 sanitization: escape all raw HTML to visible text; every emitted tag derives from the AST.
             .set(HtmlRenderer.ESCAPE_HTML, true)
             // Emit `id` on headings, sourced from our custom generator (the chunk-2 slugger), not flexmark's.
@@ -96,10 +107,11 @@ class FlexmarkRenderer(private val index: PageIndexView) : MarkdownRenderer {
         val bodyMarkdown = String(source, block.bodyStart, source.size - block.bodyStart, Charsets.UTF_8)
 
         val document = parser.parse(bodyMarkdown)
+        val callouts = CalloutAdapter.apply(document)
         val pass = ResolutionPass(sourcePath, resolver)
         pass.walk(document)
 
-        val html = htmlRenderer(pass).render(document)
+        val html = htmlRenderer(pass, callouts).render(document)
         // §B4 sections ride the SAME parse: the collector reuses the pass's allocated heading ids,
         // so a section's headingId is byte-identical to the anchor the HTML carries.
         val sections = SectionCollector(pass).collect(document)
@@ -107,10 +119,11 @@ class FlexmarkRenderer(private val index: PageIndexView) : MarkdownRenderer {
     }
 
     /** Builds a per-render [HtmlRenderer] bound to [pass]'s pre-computed ids and link outcomes. */
-    private fun htmlRenderer(pass: ResolutionPass): HtmlRenderer =
+    private fun htmlRenderer(pass: ResolutionPass, callouts: CalloutMetadata): HtmlRenderer =
         HtmlRenderer.builder(bodyOptions)
             .htmlIdGeneratorFactory(DelegatingIdGeneratorFactory(pass))
             .attributeProviderFactory(LinkRewriteAttributeProvider.Factory(pass))
+            .nodeRendererFactory(CalloutNodeRenderer.Factory(callouts))
             .build()
 }
 
@@ -126,7 +139,7 @@ class FlexmarkRenderer(private val index: PageIndexView) : MarkdownRenderer {
  * is cleared (§A2) that default is un-vetted (a `javascript:` autolink would render live). The §A2
  * allowlist must classify them all: core CommonMark angle-bracket autolinks ([AutoLink]) and mail
  * autolinks ([MailLink]), and reference-style links and images ([LinkRef]/[ImageRef], whose target
- * lives on the resolved [Reference], not the ref node).
+ * lives on the resolved reference, not the ref node).
  *
  * **Only DEFINED references are routed:** an UNdefined `[bracket]` ref (`[TODO]`, `[1]`, `[x]`) has no
  * matching `[x]: url` definition, so flexmark renders it as literal text — no `<a>`, no href, hence no
@@ -182,7 +195,7 @@ private class ResolutionPass(private val sourcePath: TreePath, private val resol
      *  - [MailLink] carries no url — flexmark synthesizes a `mailto:` href from the address text, so we
      *    do the same here. `mailto:` is allowlisted, so a real `<a@b.com>` stays a LIVE link (it must
      *    not be over-stripped); a `javascript:` autolink is classified `blocked_scheme` and goes inert.
-     *  - [RefNode] ([LinkRef]/[ImageRef]) holds only a label; the target is on the resolved [Reference]
+     *  - [RefNode] ([LinkRef]/[ImageRef]) holds only a label; the target is on the resolved reference
      *    definition. An undefined reference has no definition (and no live href) → empty → malformed.
      */
     private fun rawTarget(document: Document, node: Node): String =

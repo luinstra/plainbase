@@ -13,6 +13,7 @@ com.typesafe:config
 com.vladsch.flexmark:flexmark
 com.vladsch.flexmark:flexmark-ext-anchorlink
 com.vladsch.flexmark:flexmark-ext-gfm-strikethrough
+com.vladsch.flexmark:flexmark-ext-gfm-tasklist
 com.vladsch.flexmark:flexmark-ext-tables
 com.vladsch.flexmark:flexmark-ext-yaml-front-matter
 com.vladsch.flexmark:flexmark-util

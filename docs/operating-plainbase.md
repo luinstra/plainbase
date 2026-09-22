@@ -64,6 +64,35 @@ flowcharts and agent-flow diagrams; other diagram types do not share that edge l
 diagrams remain visible as source. Rendering runs in the browser, so complex diagrams can briefly
 delay interaction even within these limits.
 
+### Callouts and task lists
+
+Use one of the five fixed callout markers as the first line of a quoted block. The remaining lines are
+ordinary Markdown, so links, lists, headings, code, and nested callouts keep their normal behavior:
+
+~~~markdown
+> [!NOTE]
+> This is a visible note.
+>
+> - It can contain a list.
+
+- [ ] Open task
+  - [x] Nested completed task
+~~~
+
+Keep a quoted blank line (`>`) after the marker when a body line is `===` or `---`, so it remains body text instead of becoming a heading.
+
+`NOTE`, `TIP`, `IMPORTANT`, `WARNING`, and `CAUTION` are recognized in uppercase only. Task checkboxes
+are disabled display controls; edit `[ ]`, `[x]`, or `[X]` in the Markdown file to change a task. The
+same rendering is used in the editor preview. A `[!NOTE]` marker that is also a defined link-reference label,
+or a marker with same-line body text, stays an ordinary quote.
+
+To add a callout, open the page editor and use the `Callout type` chooser beside `Insert callout`. The
+chooser starts at `NOTE`; choosing a type does not insert anything until the action is clicked. With a
+selection, the command wraps every touched source line (not only the selected characters); with no selection,
+it inserts after the current nonblank line or at the current blank line. The generated `Callout text`
+placeholder is selected for replacement. The block remains ordinary Markdown: preview it, then choose
+`Save` explicitly to write it. Conflicts and other save failures keep the editor buffer for recovery.
+
 ## Search freshness: editing files outside Plainbase
 
 Plainbase watches **every root that is available at startup** (`CONTENT_DIR`, or each `roots.*.path`

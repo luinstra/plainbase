@@ -73,6 +73,7 @@ jgit = { module = "org.eclipse.jgit:org.eclipse.jgit", version.ref = "jgit" }
 flexmark = { module = "com.vladsch.flexmark:flexmark", version.ref = "flexmark" }
 flexmark-ext-gfm-tables = { module = "com.vladsch.flexmark:flexmark-ext-tables", version.ref = "flexmark" }
 flexmark-ext-gfm-strikethrough = { module = "com.vladsch.flexmark:flexmark-ext-gfm-strikethrough", version.ref = "flexmark" }
+flexmark-ext-gfm-tasklist = { module = "com.vladsch.flexmark:flexmark-ext-gfm-tasklist", version.ref = "flexmark" }
 flexmark-ext-yaml-front-matter = { module = "com.vladsch.flexmark:flexmark-ext-yaml-front-matter", version.ref = "flexmark" }
 flexmark-ext-anchorlink = { module = "com.vladsch.flexmark:flexmark-ext-anchorlink", version.ref = "flexmark" }
 
