@@ -2,8 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { treeQuery } from "../api/queries";
-import type { RootTree, TreeFolder, TreeNode, TreePage } from "../api/types";
+import type { RootTree, TreeDiagram, TreeFolder, TreeNode, TreePage } from "../api/types";
 import { readSidebarPreferences, writeSidebarPreferences } from "../lib/sidebarPreferences";
+import { parseDiagramPath } from "../lib/diagramPath";
 import {
   ancestorFolderPaths,
   entryFor,
@@ -262,21 +263,47 @@ function NodeRows({
         openFolders={openFolders}
         onToggleFolder={onToggleFolder}
       />
-    ) : (
+    ) : node.type === "page" ? (
       <PageItem key={node.id} page={node} root={root} currentPathname={currentPathname} />
+    ) : (
+      <DiagramItem key={`${root}:${node.path}`} diagram={node} root={root} currentPathname={currentPathname} />
     ),
   );
 }
 
 /**
- * Group folders before pages while retaining the server's wire order within each group. That order
+ * Group folders before leaves while retaining the server's wire order within each group. That order
  * already carries `_folder.yaml order:` when present and the server's title fallback otherwise.
  */
 function sidebarOrder(nodes: TreeNode[]): TreeNode[] {
   return [
     ...nodes.filter((node) => node.type === "folder"),
-    ...nodes.filter((node) => node.type === "page"),
+    ...nodes.filter((node) => node.type !== "folder"),
   ];
+}
+
+function DiagramItem({
+  diagram,
+  root,
+  currentPathname,
+}: {
+  diagram: TreeDiagram;
+  root: string;
+  currentPathname: string;
+}) {
+  const parsedDiagram = parseDiagramPath(currentPathname);
+  const active = parsedDiagram?.root === root && parsedDiagram.path === diagram.path;
+  return (
+    <li data-pb-nav-item="diagram">
+      <a
+        href={diagram.url}
+        aria-current={active ? "page" : undefined}
+        className={active ? "flex items-center rounded px-2 py-1 text-ink" : "flex items-center rounded px-2 py-1 text-ink hover:bg-hovered"}
+      >
+        <span className="min-w-0">{diagram.title}</span>
+      </a>
+    </li>
+  );
 }
 
 /**

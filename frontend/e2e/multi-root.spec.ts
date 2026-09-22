@@ -204,3 +204,14 @@ test("an ordinary root-qualified view of a duplicated id renders in BOTH roots",
   await expect(page.locator('[data-pb-breadcrumbs] a[href="/extra"]')).toHaveText("extra");
   await expect(page.locator("[data-pb-breadcrumbs] li").first()).toContainText("extra");
 });
+
+test("a same-path diagram keeps its selected root and source URL", async ({ page }) => {
+  await gotoExpectStatus(page, "/browse/docs/diagrams/shared.mmd");
+  await expect(page.locator("[data-pb-diagram] h1")).toHaveText("shared.mmd");
+  await expect(page.locator("[data-pb-diagram-source]")).toHaveAttribute("href", "/assets/docs/diagrams/shared.mmd");
+  await expect(page.locator("[data-pb-mermaid] svg")).toHaveCount(1);
+
+  await gotoExpectStatus(page, "/browse/extra/diagrams/shared.mmd");
+  await expect(page.locator("[data-pb-diagram-source]")).toHaveAttribute("href", "/assets/extra/diagrams/shared.mmd");
+  await expect(page.locator("[data-pb-mermaid] svg")).toHaveCount(1);
+});

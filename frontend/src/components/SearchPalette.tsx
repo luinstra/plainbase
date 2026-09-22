@@ -6,7 +6,7 @@ import { searchQuery, SEARCH_MAX_QUERY, treeQuery } from "../api/queries";
 import type { SearchHit } from "../api/types";
 import { fuzzyRank, type FuzzyCandidate } from "../lib/fuzzy";
 import { permalinkOf } from "../lib/permalink";
-import { pageHref, pages, type PageEntry } from "../lib/tree";
+import { diagrams, pageHref, pages, type QuickSwitchEntry } from "../lib/tree";
 import { useDebounced } from "../lib/useDebounced";
 import { LISTBOX_ID, optionId, SearchList } from "./SearchList";
 
@@ -117,14 +117,17 @@ function PaletteBody({
 
   // ---- Stage 1: quick-switcher (synchronous, zero network) ----
   const trimmed = rawQuery.trim();
-  const candidates = useMemo<FuzzyCandidate<PageEntry>[]>(() => {
+  const candidates = useMemo<FuzzyCandidate<QuickSwitchEntry>[]>(() => {
     if (!tree.data) return [];
     // The candidate carries its root: `page.path` is root-relative, so the scorer's `hint` (and the row
     // it renders) would otherwise be identical for the same file in two roots.
-    return pages(tree.data.roots).map((entry) => ({ node: entry, label: entry.page.title, hint: entry.page.path }));
+    return [...pages(tree.data.roots), ...diagrams(tree.data.roots)].map((entry) => {
+      const node = "page" in entry ? entry.page : entry.diagram;
+      return { node: entry, label: node.title, hint: node.path };
+    });
   }, [tree.data]);
 
-  const jumpPages = useMemo<PageEntry[]>(() => {
+  const jumpPages = useMemo<QuickSwitchEntry[]>(() => {
     if (!trimmed) return candidates.map((c) => c.node).slice(0, QUICK_SWITCH_MAX);
     return fuzzyRank(trimmed, candidates)
       .slice(0, QUICK_SWITCH_MAX)
@@ -168,9 +171,9 @@ function PaletteBody({
     document.getElementById(activeId)?.scrollIntoView({ block: "nearest" });
   }, [activeId]);
 
-  const navigateToPage = useCallback(
-    (entry: PageEntry) => {
-      router.history.push(pageHref(entry.root, entry.page));
+  const navigateToEntry = useCallback(
+    (entry: QuickSwitchEntry) => {
+      router.history.push("page" in entry ? pageHref(entry.root, entry.page) : entry.diagram.url);
       close();
     },
     [router, close],
@@ -198,12 +201,12 @@ function PaletteBody({
           activateBridge();
           return;
         }
-        navigateToPage(jumpPages[index]);
+        navigateToEntry(jumpPages[index]);
         return;
       }
       if (hits.length > 0 && index < hits.length) navigateToHit(hits[index]);
     },
-    [stage, bridgeIndex, jumpPages, hits, activateBridge, navigateToPage, navigateToHit],
+    [stage, bridgeIndex, jumpPages, hits, activateBridge, navigateToEntry, navigateToHit],
   );
 
   const returnToJump = useCallback(() => {

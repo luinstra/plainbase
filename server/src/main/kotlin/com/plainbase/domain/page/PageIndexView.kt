@@ -43,6 +43,9 @@ interface PageIndexView {
      */
     fun assetUrl(asset: TreePath): String
 
+    /** The URL for an ordinary link to an asset; images remain on the raw asset URL. */
+    fun assetDisplayUrl(asset: TreePath): String = assetUrl(asset)
+
     /**
      * Case-insensitive rescue candidates for [path] (§A2 step 6) — the set of indexed paths whose
      * value equals [path]'s value ignoring ASCII case. Used ONLY for broken-link classification

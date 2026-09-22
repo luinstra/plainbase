@@ -3,7 +3,7 @@ import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { sessionQuery, treeQuery } from "../api/queries";
-import type { RootTree, TreeFolder } from "../api/types";
+import type { RootTree, TreeFolder, TreeDiagram } from "../api/types";
 import { ROOT_UNAVAILABLE } from "../components/ErrorView";
 import { SidebarNav } from "../components/Sidebar";
 import { writeSidebarPreferences } from "../lib/sidebarPreferences";
@@ -177,6 +177,42 @@ describe("SidebarNav", () => {
     expect(active).toHaveLength(1);
     expect(active[0].getAttribute("href")).toBe("/docs/guides/deploy-guide");
     expect(active[0].className).not.toContain("bg-active"); // tint now comes from the .pb-* rule
+  });
+
+  it("matches an encoded diagram URL by parsed root and path", () => {
+    const diagram: TreeDiagram = {
+      type: "diagram",
+      title: "space name!'().mmd",
+      path: "diagrams/space name!'().mmd",
+      url: "/browse/docs/diagrams/space%20name%21%27%28%29.mmd",
+      source_url: "/assets/docs/diagrams/space%20name%21%27%28%29.mmd",
+    };
+    const diagramTree: TreeFolder = {
+      ...tree,
+      children: [
+        {
+          type: "folder",
+          name: "diagrams",
+          title: "Diagrams",
+          description: null,
+          path: "diagrams",
+          url: "/docs/diagrams",
+          page_count: 0,
+          children: [diagram],
+        },
+      ],
+    };
+    const { container } = render(
+      <SidebarNav
+        tree={diagramTree}
+        root="docs"
+        currentPathname="/browse/docs/diagrams/space name!'().mmd"
+      />,
+    );
+
+    expect(container.querySelector('[data-pb-folder-toggle]')?.getAttribute("aria-expanded")).toBe("true");
+    const link = container.querySelector(`a[href="${diagram.url}"]`);
+    expect(link?.getAttribute("aria-current")).toBe("page");
   });
 
   it("renders the caret as an empty host, with no text glyph", () => {

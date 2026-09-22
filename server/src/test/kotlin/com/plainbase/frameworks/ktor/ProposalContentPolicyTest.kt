@@ -292,6 +292,41 @@ class ProposalContentPolicyTest : FunSpec({
         }
     }
 
+    test("standalone Mermaid files are refused by both proposal and direct create guards") {
+        withTempTree(seed = {}) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val context = harness.testRouteContext(searchProvider = mockk(relaxed = true))
+                val path = TreePath.require("diagrams/flow.mmd")
+
+                context.proposals.propose(
+                    Principal.Anonymous,
+                    ProposeCommand.Create(
+                        root = RootName.PRIMARY,
+                        targetPath = path,
+                        proposedContent = "graph TD\n".encodeToByteArray(),
+                        rationale = "diagram",
+                        pageId = null,
+                    ),
+                ) shouldBe ProposeOutcome.InvalidRequest("standalone Mermaid diagram document writes are unsupported")
+
+                val pageId = harness.identityProvider.next()
+                context.mutate.create(
+                    Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.COMMIT).id),
+                    CreateIntent(
+                        pageId = pageId,
+                        root = RootName.PRIMARY,
+                        path = path,
+                        bytes = "graph TD\n".encodeToByteArray(),
+                    ),
+                ).shouldBeInstanceOf<CreateOutcome.DirectCreated>().outcome shouldBe
+                    WriteOutcome.InvalidLocation("standalone Mermaid diagram document writes are unsupported")
+                harness.proposalRepository.all().shouldBeEmpty()
+                Files.exists(root.resolve(path.value)) shouldBe false
+            }
+        }
+    }
+
     test("an edit proposal is hidden when its current durable binding moves outside scope") {
         withTempTree(seed = { root -> writePage(root, "visible/page.md", "# Page\n\nold\n") }) { root ->
             IndexHarness(root).use { harness ->

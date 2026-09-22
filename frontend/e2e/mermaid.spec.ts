@@ -213,3 +213,45 @@ test("does not request Mermaid chunks for ordinary page prose", async ({ page })
   );
   expect(mermaidRequests).toEqual([]);
 });
+
+test("renders a standalone mmd source through the shell and guarded asset URL", async ({ page, request }) => {
+  await gotoExpectStatus(page, "/browse/docs/diagrams/standalone.mmd");
+  await expect(page.locator("[data-pb-diagram]")).toBeVisible();
+  await expect(page.locator("[data-pb-diagram] h1")).toHaveText("standalone.mmd");
+  await expect(page.locator("[data-pb-mermaid] svg")).toHaveCount(1);
+  await expect(page.locator("pre")).toBeHidden();
+
+  const sourceLink = page.locator("[data-pb-diagram-source]");
+  await expect(sourceLink).toHaveAttribute("href", "/assets/docs/diagrams/standalone.mmd");
+  const source = await request.get("/assets/docs/diagrams/standalone.mmd");
+  expect(source.status()).toBe(200);
+  expect(source.headers()["content-type"]).toContain("application/octet-stream");
+  expect(await source.text()).toBe("flowchart LR\n  A[Standalone] --> B[Mermaid]\n");
+
+  await gotoExpectStatus(page, "/browse/docs/diagrams/missing.mmd");
+  await expect(page.locator("[data-pb-not-found]")).toBeVisible();
+});
+
+test("preserves BOM and CRLF source bytes while rendering encoded paths", async ({ page, request }) => {
+  await gotoExpectStatus(page, "/browse/docs/diagrams/bom-crlf.mmd");
+  await expect(page.locator("[data-pb-diagram] h1")).toHaveText("bom-crlf.mmd");
+  await expect(page.locator("[data-pb-mermaid] svg")).toHaveCount(1);
+  const body = await (await request.get("/assets/docs/diagrams/bom-crlf.mmd")).body();
+  expect([...body.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+  expect(body.toString("utf8")).toContain("\r\n");
+
+  await gotoExpectStatus(page, "/browse/docs/diagrams/space%20name!'().mmd");
+  await expect(page.locator("[data-pb-diagram] h1")).toHaveText("space name!'().mmd");
+  await expect(page.locator("[data-pb-diagram-source]")).toHaveAttribute(
+    "href",
+    "/assets/docs/diagrams/space%20name%21%27%28%29.mmd",
+  );
+});
+
+test("keeps hostile invalid standalone source readable without inserting it as markup", async ({ page }) => {
+  await gotoExpectStatus(page, "/browse/docs/diagrams/fallback.mmd");
+  await expect(page.locator("[data-pb-mermaid] svg")).toHaveCount(0);
+  await expect(page.locator("[data-pb-diagram] pre")).toBeVisible();
+  await expect(page.locator("[data-pb-diagram] code")).toContainText("<script>alert('xss')</script>");
+  await expect(page.locator("[data-pb-diagram] script")).toHaveCount(0);
+});

@@ -56,6 +56,17 @@ export async function getJson<T>(url: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/** Reads a guarded raw source response without changing its bytes or caching it between visits. */
+export async function getText(url: string, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { accept: "application/octet-stream" },
+    signal,
+  });
+  if (!response.ok) throw await apiError(response);
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(await response.arrayBuffer());
+}
+
 /**
  * Safely parses a JSON body, returning `null` on a thrown/invalid body (e.g. a proxy's HTML error page).
  * Parses a `clone()` so the ORIGINAL body stream stays unconsumed — a caller that falls back to

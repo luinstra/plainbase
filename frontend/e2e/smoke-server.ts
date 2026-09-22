@@ -94,6 +94,15 @@ export async function startSmokeServer(
     const extraDir = path.join(runRoot, "extra");
     mkdirSync(dataDir, { recursive: true });
     cpSync(path.join(repoRoot, "fixtures", "demo-docs"), contentDir, { recursive: true });
+    mkdirSync(path.join(contentDir, "diagrams"), { recursive: true });
+    writeFileSync(path.join(contentDir, "diagrams", "standalone.mmd"), "flowchart LR\n  A[Standalone] --> B[Mermaid]\n");
+    writeFileSync(
+      path.join(contentDir, "diagrams", "bom-crlf.mmd"),
+      Buffer.from([0xef, 0xbb, 0xbf, ...Buffer.from("flowchart LR\r\n  A[BOM] --> B[CRLF]\r\n", "utf8")]),
+    );
+    writeFileSync(path.join(contentDir, "diagrams", "space name!'().mmd"), "flowchart LR\n  A[Encoded] --> B[Name]\n");
+    writeFileSync(path.join(contentDir, "diagrams", "fallback.mmd"), "not a diagram <script>alert('xss')</script>\r\n");
+    writeFileSync(path.join(contentDir, "diagrams", "shared.mmd"), "flowchart LR\n  A[Docs] --> B[Root]\n");
 
     const permalinkFixture = path.join(frontendDir, "e2e", "fixtures", "permalink");
     cpSync(permalinkFixture, path.join(contentDir, "permalink"), { recursive: true });
@@ -101,6 +110,8 @@ export async function startSmokeServer(
       if (scenario.roots === "multi") {
         cpSync(path.join(repoRoot, "fixtures", "demo-docs", "guides"), path.join(extraDir, "guides"), { recursive: true });
         cpSync(permalinkFixture, path.join(extraDir, "permalink"), { recursive: true });
+        mkdirSync(path.join(extraDir, "diagrams"), { recursive: true });
+        writeFileSync(path.join(extraDir, "diagrams", "shared.mmd"), "flowchart LR\n  A[Extra] --> B[Root]\n");
       }
       writeFileSync(
         path.join(dataDir, "plainbase.conf"),

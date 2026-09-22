@@ -1,4 +1,5 @@
-import type { RootTree, TreeFolder, TreeNode, TreePage } from "../api/types";
+import type { RootTree, TreeDiagram, TreeFolder, TreeNode, TreePage } from "../api/types";
+import { parseDiagramPath } from "./diagramPath";
 import { parsePermalink, permalinkOf, permalinkSplat } from "./permalink";
 
 /**
@@ -33,11 +34,17 @@ export function pageHref(root: string, page: TreePage): string {
  */
 export function ancestorFolderPaths(tree: TreeFolder, root: string, pathname: string): string[] {
   const ancestors: string[] = [];
+  const parsedDiagram = parseDiagramPath(pathname);
+  const activeDiagramPath = parsedDiagram?.root === root ? parsedDiagram.path : null;
 
   function containsActivePath(folder: TreeFolder): boolean {
     for (const child of folder.children) {
       if (child.type === "page") {
         if (pageHref(root, child) === pathname) return true;
+        continue;
+      }
+      if (child.type === "diagram") {
+        if (child.path === activeDiagramPath) return true;
         continue;
       }
       if (child.url === pathname) return true;
@@ -129,12 +136,30 @@ export interface PageEntry {
   page: TreePage;
 }
 
+export interface DiagramEntry {
+  root: string;
+  diagram: TreeDiagram;
+}
+
+export type QuickSwitchEntry = PageEntry | DiagramEntry;
+
 /** Every page across all entries, in wire (D7) order - the quick-switcher's candidate set. */
 export function pages(roots: RootTree[]): PageEntry[] {
   const result: PageEntry[] = [];
   for (const entry of roots) {
     for (const node of walk(entry.tree.children)) {
       if (node.type === "page") result.push({ root: entry.root, page: node });
+    }
+  }
+  return result;
+}
+
+/** Every standalone diagram across all roots, retaining the root for same-path isolation. */
+export function diagrams(roots: RootTree[]): DiagramEntry[] {
+  const result: DiagramEntry[] = [];
+  for (const entry of roots) {
+    for (const node of walk(entry.tree.children)) {
+      if (node.type === "diagram") result.push({ root: entry.root, diagram: node });
     }
   }
   return result;
@@ -212,6 +237,8 @@ export function rootOfUrl(roots: RootTree[], pathname: string): string | null {
  * Filtering would instead hand back "no root", which every caller reads as the primary root.
  */
 export function rootOfLocation(roots: RootTree[], pathname: string): string | null {
+  const diagram = parseDiagramPath(pathname);
+  if (diagram) return diagram.root;
   const splat = permalinkSplat(pathname);
   return splat === null ? rootOfUrl(roots, pathname) : parsePermalink(splat).root;
 }

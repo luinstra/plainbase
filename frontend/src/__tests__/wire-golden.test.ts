@@ -93,6 +93,13 @@ const treeResponse: TreeResponse = {
                 status: "published",
                 updated: "2026-06-01",
               },
+              {
+                type: "diagram",
+                title: "flow.mmd",
+                path: "guides/flow.mmd",
+                url: "/browse/docs/guides/flow.mmd",
+                source_url: "/assets/docs/guides/flow.mmd",
+              },
             ],
           },
           { type: "folder", name: "attic", title: null, description: null, path: "attic", url: null, page_count: 0, children: [] },

@@ -1,6 +1,7 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentFolder
+import com.plainbase.domain.content.DiagramAsset
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.IndexedPage
@@ -50,6 +51,13 @@ sealed interface TreeNode {
         /** The editorial frontmatter `updated` date, validated `YYYY-MM-DD` (else null); NOT Git last-modified. */
         val updated: String?,
     ) : TreeNode
+
+    data class Diagram(
+        val title: String,
+        val path: TreePath,
+        val url: String,
+        val sourceUrl: String,
+    ) : TreeNode
 }
 
 /**
@@ -59,7 +67,7 @@ sealed interface TreeNode {
  *    independent, no ICU). Pages have no order key.
  *  - `index.md` is an ordinary child page (no folder-attachment special case in Phase 1).
  *  - all pages appear regardless of `status` (`active` default — filtering arrives with auth);
- *  - folders with no pages anywhere beneath are omitted.
+ *  - folders with no pages or browser-addressable diagrams anywhere beneath are omitted.
  *
  * Pure and deterministic over the snapshot; chunk 6 memoizes the tree JSON per snapshot (§C4).
  */
@@ -70,9 +78,10 @@ object TreeBuilder {
         // tree); the per-root wire entry wrapping is TreeJsonCache's (C3).
         val section = index.section(root)
         val pagesByParent = section.pages.groupBy { it.path.parent }
+        val diagramsByParent = section.assets.filter(DiagramAsset::isBrowserAddressable).groupBy { it.parent }
         val foldersByParent = section.folders.groupBy { it.path.parent }
         val folderUrls = CanonicalUrlBuilder.folderUrlPaths(section.folders)
-        val children = childrenOf(root, null, pagesByParent, foldersByParent, folderUrls, folderLabels)
+        val children = childrenOf(root, null, pagesByParent, diagramsByParent, foldersByParent, folderUrls, folderLabels)
         return TreeNode.Folder(
             name = "",
             title = null,
@@ -89,13 +98,14 @@ object TreeBuilder {
         root: RootName,
         dir: TreePath?,
         pagesByParent: Map<TreePath?, List<IndexedPage>>,
+        diagramsByParent: Map<TreePath?, List<TreePath>>,
         foldersByParent: Map<TreePath?, List<ContentFolder>>,
         folderUrls: Map<TreePath, TreePath?>,
         folderLabels: Map<String, String>,
     ): List<TreeNode> {
         val folders = foldersByParent[dir].orEmpty().mapNotNull { folder ->
-            val children = childrenOf(root, folder.path, pagesByParent, foldersByParent, folderUrls, folderLabels)
-            if (children.isEmpty()) return@mapNotNull null // no pages anywhere beneath -> omitted
+            val children = childrenOf(root, folder.path, pagesByParent, diagramsByParent, foldersByParent, folderUrls, folderLabels)
+            if (children.isEmpty()) return@mapNotNull null // no navigable content anywhere beneath -> omitted
             val configuredTitle = folderLabels[folder.path.value]
             Sortable(
                 order = folder.meta?.order,
@@ -126,7 +136,19 @@ object TreeBuilder {
                 ),
             )
         }
-        return (folders + pages).sortedWith(ORDERING).map { it.node }
+        val diagrams = diagramsByParent[dir].orEmpty().map { path ->
+            Sortable(
+                order = null,
+                sortTitle = path.name,
+                node = TreeNode.Diagram(
+                    title = path.name,
+                    path = path,
+                    url = DiagramAsset.browserUrl(root, path),
+                    sourceUrl = DiagramAsset.sourceUrl(root, path),
+                ),
+            )
+        }
+        return (folders + pages + diagrams).sortedWith(ORDERING).map { it.node }
     }
 
     /** Fixed-width `YYYY-MM-DD` shape gate — pins the contract width before [LocalDate.parse] (which on

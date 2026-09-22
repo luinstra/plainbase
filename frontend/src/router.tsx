@@ -15,6 +15,7 @@ import { ErrorView } from "./components/ErrorView";
 import { History } from "./components/History";
 import { NotFoundView } from "./components/NotFound";
 import { DocsPage, FolderLanding, PermalinkPage } from "./components/PageView";
+import { DiagramView } from "./components/DiagramView";
 import { ReviewDetail } from "./components/ReviewDetail";
 import { ReviewQueue } from "./components/ReviewQueue";
 import { Shell } from "./components/Shell";
@@ -69,6 +70,12 @@ const splatRoute = createRoute({
     const mode = search.mode;
     return mode === "edit" || mode === "history" ? { mode } : {};
   },
+});
+
+const browseRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/browse/$",
+  component: DiagramView,
 });
 
 /**
@@ -178,6 +185,7 @@ function PermalinkSplat() {
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  browseRoute,
   splatRoute,
   newRoute,
   adminRoute,

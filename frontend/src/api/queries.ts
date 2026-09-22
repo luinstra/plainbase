@@ -1,5 +1,5 @@
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
-import { getJson, pageEndpoint, previewRaw } from "./client";
+import { getJson, getText, pageEndpoint, previewRaw } from "./client";
 import type {
   ChangeDetail,
   DiffResponse,
@@ -20,8 +20,29 @@ import type {
  * semantics stay server-owned.
  */
 export function encodeTreePath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
+  return path.split("/").map(encodePathSegment).join("/");
 }
+
+/** Matches the server's RFC-3986 segment encoder rather than encodeURIComponent's five extra safe characters. */
+export function encodePathSegment(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+export function diagramBrowseUrl(root: string, path: string): string {
+  return `/browse/${encodePathSegment(root)}/${encodeTreePath(path)}`;
+}
+
+export function diagramSourceUrl(root: string, path: string): string {
+  return `/assets/${encodePathSegment(root)}/${encodeTreePath(path)}`;
+}
+
+export const diagramSourceQuery = (root: string, path: string) =>
+  queryOptions({
+    queryKey: ["diagram", root, path],
+    queryFn: ({ signal }: { signal: AbortSignal }) => getText(diagramSourceUrl(root, path), signal),
+    staleTime: 0,
+    refetchOnMount: "always" as const,
+  });
 
 export const treeQuery = queryOptions({
   queryKey: ["tree"],

@@ -326,6 +326,86 @@ describe("folder landing views (ADR-0003)", () => {
     expect(undated.querySelector(".pdate")).toBeNull();
   });
 
+  it("counts nested diagrams alongside direct Markdown pages in folder cards", async () => {
+    stubNotFound();
+    const diagram = {
+      type: "diagram" as const,
+      title: "flow.mmd",
+      path: "guides/advanced/flow.mmd",
+      url: "/browse/docs/guides/advanced/flow.mmd",
+      source_url: "/assets/docs/guides/advanced/flow.mmd",
+    };
+    const nestedDiagram = {
+      type: "diagram" as const,
+      title: "nested.mmd",
+      path: "guides/advanced/nested/nested.mmd",
+      url: "/browse/docs/guides/advanced/nested/nested.mmd",
+      source_url: "/assets/docs/guides/advanced/nested/nested.mmd",
+    };
+    const listingTree = tree([
+      {
+        type: "folder",
+        name: "advanced",
+        title: "Advanced",
+        description: null,
+        path: "guides/advanced",
+        url: "/docs/guides/advanced",
+        page_count: 1,
+        children: [
+          pageNode(PAGE_ID, "guides/advanced/notes.md", "Notes", "/docs/guides/advanced/notes"),
+          diagram,
+          {
+            type: "folder",
+            name: "nested",
+            title: null,
+            description: null,
+            path: "guides/advanced/nested",
+            url: "/docs/guides/advanced/nested",
+            page_count: 0,
+            children: [nestedDiagram],
+          },
+        ],
+      },
+    ]);
+    const { view } = renderAt("/docs/guides", listingTree);
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    const card = view.container.querySelector('[data-pb-folder-child="folder"]')!;
+    expect(card.querySelector(".fc")?.textContent).toContain("1 page · 2 diagrams");
+  });
+
+  it("keeps a nested-folder page out of the parent folder's direct page count", async () => {
+    stubNotFound();
+    const listingTree = tree([
+      {
+        type: "folder",
+        name: "advanced",
+        title: "Advanced",
+        description: null,
+        path: "guides/advanced",
+        url: "/docs/guides/advanced",
+        page_count: 0,
+        children: [
+          {
+            type: "folder",
+            name: "nested",
+            title: null,
+            description: null,
+            path: "guides/advanced/nested",
+            url: "/docs/guides/advanced/nested",
+            page_count: 1,
+            children: [pageNode(PAGE_ID, "guides/advanced/nested/notes.md", "Notes", "/docs/guides/advanced/nested/notes")],
+          },
+        ],
+      },
+    ]);
+    const { view } = renderAt("/docs/guides", listingTree);
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    const card = view.container.querySelector('[data-pb-folder-child="folder"]')!;
+    expect(card.querySelector(".fc")?.textContent).toContain("guides/advanced/ · 0 pages");
+  });
+
   it("an UNAVAILABLE root's folder URL renders the outage state, never an empty listing (D5)", async () => {
     stubNotFound();
     // What the server actually sends for a root that is not serving: `available: false` and an EMPTY subtree (it

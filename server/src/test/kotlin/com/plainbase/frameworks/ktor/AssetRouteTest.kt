@@ -14,6 +14,7 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -40,6 +41,30 @@ class AssetRouteTest : FunSpec({
             val response = client.get("/assets/docs/infra/assets/diagram.svg")
             response.status shouldBe HttpStatusCode.OK
             response.contentType()?.withoutParameters() shouldBe ContentType.Image.SVG
+        }
+    }
+
+    test("a lowercase mmd asset returns exact source bytes as an octet stream") {
+        withTempTree(seed = { root ->
+            writePage(root, "doc.md", "# Doc\n")
+            Files.createDirectories(root.resolve("diagrams"))
+            val source = byteArrayOf(
+                0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte(),
+                'g'.code.toByte(), 'r'.code.toByte(), 'a'.code.toByte(), 'p'.code.toByte(), 'h'.code.toByte(),
+                '\r'.code.toByte(), '\n'.code.toByte(),
+            )
+            Files.write(root.resolve("diagrams/flow.mmd"), source)
+        }) { root ->
+            restTest(root) {
+                val response = client.get("/assets/docs/diagrams/flow.mmd")
+                response.status shouldBe HttpStatusCode.OK
+                response.contentType()?.withoutParameters() shouldBe ContentType.Application.OctetStream
+                response.headers["X-Content-Type-Options"] shouldBe "nosniff"
+                response.bodyAsBytes() shouldBe byteArrayOf(
+                    0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte(), 'g'.code.toByte(), 'r'.code.toByte(), 'a'.code.toByte(),
+                    'p'.code.toByte(), 'h'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(),
+                )
+            }
         }
     }
 

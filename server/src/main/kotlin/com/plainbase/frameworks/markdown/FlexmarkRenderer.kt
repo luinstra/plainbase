@@ -182,7 +182,8 @@ private class ResolutionPass(private val sourcePath: TreePath, private val resol
 
     private fun visitLink(document: Document, node: Node) {
         val target = rawTarget(document, node)
-        val outcome = resolver.resolve(sourcePath, target)
+        val context = if (node is Image || node is ImageRef) LinkResolver.LinkContext.IMAGE else LinkResolver.LinkContext.ORDINARY
+        val outcome = resolver.resolve(sourcePath, target, context)
         outcomeByNode[node] = outcome
         // The raw target and the link's text content travel with the outcome so the chunk-8 link
         // checker can report WHAT broke without ever re-resolving (PageLink doc).

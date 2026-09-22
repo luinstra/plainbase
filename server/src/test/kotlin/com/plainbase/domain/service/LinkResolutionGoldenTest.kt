@@ -43,6 +43,28 @@ class LinkResolutionGoldenTest : FunSpec({
             assertOutcome(outcome, expectedOutcome, expectedUrlOrHint)
         }
     }
+
+    test("ordinary mmd links browse while image mmd links fetch guarded source bytes") {
+        withTempTree({ root ->
+            writePage(root, "page.md", "# Page\n")
+            writePage(root, "diagrams/flow.mmd", "graph TD\n")
+        }) { root ->
+            val resolver = LinkResolver(FixtureIndexStub(root))
+            val source = TreePath.require("page.md")
+            resolver.resolve(source, "diagrams/flow.mmd").let { outcome ->
+                outcome shouldBe LinkOutcome.Resolved.Asset(
+                    TreePath.require("diagrams/flow.mmd"),
+                    "/browse/docs/diagrams/flow.mmd",
+                )
+            }
+            resolver.resolve(source, "diagrams/flow.mmd", LinkResolver.LinkContext.IMAGE).let { outcome ->
+                outcome shouldBe LinkOutcome.Resolved.Asset(
+                    TreePath.require("diagrams/flow.mmd"),
+                    "/assets/docs/diagrams/flow.mmd",
+                )
+            }
+        }
+    }
 })
 
 private fun assertOutcome(outcome: LinkOutcome, expectedClass: String, expectedUrlOrHint: String) {

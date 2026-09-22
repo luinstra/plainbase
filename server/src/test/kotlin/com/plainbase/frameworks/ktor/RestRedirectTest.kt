@@ -8,13 +8,20 @@ import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
 import io.ktor.client.request.post
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.URLDecodeException
 import io.ktor.server.testing.testApplication
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
 
 /**
@@ -169,6 +176,57 @@ class RestRedirectTest : FunSpec({
 
             client.get("/browse/docs/no/such/file.md").status shouldBe HttpStatusCode.NotFound
             client.get("/browse/%2e%2e/escape.md").status shouldBe HttpStatusCode.BadRequest
+        }
+    }
+
+    test("a valid rooted mmd address returns the shell while source bytes stay on the guarded asset route") {
+        withTempTree(seed = { root ->
+            writePage(root, "doc.md", "# Doc\n")
+            Files.createDirectories(root.resolve("diagrams"))
+            Files.writeString(root.resolve("diagrams/flow.mmd"), "graph TD\r\n  A --> B\r\n")
+        }) { root ->
+            restTest(root) {
+                val shell = client.get("/browse/docs/diagrams/flow.mmd")
+                shell.status shouldBe HttpStatusCode.OK
+                shell.bodyAsText() shouldBe client.get("/docs").bodyAsText()
+
+                // The shell intentionally does not probe membership: a valid address remains navigable even when
+                // the file is missing. The guarded source request owns the honest 404/401/503 answer.
+                client.get("/browse/docs/no/such.mmd").status shouldBe HttpStatusCode.OK
+                client.get("/assets/docs/diagrams/flow.mmd").bodyAsText() shouldBe "graph TD\r\n  A --> B\r\n"
+                client.get("/browse/unknown/diagrams/flow.mmd").status shouldBe HttpStatusCode.NotFound
+                client.get("/browse/docs/a%2Fb.mmd").status shouldBe HttpStatusCode.NotFound
+            }
+        }
+    }
+
+    test("the diagram browser arm follows the shared decode-once path corpus") {
+        val cases = Json.parseToJsonElement(
+            checkNotNull(RestRedirectTest::class.java.getResource("/diagram-paths.json")) {
+                "diagram path fixture not found"
+            }.readText(),
+        ).jsonArray
+        withTempTree(seed = { root -> writePage(root, "doc.md", "# Doc\n") }) { root ->
+            restTest(root) {
+                val client = restClient()
+                cases.forEach { entry ->
+                    val json = entry.jsonObject
+                    val raw = json.getValue("raw").jsonPrimitive.content
+                    val valid = json.getValue("valid").jsonPrimitive.content.toBoolean()
+                    val knownRoot = json["root"]?.jsonPrimitive?.content == "docs"
+                    if (raw == "docs/flow%ZZ.mmd") {
+                        shouldThrow<URLDecodeException> { client.get("/browse/$raw") }
+                        return@forEach
+                    }
+                    val response = client.get("/browse/$raw")
+                    val expected = when {
+                        valid && knownRoot -> HttpStatusCode.OK
+                        raw == "docs" || raw == "docs/" -> HttpStatusCode.BadRequest
+                        else -> HttpStatusCode.NotFound
+                    }
+                    response.status shouldBe expected
+                }
+            }
         }
     }
 })

@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.ContentPathPolicy
+import com.plainbase.domain.content.DiagramAsset
 import com.plainbase.domain.content.allowsFile
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.ProposalId
@@ -159,6 +160,9 @@ class GuardedProposalFacade(
         // `invalid_root`), so the gate always sees a real root - no unrooted arm.
         val grant = policy.checkCreate(principal, WriteClass.PageCreate, RootedResource(command.root, ProposalCommandResource.PROPOSE))
         requireAvailable(command.root)
+        if (DiagramAsset.isStandalone(command.targetPath)) {
+            return ProposeOutcome.InvalidRequest(STANDALONE_DIAGRAM_MESSAGE)
+        }
         if (!allowsTarget(RootedPath(command.root, command.targetPath))) {
             return ProposeOutcome.InvalidRequest("target_path is excluded by the root content policy.")
         }
@@ -334,6 +338,8 @@ class GuardedProposalFacade(
     private fun allowsProposal(row: ProposalGuard): Boolean = resolver.proposalEligible(row)
 
     private companion object {
+        const val STANDALONE_DIAGRAM_MESSAGE = "standalone Mermaid diagram document writes are unsupported"
+
         /** The single surgical frontmatter patcher (the `GuardedMutatingFacade` idiom) — splices ONLY the `id:` line. */
         val PATCHER = FrontmatterPatcher()
     }
