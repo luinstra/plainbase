@@ -8,17 +8,21 @@ and error handling retain intentional transport differences. Agents *propose*; h
 
 ## 1. Mint an agent token
 
-Tokens are minted with the admin CLI (stop the server first - the command needs the `DATA_DIR` lock, or run it
-against a separate `DATA_DIR`). Choose a mode:
+Tokens are minted with the admin CLI against the target service's configured `DATA_DIR`. Stop the server first because
+the command needs that `DATA_DIR` lock, then restart the same service afterward; do not use a separate `DATA_DIR`, which
+would mint tokens for a different service database. Choose a mode:
 
 - `read-only` - search + read only (no proposals).
 - `propose` - read **and** open change proposals for human review (the usual agent mode).
-- `commit` - direct-commits a REST write (`PUT /api/v1/pages/{id}` edit or `POST /api/v1/pages` create) whose
-  page falls INSIDE `auth.agentDirectCommit.globs`, and otherwise DEGRADES to a proposal (HTTP `202`,
+- `commit` - With default configuration, eligible agent writes become proposals. Per-root direct-commit globs can permit
+  eligible REST writes (`PUT /api/v1/pages/{id}` edit or `POST /api/v1/pages` create) to direct-commit only when the
+  target root and path fall INSIDE the configured [per-root direct-commit globs](configuration.md#per-root-agent-direct-commit-globs),
+  and otherwise DEGRADES to a proposal (HTTP `202`,
   `{degraded, proposal_id, status, unified_diff}`) - so a commit agent is a propose agent everywhere outside its
-  allowed globs. MCP has no write tool, so MCP is propose-only
-  regardless of mode. The globs are set with `auth.agentDirectCommit.globs` (or
-  `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS`); the default `[]` means EVERY agent write is a proposal.
+  allowed globs. MCP has no write tool, so MCP is propose-only regardless of mode. The `globs` key and
+  `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS` are **docs-root only**; grant an extra root only with
+  `auth.agentDirectCommit.roots.<name>`. An empty docs list denies docs-root direct commits but does not deny
+  independently granted extra-root globs.
 
 ```console
 $ plainbase admin mint-token my-agent propose
@@ -106,11 +110,12 @@ operation, or `CreatePageRequest.root` over REST. Omitting it is a 400 `invalid_
 permission to write into `docs`.
 
 A root can be unavailable or read-only, and a page id can be held by more than one root - the server tells you
-which with a code, not a guess. Five wire shapes to recognize:
+which with a code, not a guess. Six wire shapes to recognize:
 
 | code | status | what it means | what you must do |
 |---|---|---|---|
-| `root_unavailable` | **503** + `Retry-After: 300` | The root's disk is unmounted, missing at boot, or its watcher died. **The page is NOT gone.** Nothing was written. | **Keep your citations.** Retry after an operator restores the root and restarts the server - the `Retry-After` (seconds) is how long to wait before trying again. |
+| `root_unavailable` | **503** + `Retry-After: 300` | The root's availability is unresolved: its disk may be unmounted, missing at boot, or its watcher may have died. Nothing was written. | **Keep your citations and provenance.** Honor `Retry-After`; retry after an operator restores the root and restarts the server. Do not infer physical existence or deletion. |
+| `absence_unverified` | **503** + `Retry-After: 30` | The page is still bound, but its content absence has not been proven. Nothing was written. | **Keep your citations and provenance.** Retry shortly and honor `Retry-After`; observations or an absence proof may converge. |
 | `server_shutting_down` | **503** | The server is draining and this request was rejected before business work began. | Keep your citations and retry once an available server returns. There is no `Retry-After` promise; an admitted write follows the shutdown drain instead. |
 | `root_not_editable` | **403** | The root is declared `editable = false`. Page writes are refused there in **every** auth mode - this is topology, not a permission you might be granted. | Do not retry. Do not propose a write into this root; read-only means read-only for every agent, always. |
 | `invalid_root` | **400** | The named root is not a legal slug, or names no root the server has configured. | Fix the name - check the `root` a `search`/`read_page` hit actually carries, or what `GET /healthz` lists. |
@@ -120,18 +125,13 @@ The id-addressed **read** tools - `read_page`, `get_page_metadata` and `validate
 `root` pin, which is what makes the `ambiguous_page_id` remedy above actually available on a read. Omit it and the
 server resolves the owning root from the id; name it and you get that root's page or nothing.
 
-**The distinction that matters most is `root_unavailable` (503) versus a plain `404 page_not_found` -
-and it is deliberate, not incidental:**
-
-- **An UNPINNED `404` still means exactly what it always meant: the page is gone.** Drop your citations to it.
-- **A `404` on a request that NAMED a root means only "not in THAT root".** The page may be alive in another one -
-  a pinned read asks a narrower question and gets a narrower answer. Before you drop a citation, retry without the
-  `root` pin (or against another candidate root); only an unpinned 404 is evidence the page is gone.
-- **`503 root_unavailable` means the opposite: the page still exists.** A disk is unmounted, not a page
-  deleted, and the content is coming back once an operator restores it. **An agent that treats a 503
-  as a 404 destroys citations for a page that is still there** - that is the one failure this section
-  exists to prevent, because from the wire alone the two look like "I couldn't get the page" unless you
-  know to look at the status code and the error code together.
+A `404 page_not_found` means only that the page is unavailable in the requested visible scope. A
+root pin narrows that scope, and hidden or excluded content can also be 404 even when a physical file
+remains. Do not infer physical deletion or erase historical citations/provenance from this response;
+mark the source unverified and reconcile against a known root as appropriate. A `503 root_unavailable`
+or `503 absence_unverified` means availability is unresolved, not proven existence or deletion:
+**KEEP citations and provenance**, honor `Retry-After`, and retry after recovery or convergence.
+For a pinned `404 page_not_found`, retry without the root pin or with another known root before treating the page as absent.
 
 Nothing is ever written on a `root_unavailable` or `root_not_editable` response, so retrying a read is
 always safe; retrying a write into either is not going to change the outcome until an operator acts.
@@ -149,5 +149,7 @@ over MCP you propose instead.
 
 For the REST document URL matrix, opt-in Markdown representation, source-byte semantics, and the JSON `ETag` write
 base-hash rule, see the [HTTP API reference](http-api.md). MCP's `read_page` remains the structured JSON read contract.
+
+For a direct curl + jq REST workflow without an MCP client, see [Use Plainbase from an HTTP agent](http-agent-workflow.md).
 
 See the [transport differences table](backend-architecture.md#rest-and-mcp-ownership) for the intentional error distinctions.

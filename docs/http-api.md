@@ -2,6 +2,8 @@
 
 This is the concise reference for Plainbase's document-read HTTP surface.
 
+For a runnable search → JSON read → proposal workflow without an MCP client, see [Use Plainbase from an HTTP agent](http-agent-workflow.md).
+
 ## Document reads
 
 The full indexed document can be read through either representation:
