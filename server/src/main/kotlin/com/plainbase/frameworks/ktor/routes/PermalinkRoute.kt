@@ -53,7 +53,7 @@ import io.ktor.server.routing.get
 fun Route.permalinkRoute(ctx: RouteContext) {
     get("/${ServerTopLevel.PERMALINK}/{segments...}") {
         call.appendAcceptVary()
-        val representation = call.selectPageRepresentation(PageDefaultRepresentation.HTML)
+        val representation = call.selectPageRepresentation(PageRepresentation.HTML)
         if (representation == PageRepresentation.MARKDOWN) call.markdownCacheHeaders()
         call.handlePermalinkDispatch(ctx, representation)
     }

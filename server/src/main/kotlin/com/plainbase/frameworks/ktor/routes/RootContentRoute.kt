@@ -23,7 +23,7 @@ import io.ktor.server.routing.get
 fun Route.rootContentRoutes(ctx: RouteContext) {
     val handler: suspend RoutingContext.() -> Unit = handler@{
         call.appendAcceptVary()
-        val representation = call.selectPageRepresentation(PageDefaultRepresentation.HTML)
+        val representation = call.selectPageRepresentation(PageRepresentation.HTML)
         val rawTail = call.rawPathAfter("/")
         val hasDocumentTail = rawTail?.let { tail ->
             tail.removeSuffix("/").contains('/') || tail.contains("%2f", ignoreCase = true)

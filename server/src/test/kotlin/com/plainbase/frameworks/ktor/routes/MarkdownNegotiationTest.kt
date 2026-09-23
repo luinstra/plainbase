@@ -127,8 +127,8 @@ class MarkdownNegotiationTest : FunSpec({
         ),
     ).forEach { case ->
         test("should resolve ${case.name}") {
-            selectPageRepresentation(case.headers, PageDefaultRepresentation.JSON) shouldBe case.json
-            selectPageRepresentation(case.headers, PageDefaultRepresentation.HTML) shouldBe case.html
+            selectPageRepresentation(case.headers, PageRepresentation.JSON) shouldBe case.json
+            selectPageRepresentation(case.headers, PageRepresentation.HTML) shouldBe case.html
         }
     }
 })

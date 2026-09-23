@@ -8,16 +8,14 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
 
-/** The representation historically emitted by an affected route. */
-internal enum class PageDefaultRepresentation {
-    JSON,
-    HTML,
-}
-
-internal enum class PageRepresentation {
-    JSON,
-    HTML,
-    MARKDOWN,
+internal enum class PageRepresentation(
+    val type: String,
+    val subtype: String,
+    val parameters: Map<String, String>,
+) {
+    JSON("application", "json", emptyMap()),
+    HTML("text", "html", mapOf("charset" to "utf-8")),
+    MARKDOWN("text", "markdown", mapOf("charset" to "utf-8")),
 }
 
 /** Adds the protocol variance marker before the route performs principal extraction. */
@@ -26,12 +24,12 @@ internal fun ApplicationCall.appendAcceptVary() {
 }
 
 /** Selects Markdown only when its explicit offer beats the route's historical representation. */
-internal fun ApplicationCall.selectPageRepresentation(default: PageDefaultRepresentation): PageRepresentation =
+internal fun ApplicationCall.selectPageRepresentation(default: PageRepresentation): PageRepresentation =
     selectPageRepresentation(request.headers.getAll(HttpHeaders.Accept).orEmpty(), default)
 
 internal fun selectPageRepresentation(
     acceptHeaders: List<String>,
-    default: PageDefaultRepresentation,
+    default: PageRepresentation,
 ): PageRepresentation {
     val ranges = acceptHeaders.flatMap { header ->
         runCatching { parseHeaderValue(header) }.getOrDefault(emptyList())
@@ -40,12 +38,12 @@ internal fun selectPageRepresentation(
     // A wildcard may describe the default offer, but it is never an opt-in Markdown request.
     val markdownQuality = bestQuality(
         ranges.filter { it.type == "text" && it.subtype == "markdown" },
-        OfferedMediaType.MARKDOWN,
+        PageRepresentation.MARKDOWN,
     )
-    if (markdownQuality == null || markdownQuality <= 0.0) return default.representation()
+    if (markdownQuality == null || markdownQuality <= 0.0) return default
 
-    val defaultQuality = bestQuality(ranges, default.offeredMedia)
-    return if (markdownQuality > (defaultQuality ?: 0.0)) PageRepresentation.MARKDOWN else default.representation()
+    val defaultQuality = bestQuality(ranges, default)
+    return if (markdownQuality > (defaultQuality ?: 0.0)) PageRepresentation.MARKDOWN else default
 }
 
 /** Selected Markdown is deliberately uncacheable until a representation-specific validator exists. */
@@ -60,22 +58,7 @@ internal suspend fun ApplicationCall.respondMarkdown(markdown: String) {
     respondBytes(markdown.toByteArray(Charsets.UTF_8), MARKDOWN_CONTENT_TYPE)
 }
 
-private fun PageDefaultRepresentation.representation(): PageRepresentation = when (this) {
-    PageDefaultRepresentation.JSON -> PageRepresentation.JSON
-    PageDefaultRepresentation.HTML -> PageRepresentation.HTML
-}
-
 private val MARKDOWN_CONTENT_TYPE = io.ktor.http.ContentType("text", "markdown").withCharset(Charsets.UTF_8)
-
-private enum class OfferedMediaType(
-    val type: String,
-    val subtype: String,
-    val parameters: Map<String, String>,
-) {
-    MARKDOWN("text", "markdown", mapOf("charset" to "utf-8")),
-    JSON("application", "json", emptyMap()),
-    HTML("text", "html", mapOf("charset" to "utf-8")),
-}
 
 private data class AcceptRange(
     val type: String,
@@ -120,14 +103,14 @@ private fun String.parseQuality(): Double? {
     return toDoubleOrNull()
 }
 
-private fun bestQuality(ranges: List<AcceptRange>, offered: OfferedMediaType): Double? =
+private fun bestQuality(ranges: List<AcceptRange>, offered: PageRepresentation): Double? =
     ranges.asSequence()
         .filter { it.matches(offered) }
         .sortedWith(compareByDescending<AcceptRange> { it.specificity() }.thenBy { it.order })
         .firstOrNull()
         ?.quality
 
-private fun AcceptRange.matches(offered: OfferedMediaType): Boolean {
+private fun AcceptRange.matches(offered: PageRepresentation): Boolean {
     val typeMatches = type == "*" || type == offered.type
     val subtypeMatches = subtype == "*" || subtype == offered.subtype
     if (!typeMatches || !subtypeMatches) return false
@@ -139,9 +122,3 @@ private fun AcceptRange.specificity(): Int = when {
     subtype == "*" -> 1
     else -> 2 + parameters.size
 }
-
-private val PageDefaultRepresentation.offeredMedia: OfferedMediaType
-    get() = when (this) {
-        PageDefaultRepresentation.JSON -> OfferedMediaType.JSON
-        PageDefaultRepresentation.HTML -> OfferedMediaType.HTML
-    }

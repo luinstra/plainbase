@@ -51,7 +51,7 @@ private fun Route.byPathRoute(ctx: RouteContext) {
     // The constant `by-path` segment outranks the `{id}` parameter in Ktor's resolution.
     get("/by-path/{path...}") {
         call.appendAcceptVary()
-        val representation = call.selectPageRepresentation(PageDefaultRepresentation.JSON)
+        val representation = call.selectPageRepresentation(PageRepresentation.JSON)
         if (representation == PageRepresentation.MARKDOWN) call.markdownCacheHeaders()
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
@@ -86,7 +86,7 @@ private fun Route.byPathRoute(ctx: RouteContext) {
 private fun Route.pageByIdRoute(ctx: RouteContext) {
     get("/{id}") {
         call.appendAcceptVary()
-        val representation = call.selectPageRepresentation(PageDefaultRepresentation.JSON)
+        val representation = call.selectPageRepresentation(PageRepresentation.JSON)
         if (representation == PageRepresentation.MARKDOWN) call.markdownCacheHeaders()
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
