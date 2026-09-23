@@ -7,8 +7,11 @@ import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -63,6 +66,14 @@ class RootedPermalinkMatrixTest : FunSpec({
                 withClue("PRESENT: bare /p/{id} -> 302") {
                     c.get("/p/$presentId").status shouldBe HttpStatusCode.Found
                 }
+                listOf("/p/$presentId", "/p/docs/$presentId").forEach { path ->
+                    c.get(path) { header(HttpHeaders.Accept, "text/markdown") }.status shouldBe HttpStatusCode.Found
+                }
+                listOf("/p/$presentId", "/p/docs/$presentId?mode=read").forEach { path ->
+                    val followed = client.get(path) { header(HttpHeaders.Accept, "text/markdown") }
+                    followed.status shouldBe HttpStatusCode.OK
+                    followed.bodyAsText() shouldContain "# A"
+                }
                 withClue("DETACHED root pin: /p/ghost/{id} -> 404 (unregistered, AFTER checkRead)") {
                     c.get("/p/ghost/$presentId").status shouldBe HttpStatusCode.NotFound
                 }
@@ -77,6 +88,12 @@ class RootedPermalinkMatrixTest : FunSpec({
                 withClue("RETIRED under REGISTERED main: /p/docs/{id} -> 410, and bare /p/{id} -> 410") {
                     c.get("/p/docs/${retiredMainId.value}").status shouldBe HttpStatusCode.Gone
                     c.get("/p/${retiredMainId.value}").status shouldBe HttpStatusCode.Gone
+                    c.get("/p/docs/${retiredMainId.value}") {
+                        header(HttpHeaders.Accept, "text/markdown")
+                    }.status shouldBe HttpStatusCode.Gone
+                    c.get("/p/${retiredMainId.value}") {
+                        header(HttpHeaders.Accept, "text/markdown")
+                    }.status shouldBe HttpStatusCode.Gone
                 }
                 withClue("CLASS-A flip: a sole tombstone under a DETACHED root -> bare /p/{id} is 404, NEVER 410") {
                     c.get("/p/${retiredDetachedId.value}").status shouldBe HttpStatusCode.NotFound

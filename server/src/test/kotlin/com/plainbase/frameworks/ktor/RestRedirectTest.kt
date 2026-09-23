@@ -11,7 +11,9 @@ import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
@@ -94,6 +96,15 @@ class RestRedirectTest : FunSpec({
                 val edit = client.get("/docs/old/loser?mode=edit")
                 edit.status shouldBe HttpStatusCode.MovedPermanently
                 edit.headers[HttpHeaders.Location] shouldBe "/p/docs/${loser.id.value}?mode=edit"
+
+                listOf("/p/${loser.id.value}", "/p/docs/${loser.id.value}").forEach { path ->
+                    val markdown = client.get(path) { header(HttpHeaders.Accept, "text/markdown") }
+                    markdown.status shouldBe HttpStatusCode.OK
+                    markdown.bodyAsText() shouldContain "# Loser"
+                }
+                val html = client.get("/p/${loser.id.value}")
+                html.status shouldBe HttpStatusCode.OK
+                html.bodyAsText() shouldContain "<div id=\"root\">"
             }
         }
     }

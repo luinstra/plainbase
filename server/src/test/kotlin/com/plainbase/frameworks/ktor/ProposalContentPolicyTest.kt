@@ -44,8 +44,11 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.testApplication
 import io.mockk.mockk
@@ -83,6 +86,18 @@ class ProposalContentPolicyTest : FunSpec({
                             "/assets/docs/private/diagram.bin",
                         )) {
                             client.get(path).status shouldBe HttpStatusCode.NotFound
+                        }
+                        for (path in listOf(
+                            "/api/v1/pages/${page.id.value}",
+                            "/api/v1/pages/${page.id.value}?root=docs",
+                            "/api/v1/pages/by-path/docs/private/page",
+                            "/docs/private/page",
+                            "/p/${page.id.value}",
+                            "/p/docs/${page.id.value}",
+                        )) {
+                            val response = client.get(path) { header(HttpHeaders.Accept, "text/markdown") }
+                            response.status shouldBe HttpStatusCode.NotFound
+                            response.headers[HttpHeaders.CacheControl] shouldContain "no-store"
                         }
                     }
                 }

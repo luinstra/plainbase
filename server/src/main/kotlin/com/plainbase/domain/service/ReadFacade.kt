@@ -172,13 +172,13 @@ interface ReadFacade {
     fun permalinkAt(principal: Principal, root: RootName, id: PageId): PermalinkResolution
 }
 
-/** The outcome of [ReadFacade.permalink] — the route maps these to 302 / SPA shell / 410 / 404. */
+/** The outcome of [ReadFacade.permalink]; the route maps each domain state to its protocol response. */
 sealed interface PermalinkResolution {
 
     /** The page's current canonical URL — a 302 (never a 301: the target moves with the page). */
     data class Found(val url: String) : PermalinkResolution
 
-    /** A path-space collision loser: no canonical URL exists, so the permalink itself IS its human URL (the shell). */
+    /** A path-space collision loser: no canonical URL exists, so the permalink itself is its durable human URL. */
     data object LoserNoUrl : PermalinkResolution
 
     /**

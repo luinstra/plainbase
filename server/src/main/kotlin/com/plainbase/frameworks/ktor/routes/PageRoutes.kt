@@ -31,6 +31,8 @@ import io.ktor.server.routing.route
  * shape-invalid → 400 `invalid_page_id`; shape-valid-but-unknown (ANY version — opaque identity,
  * owner ruling) → 404 `page_not_found`.
  *
+ * Full-page reads may opt into indexed full-source Markdown; the default JSON shape and validators remain unchanged.
+ *
  * A3: each handler is `read`-gated — it extracts the [com.plainbase.domain.principal.Principal] via the A1 seam
  * and reads through the guarded [com.plainbase.domain.service.ReadFacade]; [guarded] maps a denied read to
  * 401/403 BEFORE the page lookup (no existence leak).
@@ -48,6 +50,9 @@ fun Route.pageRoutes(ctx: RouteContext) {
 private fun Route.byPathRoute(ctx: RouteContext) {
     // The constant `by-path` segment outranks the `{id}` parameter in Ktor's resolution.
     get("/by-path/{path...}") {
+        call.appendAcceptVary()
+        val representation = call.selectPageRepresentation(PageRepresentation.JSON)
+        if (representation == PageRepresentation.MARKDOWN) call.markdownCacheHeaders()
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
             val raw = call.rawPathAfter("/${ServerTopLevel.API}/v1/pages/by-path/")
@@ -67,24 +72,35 @@ private fun Route.byPathRoute(ctx: RouteContext) {
                     ErrorCodes.PAGE_NOT_FOUND,
                     "No page at path ${decoded.value}",
                 )
-            val dto = payload.toDto()
-            call.setContentHashETag(dto.contentHash)
-            call.respondRest(PageResponse.serializer(), dto)
+            if (representation == PageRepresentation.MARKDOWN) {
+                call.respondMarkdown(payload.page.markdown)
+            } else {
+                val dto = payload.toDto()
+                call.setContentHashETag(dto.contentHash)
+                call.respondRest(PageResponse.serializer(), dto)
+            }
         }
     }
 }
 
 private fun Route.pageByIdRoute(ctx: RouteContext) {
     get("/{id}") {
+        call.appendAcceptVary()
+        val representation = call.selectPageRepresentation(PageRepresentation.JSON)
+        if (representation == PageRepresentation.MARKDOWN) call.markdownCacheHeaders()
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
             val id = call.pageId() ?: return@guarded
             val pin = call.pinnedRootOrRefuse() ?: return@guarded
             val payload = ctx.read.pageById(principal, id, pin.root)
                 ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-            val dto = payload.toDto()
-            call.setContentHashETag(dto.contentHash)
-            call.respondRest(PageResponse.serializer(), dto)
+            if (representation == PageRepresentation.MARKDOWN) {
+                call.respondMarkdown(payload.page.markdown)
+            } else {
+                val dto = payload.toDto()
+                call.setContentHashETag(dto.contentHash)
+                call.respondRest(PageResponse.serializer(), dto)
+            }
         }
     }
 }

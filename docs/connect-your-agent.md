@@ -147,4 +147,7 @@ can drive with the same `pb_` bearer. The reverse is not total: a few write path
 `PUT /api/v1/pages/{id}` direct commit for an in-glob COMMIT token, and direct page creation), with no MCP tool -
 over MCP you propose instead.
 
+For the REST document URL matrix, opt-in Markdown representation, source-byte semantics, and the JSON `ETag` write
+base-hash rule, see the [HTTP API reference](http-api.md). MCP's `read_page` remains the structured JSON read contract.
+
 See the [transport differences table](backend-architecture.md#rest-and-mcp-ownership) for the intentional error distinctions.

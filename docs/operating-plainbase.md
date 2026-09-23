@@ -310,8 +310,8 @@ misconfigure in a proxy or health check:
 
 | surface | request shape | answer |
 |---|---|---|
-| Browser content | `/{unknown-root}` or `/{unknown-root}/{path}` | 404 with the SPA shell body. An unknown first segment is not a path in `docs`. |
-| Browser content | `/{root}` or `/{root}/{path}` for a registered root | 200 with the SPA shell, except a live alias redirects 301 within that root. |
+| Browser content (HTML/default) | `/{unknown-root}` or `/{unknown-root}/{path}` | 404 with the SPA shell body. An unknown first segment is not a path in `docs`; opted-in Markdown answers JSON 404 without a content lookup (see [HTTP API reference](http-api.md)). |
+| Browser content (HTML/default) | `/{root}` or `/{root}/{path}` for a registered root | 200 with the SPA shell, except a live alias redirects 301 within that root. Opted-in Markdown reads guarded source directly, aliases answer 200, and auth/lookup/outage failures answer structured JSON, including 503 (see [HTTP API reference](http-api.md)). |
 | Asset files | `/assets` | 400 `invalid_path`, because an asset path is required. `/assets/{unknown-root}/...` and `/assets/{registered-root}` answer 404; a registered root plus a path is required, such as `/assets/docs/infra/assets/diagram.svg`. |
 | Embedded bundle | `/assets/index-<hash>.js` or the corresponding CSS path | 200 from the embedded bundle before the root split and before the content-asset read gate. The bundle check is root-blind. |
 | Markdown file-path lookup | `/browse/{root}/{path}.md` | 400 `invalid_path` for a missing or bare root, 404 for an unknown root or missing page, and 302 to the current Markdown page URL for a readable registered-root path. The redirect is read-gated. |

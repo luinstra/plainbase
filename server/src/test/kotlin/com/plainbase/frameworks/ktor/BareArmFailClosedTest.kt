@@ -57,10 +57,12 @@ class BareArmFailClosedTest : FunSpec({
             registeredTombstone(harness, "docs", "guides/gone.md", id)
 
             withClue("purely-retired resolves None; the permalink splits it to 410 naming the last-known path") {
-                val res = noRedirect.get("/p/$x")
-                res.status shouldBe HttpStatusCode.Gone
-                res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
-                res.bodyText() shouldContain "guides/gone.md"
+                listOf(null, "text/markdown").forEach { accept ->
+                    val res = noRedirect.get("/p/$x") { accept?.let { header(HttpHeaders.Accept, it) } }
+                    res.status shouldBe HttpStatusCode.Gone
+                    res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
+                    res.bodyText() shouldContain "guides/gone.md"
+                }
             }
             withClue("the bare REST read of a purely-retired id is a plain 404 - None returns null, never Ambiguous") {
                 val res = client.get("/api/v1/pages/$x")
@@ -82,11 +84,13 @@ class BareArmFailClosedTest : FunSpec({
             registeredTombstone(harness, "docs", "m/gone.md", id)
             registeredTombstone(harness, "notes", "n/gone.md", id)
 
-            val res = noRedirect.get("/p/$x")
-            res.status shouldBe HttpStatusCode.MultipleChoices
-            res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
-            res.candidateRoots() shouldContainExactly listOf("notes", "docs") // D7 registry rank, NOT lexical
-            res.candidateUrls() shouldContainExactly listOf("/p/notes/$x", "/p/docs/$x")
+            listOf(null, "text/markdown").forEach { accept ->
+                val res = noRedirect.get("/p/$x") { accept?.let { header(HttpHeaders.Accept, it) } }
+                res.status shouldBe HttpStatusCode.MultipleChoices
+                res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
+                res.candidateRoots() shouldContainExactly listOf("notes", "docs") // D7 registry rank, NOT lexical
+                res.candidateUrls() shouldContainExactly listOf("/p/notes/$x", "/p/docs/$x")
+            }
         }
     }
 
@@ -97,19 +101,28 @@ class BareArmFailClosedTest : FunSpec({
             registeredTombstone(harness, "docs", "m/gone.md", id)
 
             withClue("R20 - bare /p is 300 (both candidates, D7 rank), STATUS-NEUTRAL mixed message, NO 410 claim, no-store") {
-                val res = noRedirect.get("/p/$x")
-                res.status shouldBe HttpStatusCode.MultipleChoices
-                res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
-                res.candidateRoots() shouldContainExactly listOf("notes", "docs")
-                val message = res.errorMessage()
-                message shouldContain "some candidate roots have retired this id"
-                message shouldNotContain "410" // status-neutral: the permalink 300 makes no cross-surface status claim
+                listOf(null, "text/markdown").forEach { accept ->
+                    val res = noRedirect.get("/p/$x") { accept?.let { header(HttpHeaders.Accept, it) } }
+                    res.status shouldBe HttpStatusCode.MultipleChoices
+                    res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
+                    res.candidateRoots() shouldContainExactly listOf("notes", "docs")
+                    val message = res.errorMessage()
+                    message shouldContain "some candidate roots have retired this id"
+                    message shouldNotContain "410" // status-neutral: the permalink 300 makes no cross-surface status claim
+                }
             }
             withClue("R21 - bare REST id read is 409 ambiguous_page_id, never notes' document bytes") {
-                val res = client.get("/api/v1/pages/$x")
-                res.status shouldBe HttpStatusCode.Conflict
-                res.errorCode() shouldBe "ambiguous_page_id"
-                res.candidateRoots() shouldContainExactly listOf("notes", "docs")
+                listOf(null, "text/markdown").forEach { accept ->
+                    val res = client.get("/api/v1/pages/$x") { accept?.let { header(HttpHeaders.Accept, it) } }
+                    res.status shouldBe HttpStatusCode.Conflict
+                    res.errorCode() shouldBe "ambiguous_page_id"
+                    res.candidateRoots() shouldContainExactly listOf("notes", "docs")
+                }
+                val pinned = client.get("/api/v1/pages/$x?root=notes") {
+                    header(HttpHeaders.Accept, "text/markdown")
+                }
+                pinned.status shouldBe HttpStatusCode.OK
+                pinned.bodyText() shouldContain "# Live"
             }
             withClue("R22 - a bare WRITE is 409 ambiguous_page_id; the SAME PUT pinned to notes still resolves its root") {
                 val bare = client.put("/api/v1/pages/$x") {
