@@ -36,6 +36,7 @@ val kotlinFormattingSources =
 
 tasks.register<LintTask>("lintKotlin") {
     group = "verification"
+    dependsOn(":server:detekt")
     source(kotlinFormattingSources)
     reports.set(mapOf("plain" to layout.buildDirectory.file("reports/kotlinter/lint.txt").get().asFile))
 }
