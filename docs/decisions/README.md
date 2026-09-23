@@ -20,3 +20,4 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 | [0010](0010-object-storage-backend.md) | Object-storage backend: an S3-compatible bucket as the content authority | Accepted |
 | [0011](0011-multi-root-document-directories.md) | Multi-root document directories: composite (root, path) keys, reserved root names, per-root editability/history | Accepted, superseded in part by 0012 (page identity) and the in-place URL-grammar notes |
 | [0012](0012-per-root-page-identity.md) | Per-root page identity: `(RootName, PageId)`, rooted permalinks, no cross-root contest | Accepted |
+| [0013](0013-discussions-are-files-in-a-per-root-collection.md) | Discussions are Markdown files in a per-root collection, anchored by quote, never written into pages | Accepted |
