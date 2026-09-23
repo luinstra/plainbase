@@ -260,8 +260,9 @@ A configured root that is missing at boot, or whose directory vanishes while the
 
 | answer | what it means to an agent |
 |---|---|
-| `404 page_not_found` | the page is GONE. Drop your citations to it. |
-| `503 root_unavailable` (+ `Retry-After`) | a disk is unmounted. The page still exists. **KEEP your citations** and retry after the operator has restored the root. |
+| `404 page_not_found` | the page is unavailable in the requested visible scope. A root pin narrows that scope; this does not prove physical deletion. Keep citations/provenance until the source state is verified. |
+| `503 root_unavailable` (+ `Retry-After: 300`) | the root's availability is unresolved. **KEEP citations and provenance**, honor the delay, and retry after the operator restores the root and restarts the server. |
+| `503 absence_unverified` (+ `Retry-After: 30`) | the root is healthy but the page's absence is not yet proven. **KEEP citations and provenance**, honor the delay, and retry as observations converge; do not restart the root. |
 
 Nothing is ever written when root rejection happens before the operation is entered, so retrying that response is safe.
 Shutdown admission is a separate 503, `server_shutting_down`; see the [agent error table](connect-your-agent.md#4-roots-what-a-page-lives-under-and-what-its-errors-mean).

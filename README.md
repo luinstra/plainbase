@@ -96,6 +96,8 @@ Markdown, proposals come back as unified diffs in the human review queue,
 and revocation takes effect mid-session. The full worked session, token
 modes (`read-only` / `propose` / `commit`), and reverse-proxy notes:
 [Connect your agent (MCP)](docs/connect-your-agent.md).
+For a direct REST workflow that does not require an MCP client, see [Use
+Plainbase from an HTTP agent](docs/http-agent-workflow.md).
 
 ## Configuration
 
@@ -134,6 +136,8 @@ not routed through the logger.
   as the authority: setup, IAM, migration, platform support.
 - [Connect your agent (MCP)](docs/connect-your-agent.md) - mint a token, point an MCP client at the
   server, a worked search → read → propose session.
+- [HTTP agent workflow](docs/http-agent-workflow.md) - direct curl + jq search, read, propose, track,
+  and optional guarded PUT examples without an MCP client.
 - [HTTP API reference](docs/http-api.md) - document read URLs, Markdown negotiation, caching, and write hashes.
 - [Design summary](docs/DESIGN_SUMMARY.md) - architecture & product framing.
 - [Backend architecture map](docs/backend-architecture.md) - current authority, transport and release behavior.
