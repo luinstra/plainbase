@@ -226,6 +226,9 @@ private class PublicationGraph(root: Path) : AutoCloseable {
                     renderCalls += 1
                     return delegate.render(sourcePath, source)
                 }
+
+                override fun renderFragment(sourcePath: TreePath, markdown: String): String =
+                    delegate.renderFragment(sourcePath, markdown)
             }
         }
         builder = IndexBuilder(

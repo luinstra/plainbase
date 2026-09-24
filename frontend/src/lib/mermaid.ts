@@ -182,6 +182,8 @@ function renderBlock(
       diagram.tabIndex = 0;
       diagram.dataset.pbMermaid = "true";
       diagram.dataset.pbMermaidTheme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+      const sourceRange = pre.getAttribute("data-pb-src");
+      if (sourceRange !== null) diagram.setAttribute("data-pb-src", sourceRange);
       diagram.innerHTML = svg;
       diagram.setAttribute("role", "group");
       diagram.setAttribute("aria-label", diagram.querySelector("svg > title")?.textContent?.trim() || "Mermaid diagram");

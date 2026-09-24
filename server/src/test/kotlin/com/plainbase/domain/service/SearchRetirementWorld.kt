@@ -365,6 +365,9 @@ internal class SearchRetirementWorld : AutoCloseable {
                             }
                             return delegate.render(sourcePath, source)
                         }
+
+                        override fun renderFragment(sourcePath: TreePath, markdown: String): String =
+                            delegate.renderFragment(sourcePath, markdown)
                     }
                 },
                 identity = PageIdentityService(TestIdProvider()),

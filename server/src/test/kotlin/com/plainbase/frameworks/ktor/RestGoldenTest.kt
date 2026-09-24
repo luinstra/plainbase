@@ -117,6 +117,7 @@ class RestGoldenTest : FunSpec({
             html shouldContain "id=\"prerequisites\""
             html shouldContain "href=\"/docs/infra/kubernetes\"" // §A2: hrefs are root-qualified path URLs (C3)
             html shouldContain "src=\"/assets/docs/infra/assets/diagram.svg\""
+            html shouldMatch Regex("(?s).*data-pb-src=\"[0-9]+-[0-9]+\".*")
 
             val normalized = JsonObject(body + ("html" to JsonPrimitive("{{html}}")))
             normalized shouldBe RestGolden.load("page-html-deploy-guide.json", mapOf("content_hash" to deployGuideHash))

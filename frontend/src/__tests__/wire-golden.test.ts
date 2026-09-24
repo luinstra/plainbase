@@ -142,7 +142,7 @@ const pageHtmlResponse: PageHtmlResponse = {
   slug: "shadowed",
   url: null,
   title: "Shadowed",
-  html: '<h1 id="shadowed">Shadowed</h1>',
+  html: '<h1 id="shadowed" data-pb-src="0-10">Shadowed</h1>',
   // Top-level commit null (the off-Git branch) for the null-coverage policy; the citation keeps a
   // non-null commit — the only entry pinning CitationDto.commit's populated form.
   content_hash: HASH_B,
@@ -264,7 +264,7 @@ const createdButUnindexedResponse: CreatedResponse = {
 };
 
 const previewResponse: PreviewResponse = {
-  html: '<h1 id="deploy-guide">Deploy Guide</h1>',
+  html: '<h1 id="deploy-guide" data-pb-src="0-14">Deploy Guide</h1>',
   headings: [{ id: "deploy-guide", level: 1, text: "Deploy Guide" }],
 };
 

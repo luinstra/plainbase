@@ -74,7 +74,9 @@ internal object CalloutAdapter {
 }
 
 /** Renders recognized callouts and delegates ordinary blockquotes to Flexmark's core renderer. */
-internal class CalloutNodeRenderer(private val metadata: CalloutMetadata) : NodeRenderer {
+internal class CalloutNodeRenderer(
+    private val metadata: CalloutMetadata,
+) : NodeRenderer {
     override fun getNodeRenderingHandlers(): Set<NodeRenderingHandler<*>> =
         setOf(NodeRenderingHandler(BlockQuote::class.java, this::render))
 
@@ -89,12 +91,19 @@ internal class CalloutNodeRenderer(private val metadata: CalloutMetadata) : Node
             .attr("data-pb-callout", type.wireValue)
             .attr("role", "note")
             .tag("div")
-        html.withAttr().attr("class", "pb-callout-title").tagLine("p", { html.text(type.title) })
+        html.line()
+        // This fixed title is generated, not source text, so its tag deliberately bypasses withAttr().
+        html.raw("<p class=\"pb-callout-title\">")
+        html.text(type.title)
+        html.raw("</p>").line()
         context.renderChildren(node)
+        html.line()
         html.closeTag("div")
     }
 
-    class Factory(private val metadata: CalloutMetadata) : DelegatingNodeRendererFactory {
+    class Factory(
+        private val metadata: CalloutMetadata,
+    ) : DelegatingNodeRendererFactory {
         override fun apply(options: DataHolder): NodeRenderer = CalloutNodeRenderer(metadata)
 
         override fun getDelegates(): Set<Class<*>> = setOf(CoreNodeRenderer.Factory::class.java)

@@ -6,7 +6,8 @@ package com.plainbase.domain.page
  * [com.plainbase.domain.render.RenderedPage.headings] list.
  *
  * This is the per-heading element of the PB-REST-1 `headings` payload (§A4 `/html` shape) — the
- * Phase 5 `heading_not_found` recovery list and the SPA's TOC. Pure domain code.
+ * Phase 5 `heading_not_found` recovery list and the SPA's TOC. The byte positions are internal
+ * renderer metadata and are not fields of `HeadingDto`. Pure domain code.
  */
 data class Heading(
     /** The page-unique anchor id (PB-SLUG-1 steps 1–7, allocated in document order). */
@@ -15,4 +16,8 @@ data class Heading(
     val level: Int,
     /** The §A1 text content the slugger received (markup stripped, code/alt/link text kept). */
     val text: String,
+    /** The heading's absolute start byte in the original UTF-8 page, when its body is valid UTF-8. */
+    val byteStart: Int? = null,
+    /** The heading's absolute exclusive end byte in the original UTF-8 page, when available. */
+    val byteEnd: Int? = null,
 )
