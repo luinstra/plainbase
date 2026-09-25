@@ -4407,7 +4407,8 @@ private class LocalValueOrderFixture {
 
 private val EXPECTED_SERVICE_PATHS = setOf(
     "AbsenceClassifier.kt", "AdminFacade.kt", "AdoptionPass.kt", "AgentDirectCommitDecision.kt", "ApiTokenService.kt",
-    "ApplyDisposition.kt", "BindingVisibility.kt", "CanonicalUrlBuilder.kt", "CitationFactory.kt", "FrontmatterPatcher.kt",
+    "ApplyDisposition.kt", "BindingVisibility.kt", "CanonicalUrlBuilder.kt", "CitationFactory.kt", "DiscussionIdProvider.kt",
+    "FrontmatterPatcher.kt",
     "IdProvider.kt", "IdResolution.kt", "IndexBuilder.kt", "IndexIdentityAssignments.kt", "IndexInputs.kt",
     "IndexSnapshotAssembler.kt", "IndexSourceReader.kt",
     "LinkChecker.kt",
@@ -4415,7 +4416,8 @@ private val EXPECTED_SERVICE_PATHS = setOf(
     "PageService.kt", "PolicyService.kt", "ProposalAuthorLabeler.kt", "ProposalBaseReader.kt", "ProposalFacade.kt",
     "ProposalIdProvider.kt", "ProposalService.kt", "ReadFacade.kt", "RebuildScheduler.kt", "RootLossClassifier.kt",
     "SearchIndexer.kt", "SearchService.kt", "SectionSplitter.kt", "SessionService.kt", "SetupService.kt", "TreeBuilder.kt",
-    "UnifiedDiff.kt", "UrlAliasRegistry.kt", "UuidV7IdProvider.kt", "UuidV7ProposalIdProvider.kt", "WriteClass.kt",
+    "UnifiedDiff.kt", "UrlAliasRegistry.kt", "UuidV7DiscussionIdProvider.kt", "UuidV7IdProvider.kt",
+    "UuidV7ProposalIdProvider.kt", "WriteClass.kt",
     "WritePipeline.kt",
 )
 
@@ -4494,6 +4496,7 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "CanonicalUrlBuilder.kt|CanonicalUrlBuilder.PageInput", "CanonicalUrlBuilder.kt|CanonicalUrlBuilder.Assignment",
     "CanonicalUrlBuilder.kt|CanonicalUrlBuilder.Result", "CanonicalUrlBuilder.kt|CanonicalUrlBuilder.Sibling",
     "CanonicalUrlBuilder.kt|CanonicalUrlBuilder.Collision", "CitationFactory.kt|CitationFactory",
+    "DiscussionIdProvider.kt|DiscussionIdProvider",
     "FrontmatterPatcher.kt|FrontmatterPatcher", "FrontmatterPatcher.kt|FrontmatterPatcher.RefusalReason",
     "FrontmatterPatcher.kt|FrontmatterPatcher.PatchResult", "FrontmatterPatcher.kt|FrontmatterPatcher.PatchResult.Patched",
     "FrontmatterPatcher.kt|FrontmatterPatcher.PatchResult.AlreadyPresent", "FrontmatterPatcher.kt|FrontmatterPatcher.PatchResult.Refused",
@@ -4567,7 +4570,8 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "TreeBuilder.kt|TreeNode.Folder", "TreeBuilder.kt|TreeNode.Page", "TreeBuilder.kt|TreeNode.Diagram",
     "TreeBuilder.kt|TreeBuilder", "TreeBuilder.kt|TreeBuilder.Sortable",
     "UnifiedDiff.kt|Edit", "UnifiedDiff.kt|Edit.Keep", "UnifiedDiff.kt|Edit.Delete", "UnifiedDiff.kt|Edit.Insert", "UnifiedDiff.kt|Hunk",
-    "UnifiedDiff.kt|Lines", "UrlAliasRegistry.kt|UrlAliasRegistry", "UuidV7IdProvider.kt|UuidV7IdProvider",
+    "UnifiedDiff.kt|Lines", "UrlAliasRegistry.kt|UrlAliasRegistry",
+    "UuidV7DiscussionIdProvider.kt|UuidV7DiscussionIdProvider", "UuidV7IdProvider.kt|UuidV7IdProvider",
     "UuidV7ProposalIdProvider.kt|UuidV7ProposalIdProvider",
     "WriteClass.kt|WriteClass", "WriteClass.kt|WriteClass.PageEdit", "WriteClass.kt|WriteClass.PageCreate",
     "WriteClass.kt|WriteClass.AssetWrite",
