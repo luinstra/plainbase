@@ -27,11 +27,14 @@ and reference contract before any code exists. Four forces shaped it:
 **Location.** A root's discussions live in one collection at `<root>/.plainbase/discussions/`, not beside
 each folder. Discussions exist only on editable roots in this slice; the UI and API say so explicitly for
 the others. `.plainbase/` is never content: an include glob that would expose it is a boot refusal.
+On git-history roots, earlier commits keep the purged text; purge does not rewrite history.
 
 **Layout.** One directory per discussion, `<discussion-id>/`, holding `discussion.md` (frontmatter: page
-reference, anchor, status) and one append-only `<comment-uuidv7>.md` per comment (frontmatter: author,
-time; body: the comment). Concurrent comments from different clones or branches merge without conflict,
-and every file stays readable with ordinary tools.
+reference, anchor, status) and one `<comment-uuidv7>.md` per comment (frontmatter: author, time; body: the
+comment). Comment files are created create-only, edited and retracted by compare-and-swap, and an admin purge
+deletes the file. Readers ignore frontmatter keys and directory entries they do not know, and a rewrite keeps
+unknown key lines verbatim. Concurrent comments from different clones or branches merge without conflict, and every
+file stays readable with ordinary tools.
 
 **Page reference.** The page uuid plus the root-relative path at creation. The root is implicit from the
 collection's location, so renaming a root in config breaks nothing. The uuid links; the path is the
@@ -50,10 +53,8 @@ tie. A person may Reattach a discussion to revised text; the original anchor is 
 are stored: the quote and its context are the retained evidence.
 
 **History.** On local roots with git history, discussion files are committed like page edits: one
-attributed commit per discussion action, with a filterable `discussion: ` message prefix. In object mode,
-discussions are stored in the bucket under `.plainbase/discussions/` with no commit history in this slice;
-bucket versioning covers recovery. Adding history there later is additive: commits start from that point
-and nothing migrates.
+attributed commit per discussion action, with a filterable `discussion: ` message prefix. Object-mode Discussions
+ship in a later slice; until then object-mode roots report Discussions unavailable.
 
 **Authority.** Files are the authority. The server keeps a derived, deletable discussion index, rebuilt
 from the files and kept current by a watcher exception scoped to `.plainbase/discussions/` only.
@@ -75,5 +76,5 @@ from the files and kept current by a watcher exception scoped to `.plainbase/dis
 - Edits, retractions and admin purges of comments do not remove old text from git history. The product
   says so rather than implying deletion.
 - Object-mode deployments treat `.plainbase/` as app-owned bucket space that the mirror skips (it skips
-  every dot-prefixed key, so no other hidden name would change this). Discussions there need their own
-  storage adapter, which can write those keys directly; they have no history until a later slice adds it.
+  every dot-prefixed key, so no other hidden name would change this). Object-mode Discussions need their own
+  storage adapter and ship in a later slice; until then those roots report Discussions unavailable.
