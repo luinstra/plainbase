@@ -192,6 +192,7 @@ class IndexHarness(
     fun writePipeline(
         historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _, _ -> null },
         store: ContentStore? = null,
+        monitor: ContentWriteMonitor = ContentWriteMonitor(),
     ): WritePipeline =
         WritePipeline(
             // A [store] override stands in for MAIN's tree (the failing/wrapping stand-in case); every other root
@@ -206,6 +207,7 @@ class IndexHarness(
             availability = availability,
             historyHook = historyHook,
             policies = policies,
+            monitor = monitor,
         )
 
     override fun close() = driver.close()

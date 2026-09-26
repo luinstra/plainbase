@@ -969,6 +969,13 @@ private object EnabledStubHistory : com.plainbase.domain.history.HistoryProvider
         committer: com.plainbase.domain.history.CommitIdentity?,
     ) = null
 
+    override fun commitChanges(
+        changes: List<com.plainbase.domain.history.HistoryChange>,
+        message: String,
+        author: com.plainbase.domain.history.CommitIdentity,
+        committer: com.plainbase.domain.history.CommitIdentity,
+    ): com.plainbase.domain.history.CommitOutcome = error("unused in this test")
+
     override fun lastCommits(paths: List<TreePath>) = emptyMap<TreePath, com.plainbase.domain.history.Commit>()
     override fun log(path: TreePath, limit: Int?) = emptyList<com.plainbase.domain.history.Commit>()
     override fun diff(from: String, to: String, path: TreePath) =
@@ -1000,6 +1007,13 @@ private object FailingGitReads : com.plainbase.domain.history.HistoryProvider {
         author: com.plainbase.domain.history.CommitIdentity?,
         committer: com.plainbase.domain.history.CommitIdentity?,
     ) = null
+
+    override fun commitChanges(
+        changes: List<com.plainbase.domain.history.HistoryChange>,
+        message: String,
+        author: com.plainbase.domain.history.CommitIdentity,
+        committer: com.plainbase.domain.history.CommitIdentity,
+    ): com.plainbase.domain.history.CommitOutcome = error("unused in this test")
 
     override fun lastCommits(paths: List<TreePath>) = emptyMap<TreePath, com.plainbase.domain.history.Commit>()
     override fun log(path: TreePath, limit: Int?): List<com.plainbase.domain.history.Commit> =

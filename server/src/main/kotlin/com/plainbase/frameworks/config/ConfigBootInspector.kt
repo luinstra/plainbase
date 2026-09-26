@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.config
 
+import com.plainbase.domain.discussion.isReservedTopSegment
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.RootName
 import java.io.IOException
@@ -86,6 +87,9 @@ internal object ConfigBootInspector {
                     "DATA_DIR and CONTENT_DIR must be different directories (both are ${config.contentDir}): " +
                         "app-owned state (plainbase.db, search.db) inside the user-owned content root would " +
                         "re-trigger the watcher after every rebuild - a self-sustaining rebuild loop (§4 separation)"
+                DataDirFault.RESERVED_COLLECTION ->
+                    "DATA_DIR (${dataDirDeclared(config)}) is inside CONTENT_DIR's reserved .plainbase directory, " +
+                        "which holds Discussions: place DATA_DIR outside .plainbase"
                 DataDirFault.ALIASED_NESTING ->
                     "DATA_DIR (${dataDirDeclared(config)}) is inside CONTENT_DIR on disk but not by its declared path " +
                         "($declared): declare CONTENT_DIR and DATA_DIR through consistent paths so the app-state " +
@@ -154,6 +158,9 @@ internal object ConfigBootInspector {
                         "roots.${name.value} and DATA_DIR must be different directories (both are $comparable): " +
                             "app-owned state (plainbase.db, search.db) inside a docs root would re-trigger the " +
                             "watcher after every rebuild (§4 separation)"
+                    DataDirFault.RESERVED_COLLECTION ->
+                        "DATA_DIR (${dataDirDeclared(config)}) is inside roots.${name.value}'s reserved .plainbase " +
+                            "directory, which holds Discussions: place DATA_DIR outside .plainbase"
                     DataDirFault.ALIASED_NESTING ->
                         "DATA_DIR (${dataDirDeclared(config)}) is inside roots.${name.value} on disk but not by its " +
                             "declared path ($declared): declare the root and DATA_DIR through consistent paths so the " +
@@ -166,7 +173,7 @@ internal object ConfigBootInspector {
 
     private enum class PrimaryFault { NOT_A_DIRECTORY, NOT_TRAVERSABLE }
 
-    private enum class DataDirFault { SAME_DIRECTORY, ALIASED_NESTING }
+    private enum class DataDirFault { SAME_DIRECTORY, RESERVED_COLLECTION, ALIASED_NESTING }
 
     private fun primaryFault(path: Path): PrimaryFault? = when {
         !Files.isDirectory(path) -> PrimaryFault.NOT_A_DIRECTORY
@@ -177,8 +184,14 @@ internal object ConfigBootInspector {
     /** Equality and hidden canonical DATA_DIR-inside-root nesting are fatal; root-inside-DATA_DIR stays warning-only. */
     private fun dataDirFault(config: PlainbaseConfig, declared: Path, comparable: Path): DataDirFault? {
         val dataDirComparable = dataDirComparable(config)
+        val reservedSegment = if (dataDirComparable.startsWith(comparable)) {
+            comparable.relativize(dataDirComparable).firstOrNull()?.toString()
+        } else {
+            null
+        }
         return when {
             comparable == dataDirComparable -> DataDirFault.SAME_DIRECTORY
+            reservedSegment?.let(::isReservedTopSegment) == true -> DataDirFault.RESERVED_COLLECTION
             dataDirComparable.startsWith(comparable) && !dataDirDeclared(config).startsWith(declared) ->
                 DataDirFault.ALIASED_NESTING
             else -> null

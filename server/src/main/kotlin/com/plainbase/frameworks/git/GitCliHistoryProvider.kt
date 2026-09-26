@@ -3,7 +3,9 @@ package com.plainbase.frameworks.git
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.CommitIdentity
+import com.plainbase.domain.history.CommitOutcome
 import com.plainbase.domain.history.FileDiff
+import com.plainbase.domain.history.HistoryChange
 import com.plainbase.domain.history.HistoryCommandException
 import com.plainbase.domain.history.HistoryProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -86,14 +88,14 @@ class GitCliHistoryProvider(
         // Two separate reads let an external `git checkout` to a same-tip branch slip between them, pairing
         // the original tip with the NEW branch — then the CAS would advance the wrong branch.
         val head = exec.run(listOf("rev-parse", "HEAD", "--symbolic-full-name", "HEAD"))
-        val oldHead = if (head.ok) GitExecutor.parseSha(head.stdout) else null
+        val oldHead = capturedHead(head)
         val unborn = oldHead == null
         // The atomic command FAILS entirely on an unborn HEAD (rev-parse HEAD errors before printing the
         // symbolic name), so capture the branch ref separately there — `symbolic-ref HEAD` works on an unborn
         // HEAD (no race to lose: there is no commit yet to desync from). When born, parse the ref from the
         // atomic result. Null ⇒ detached.
         val branchRef = if (unborn) {
-            exec.run(listOf("symbolic-ref", "HEAD")).let { if (it.ok) it.stdoutText.trim().takeIf(String::isNotEmpty) else null }
+            unbornBranchRef()
         } else {
             parseHeadRef(head, oldHead)
         }
@@ -195,6 +197,133 @@ class GitCliHistoryProvider(
             runCatching { indexFile.deleteRecursively() }
         }
     }
+
+    @OptIn(kotlin.io.path.ExperimentalPathApi::class)
+    @Suppress("TooGenericExceptionCaught")
+    override fun commitChanges(
+        changes: List<HistoryChange>,
+        message: String,
+        author: CommitIdentity,
+        committer: CommitIdentity,
+    ): CommitOutcome = underRepoWriteMonitor {
+        val indexFile = gitHome.resolve("idx-" + java.util.UUID.randomUUID())
+        try {
+            val prepared = try {
+                prepareDiscussionCommit(changes, message, author, committer, indexFile)
+            } catch (failure: Exception) {
+                return@underRepoWriteMonitor CommitOutcome.NotCommitted(failure)
+            }
+
+            if (prepared.noOp && message.startsWith("discussion: purge ")) {
+                changes.filterIsInstance<HistoryChange.Delete>().forEach { change ->
+                    logger.info {
+                        "purge removed uncommitted file ${change.path.value} ($message); no audit commit was created"
+                    }
+                }
+            }
+
+            val outcome = if (prepared.noOp) {
+                CommitOutcome.Committed(prepared.sha, null)
+            } else {
+                val preparedSha = checkNotNull(prepared.sha)
+                val updateFailure = try {
+                    val result = GitPlumbing.updateRef(exec, prepared.branchRef, preparedSha, prepared.oldHead ?: zeroOid())
+                    if (result.ok) null else GitCommandException("update-ref", result.exitCode, result.stderr)
+                } catch (failure: Exception) {
+                    failure
+                }
+                if (updateFailure == null) {
+                    CommitOutcome.Committed(preparedSha, null)
+                } else {
+                    reconcileDiscussionCommit(prepared.branchRef, preparedSha, updateFailure)
+                }
+            }
+
+            if (outcome !is CommitOutcome.Committed) return@underRepoWriteMonitor outcome
+            val committedSha = outcome.sha
+            if (committedSha != null) {
+                prepared.staged.forEach { change ->
+                    try {
+                        syncLiveIndexChange(prepared.branchRef, committedSha, change)
+                    } catch (failure: Exception) {
+                        logger.warn(failure) { "live-index sync after discussion commit $committedSha failed (commit already landed)" }
+                    }
+                }
+            }
+            val hydrated = if (committedSha == null) {
+                null
+            } else {
+                try {
+                    show(committedSha)
+                } catch (failure: Exception) {
+                    logger.warn(failure) { "commit $committedSha landed but could not be read back: ${failure.message}" }
+                    null
+                }
+            }
+            if (!prepared.noOp) dispatchMaintenance()
+            CommitOutcome.Committed(committedSha, hydrated)
+        } finally {
+            runCatching { indexFile.deleteRecursively() }
+        }
+    }
+
+    private fun prepareDiscussionCommit(
+        changes: List<HistoryChange>,
+        message: String,
+        author: CommitIdentity,
+        committer: CommitIdentity,
+        indexFile: Path,
+    ): PreparedDiscussionCommit {
+        ensureRepo()
+        val head = exec.run(listOf("rev-parse", "HEAD", "--symbolic-full-name", "HEAD"))
+        val oldHead = capturedHead(head)
+        val branchRef = if (oldHead == null) {
+            unbornBranchRef()
+        } else {
+            parseHeadRef(head, oldHead)
+        }
+        val indexEnv = mapOf("GIT_INDEX_FILE" to indexFile.toString())
+        GitPlumbing.seedIndex(exec, indexEnv, oldHead)
+        val staged = changes.map { change ->
+            val repoRelativePath = repoPath(change.path)
+            when (change) {
+                is HistoryChange.Put -> StagedDiscussionChange.Put(
+                    repoRelativePath,
+                    GitPlumbing.stageBlob(exec, indexEnv, repoRelativePath, change.bytes),
+                )
+                is HistoryChange.Delete -> {
+                    GitPlumbing.removeFromIndex(exec, indexEnv, repoRelativePath)
+                    StagedDiscussionChange.Delete(repoRelativePath)
+                }
+            }
+        }
+        val newTree = GitPlumbing.writeTree(exec, indexEnv)
+        val noOp = isDiscussionCommitNoOp(oldHead, newTree)
+        if (noOp) return PreparedDiscussionCommit(oldHead, branchRef, staged, noOp = true, oldHead = oldHead)
+        val identityEnv = GitPlumbing.identityEnv(author, committer, clock.now())
+        val sha = GitPlumbing.commitTree(exec, indexEnv, newTree, oldHead, identityEnv, message)
+        return PreparedDiscussionCommit(sha, branchRef, staged, noOp = false, oldHead = oldHead)
+    }
+
+    private fun isDiscussionCommitNoOp(oldHead: String?, newTree: String): Boolean {
+        if (oldHead == null) return false
+        val baseTree = exec.run(listOf("rev-parse", "$oldHead^{tree}"))
+            .let { result -> if (result.ok) GitExecutor.parseSha(result.stdout) else null }
+        if (baseTree != newTree) return false
+        when (val currentHead = readRef("HEAD")) {
+            is RefRead.Resolved -> {
+                if (currentHead.sha == oldHead) return true
+                discussionNoOpRace(
+                    "HEAD advanced from $oldHead to ${currentHead.sha} during the discussion commit",
+                )
+            }
+            RefRead.Absent -> discussionNoOpRace("HEAD became absent from $oldHead during the discussion commit", 1)
+            is RefRead.Failed -> throw currentHead.failure
+        }
+    }
+
+    private fun discussionNoOpRace(message: String, exitCode: Int = 0): Nothing =
+        throw GitCommandException("no-op race", exitCode, message)
 
     /**
      * The newest commit touching each requested path, batched into as few `git log` walks as the argv
@@ -591,6 +720,117 @@ class GitCliHistoryProvider(
         if (!result.ok) logger.warn { "live-index sync of $repoRelativePath failed (commit already landed; non-fatal): ${result.stderr}" }
     }
 
+    private fun syncLiveIndexChange(
+        capturedBranch: String?,
+        expectedHead: String,
+        change: StagedDiscussionChange,
+    ) {
+        val repoRelativePath = when (change) {
+            is StagedDiscussionChange.Put -> change.repoRelativePath
+            is StagedDiscussionChange.Delete -> change.repoRelativePath
+        }
+        val head = exec.run(listOf("rev-parse", "HEAD", "--symbolic-full-name", "HEAD"))
+        val currentHead = if (head.ok) GitExecutor.parseSha(head.stdout) else null
+        val currentBranch = parseHeadRef(head, currentHead)
+        if (currentBranch != capturedBranch || currentHead != expectedHead) {
+            logger.debug {
+                "skipping live-index sync of $repoRelativePath: HEAD is $currentHead@$currentBranch, expected $expectedHead@$capturedBranch"
+            }
+            return
+        }
+        val result = when (change) {
+            is StagedDiscussionChange.Put -> exec.run(
+                listOf("update-index", "--add", "--cacheinfo", "100644,${change.blobSha},$repoRelativePath"),
+            )
+            is StagedDiscussionChange.Delete -> exec.run(listOf("update-index", "--force-remove", "--", repoRelativePath))
+        }
+        if (!result.ok) {
+            logger.warn {
+                "live-index sync of $repoRelativePath failed (commit already landed; non-fatal): ${result.stderr}"
+            }
+        }
+    }
+
+    private fun capturedHead(head: GitResult): String? {
+        if (head.ok) {
+            return GitExecutor.parseSha(head.stdout)
+                ?: throw GitCommandException("rev-parse HEAD", head.exitCode, "HEAD read returned no parseable object id")
+        }
+        return when (val current = readRef("HEAD")) {
+            RefRead.Absent -> null
+            is RefRead.Resolved -> throw GitCommandException(
+                "rev-parse HEAD --symbolic-full-name HEAD",
+                head.exitCode,
+                head.stderr.ifBlank { "combined HEAD read failed while HEAD resolves to ${current.sha}" },
+            )
+            is RefRead.Failed -> throw current.failure
+        }
+    }
+
+    private fun unbornBranchRef(): String {
+        val result = exec.run(listOf("symbolic-ref", "HEAD"))
+        if (!result.ok) throw GitCommandException("symbolic-ref HEAD", result.exitCode, result.stderr)
+        return result.stdoutText.trim().takeIf(String::isNotEmpty)
+            ?: throw GitCommandException("symbolic-ref HEAD", result.exitCode, "HEAD did not name a branch")
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun readRef(reference: String, noReplaceRefs: Boolean = false): RefRead {
+        val prefix = if (noReplaceRefs) NO_REPLACE_REFS else emptyList()
+        val command = "rev-parse --verify --quiet $reference"
+        val result = try {
+            exec.run(prefix + listOf("rev-parse", "--verify", "--quiet", reference))
+        } catch (failure: Exception) {
+            return RefRead.Failed(failure)
+        }
+        if (result.ok) {
+            return GitExecutor.parseSha(result.stdout)?.let(RefRead::Resolved)
+                ?: RefRead.Failed(GitCommandException(command, result.exitCode, "ref read returned no parseable object id"))
+        }
+        if (result.exitCode == 1 && result.stdout.isEmpty()) return RefRead.Absent
+        return RefRead.Failed(GitCommandException(command, result.exitCode, result.stderr))
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun reconcileDiscussionCommit(
+        branchRef: String?,
+        newCommit: String,
+        updateFailure: Exception,
+    ): CommitOutcome = try {
+        val reference = branchRef ?: "HEAD"
+        when (val currentRef = readRef(reference, noReplaceRefs = true)) {
+            RefRead.Absent -> CommitOutcome.Unknown(GitCommandException("reconcile rev-parse", 1, "ref $reference did not resolve"))
+            is RefRead.Failed -> CommitOutcome.Unknown(currentRef.failure)
+            is RefRead.Resolved -> {
+                val current = currentRef.sha
+                when {
+                    current == newCommit -> CommitOutcome.Committed(newCommit, null)
+                    else -> when (val ancestry = ancestryForReconcile(newCommit, current)) {
+                        ReconcileAncestry.Ancestor -> CommitOutcome.Committed(newCommit, null)
+                        ReconcileAncestry.NotAncestor -> CommitOutcome.NotCommitted(updateFailure)
+                        is ReconcileAncestry.Unknown -> CommitOutcome.Unknown(ancestry.failure)
+                    }
+                }
+            }
+        }
+    } catch (failure: Exception) {
+        CommitOutcome.Unknown(failure)
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun ancestryForReconcile(ancestor: String, descendant: String): ReconcileAncestry = try {
+        val result = exec.run(NO_REPLACE_REFS + listOf("merge-base", "--is-ancestor", ancestor, descendant))
+        when (result.exitCode) {
+            0 -> ReconcileAncestry.Ancestor
+            1 -> ReconcileAncestry.NotAncestor
+            else -> ReconcileAncestry.Unknown(
+                GitCommandException("reconcile merge-base", result.exitCode, result.stderr),
+            )
+        }
+    } catch (failure: Exception) {
+        ReconcileAncestry.Unknown(failure)
+    }
+
     private fun dispatchMaintenance() {
         val task = maintenance ?: { runAutoMaintenance(exec) }
         runCatching {
@@ -662,6 +902,33 @@ class GitCliHistoryProvider(
         val match = GIT_VERSION_LINE.find(banner) ?: return null
         val (major, minor) = match.destructured
         return major.toIntOrNull()?.let { maj -> minor.toIntOrNull()?.let { min -> maj to min } }
+    }
+
+    private data class PreparedDiscussionCommit(
+        val sha: String?,
+        val branchRef: String?,
+        val staged: List<StagedDiscussionChange>,
+        val noOp: Boolean,
+        val oldHead: String? = null,
+    )
+
+    private sealed interface StagedDiscussionChange {
+        val repoRelativePath: String
+
+        data class Put(override val repoRelativePath: String, val blobSha: String) : StagedDiscussionChange
+        data class Delete(override val repoRelativePath: String) : StagedDiscussionChange
+    }
+
+    private sealed interface ReconcileAncestry {
+        data object Ancestor : ReconcileAncestry
+        data object NotAncestor : ReconcileAncestry
+        data class Unknown(val failure: Exception) : ReconcileAncestry
+    }
+
+    private sealed interface RefRead {
+        data class Resolved(val sha: String) : RefRead
+        data object Absent : RefRead
+        data class Failed(val failure: Exception) : RefRead
     }
 
     companion object {

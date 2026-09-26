@@ -121,6 +121,13 @@ private class CountingHistoryDecorator(private val delegate: HistoryProvider) : 
     override fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?) =
         delegate.commit(path, bytes, author, committer)
 
+    override fun commitChanges(
+        changes: List<com.plainbase.domain.history.HistoryChange>,
+        message: String,
+        author: CommitIdentity,
+        committer: CommitIdentity,
+    ): com.plainbase.domain.history.CommitOutcome = delegate.commitChanges(changes, message, author, committer)
+
     override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> {
         lastCommitsCalls += 1
         return delegate.lastCommits(paths)

@@ -73,6 +73,13 @@ private class CountingHistoryProvider : HistoryProvider {
     override fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?) =
         error("rebuild/reindex must never commit")
 
+    override fun commitChanges(
+        changes: List<com.plainbase.domain.history.HistoryChange>,
+        message: String,
+        author: CommitIdentity,
+        committer: CommitIdentity,
+    ): com.plainbase.domain.history.CommitOutcome = error("unused in this test")
+
     override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> {
         lastCommitsCalls += 1
         lastPathsSize = paths.size

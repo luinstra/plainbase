@@ -4,6 +4,7 @@ import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AdminFacade
+import com.plainbase.domain.service.ContentWriteMonitor
 import com.plainbase.domain.service.LoginService
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
@@ -71,6 +72,7 @@ internal fun createRestModule(
         val index = get<ObservedIndexRuntime>()
         AbsenceClassifier(get(), index.policies)
     }
+    single { ContentWriteMonitor() }
     single {
         val index = get<ObservedIndexRuntime>()
         WritePipeline(
@@ -84,6 +86,7 @@ internal fun createRestModule(
             availability = index.availability,
             historyHook = get(),
             policies = index.policies,
+            monitor = get(),
         )
     }
     single {

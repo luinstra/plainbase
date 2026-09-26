@@ -544,7 +544,7 @@ private fun rethrowError(failure: Throwable) {
 
 /**
  * How `serve()` CONSUMES the gate, in the order it has always emitted (C5 S1.7). Every [BootRefusal.Kind]
- * belongs to exactly one stage, and `BootGateOrderingTest` fails the build if a NEW kind belongs to none -
+ * belongs to exactly one stage, and `BootRefusalLedgerTest` fails the build if a NEW kind belongs to none -
  * a refusal the gate produces and boot silently ignores would be the worst of both worlds.
  *
  * The topology matrix refuses BEFORE the config warnings; the bind guard AFTER them; the per-root git gate is

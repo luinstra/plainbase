@@ -180,6 +180,10 @@ JDK glob matching is whole-path matching: `**/*.md` matches nested Markdown but 
 both shapes when both are intended. Dot-prefixed entries remain hidden unless an include contains the literal
 dot-prefixed prefix (for example `.crew/**`; `**/*.md` does not authorize `.crew`). Internally supplied legacy ignore
 rules remain additive; there is no live `content.ignore` configuration key in this release.
+The top-level `.plainbase/` directory in each local root is a reserved app-owned area for discussion files and is
+never content. Includes whose first literal segment is `.plainbase` are refused at config load; no include pattern can
+expose paths under it.
+Keep `DATA_DIR` outside a root's `.plainbase/` directory as well; startup refuses that placement.
 Traversal is bounded for non-recursive includes: `*.md` and `docs/*.md` prune directories deeper than the matching
 file depth from scans, watches, listings and the sidebar, while any pattern containing `**` retains conservative
 traversal. Brace alternatives mixing `**` with bounded patterns may traverse more broadly; prefer separate includes

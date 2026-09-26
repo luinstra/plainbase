@@ -10,9 +10,9 @@ import kotlin.time.Instant
  * .plainbase.frameworks.git.GitCliHistoryProvider] over the `git` system binary, [NoOpHistoryProvider]
  * [com.plainbase.frameworks.git.NoOpHistoryProvider] when Git is off).
  *
- * This is an INTERNAL signature, NOT a wire contract (ADR-0006 reversibility) — it may change as the
- * history/read surface and later work land. Commit message text is human-facing, never golden-frozen: tests
- * assert structure, never the exact string.
+ * This is an INTERNAL signature, NOT a wire contract (ADR-0006 reversibility). It may change as the
+ * history/read surface and later work land. Commit message text is human-facing, except for the
+ * `discussion: ` prefix of Discussion commits.
  */
 interface HistoryProvider {
 
@@ -34,6 +34,20 @@ interface HistoryProvider {
      * configured identity (Phase 3 has no principal; the split is real plumbing for Phase 4).
      */
     fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity? = null, committer: CommitIdentity? = null): Commit?
+
+    /**
+     * Commits a group of Discussion file changes as one commit. A non-zero update-ref result, including a
+     * timeout or thrown exception, is reconciled by rereading the ref and checking ancestry: a landed commit is
+     * [CommitOutcome.Committed], a proven non-descendant is [CommitOutcome.NotCommitted], and an unavailable
+     * reconciliation result is [CommitOutcome.Unknown]. Once committed, live-index synchronization, hydration,
+     * and maintenance are best-effort and cannot change the committed outcome.
+     */
+    fun commitChanges(
+        changes: List<HistoryChange>,
+        message: String,
+        author: CommitIdentity,
+        committer: CommitIdentity,
+    ): CommitOutcome
 
     /** The last commit that touched each of [paths], batched into one read (never one query per path). */
     fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit>
@@ -81,6 +95,30 @@ interface HistoryProvider {
      * (a diff we could not fully understand is not a smaller diff, and never "no deletions").
      */
     fun deletedIn(from: String, to: String): Set<TreePath>?
+}
+
+/** One path mutation included in a single history commit. */
+sealed interface HistoryChange {
+    val path: TreePath
+
+    data class Put(override val path: TreePath, val bytes: ByteArray) : HistoryChange {
+        override fun equals(other: Any?): Boolean =
+            other is Put && path == other.path && bytes.contentEquals(other.bytes)
+
+        override fun hashCode(): Int = 31 * path.hashCode() + bytes.contentHashCode()
+    }
+
+    data class Delete(override val path: TreePath) : HistoryChange
+}
+
+/**
+ * The result of a backend commit attempt: [Committed] is durable, [NotCommitted] is a known refusal callers can undo,
+ * and [Unknown] means reconciliation could not establish whether the commit landed.
+ */
+sealed interface CommitOutcome {
+    data class Committed(val sha: String?, val commit: Commit?) : CommitOutcome
+    data class NotCommitted(val cause: Exception) : CommitOutcome
+    data class Unknown(val cause: Exception) : CommitOutcome
 }
 
 /** One commit's recorded identity + timestamps + message (read shape; the history layer owns its evolution). */

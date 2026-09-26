@@ -1,9 +1,12 @@
 package com.plainbase.frameworks.config
 
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.filesystem.IgnoreRules
+import com.plainbase.frameworks.filesystem.localContentPathPolicy
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -137,6 +140,42 @@ class RootsConfigTest : FunSpec({
             withDataDir("roots { docs { path = \"/roots/docs\", $setting } }") { env ->
                 shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
             }
+        }
+    }
+
+    test("includes exposing the reserved directory are refused") {
+        listOf(".plainbase/**", ".PLAINBASE/**", ".plainbase", ".Plainbase/x.md").forEach { include ->
+            withDataDir("roots { docs { path = \"/roots/docs\", includes = [\"$include\"] } }") { env ->
+                val failure = shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
+                failure.message shouldContain "roots.docs.includes[0]"
+                failure.message shouldContain "reserved .plainbase directory"
+            }
+        }
+    }
+
+    test("reserved directory excludes and near names are legal") {
+        withDataDir(
+            "roots { docs { path = \"/roots/docs\", excludes = [\".plainbase/**\", \".PLAINBASE\"] } }",
+        ) { env ->
+            ConfigLoader.fromEnvAndFile(env).roots.primary.excludes shouldBe listOf(".plainbase/**", ".PLAINBASE")
+        }
+        withDataDir(
+            "roots { docs { path = \"/roots/docs\", includes = [\".plain*/**\", \".plainbase-notes/**\", " +
+                "\"docs/.plainbase/**\"] } }",
+        ) { env ->
+            val root = ConfigLoader.fromEnvAndFile(env).roots.primary
+            val policy = localContentPathPolicy(root, Path.of("/roots/docs"), IgnoreRules(), emptyList())
+            policy.allowsFile(TreePath.require("docs/.plainbase/a.md")) shouldBe true
+        }
+    }
+
+    test("brace and bracket globs load and never expose the reserved directory") {
+        withDataDir(
+            "roots { docs { path = \"/roots/docs\", includes = [\"{.plainbase,docs}/**\", \"[.]plainbase/**\"] } }",
+        ) { env ->
+            val root = ConfigLoader.fromEnvAndFile(env).roots.primary
+            val policy = localContentPathPolicy(root, Path.of("/roots/docs"), IgnoreRules(), emptyList())
+            policy.allowsFile(TreePath.require(".plainbase/discussions/x/discussion.md")) shouldBe false
         }
     }
 

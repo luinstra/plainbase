@@ -118,6 +118,41 @@ class RootsValidationTest : FunSpec({
         }
     }
 
+    test("a data dir inside the reserved directory is refused for legacy and explicit roots") {
+        withBase { base ->
+            val content = Files.createDirectories(base.resolve("content"))
+            val data = Files.createDirectories(content.resolve(".plainbase/state"))
+
+            val legacyFailure = shouldThrow<IllegalArgumentException> {
+                ConfigBootInspector.requireContentDir(legacyConfig(dataDir = data, contentDir = content))
+            }
+            legacyFailure.message shouldBe (
+                "DATA_DIR ($data) is inside CONTENT_DIR's reserved .plainbase directory, which holds Discussions: " +
+                    "place DATA_DIR outside .plainbase"
+                )
+
+            val docs = RootName.PRIMARY
+            val explicitFailure = shouldThrow<IllegalArgumentException> {
+                ConfigBootInspector.requireContentDir(
+                    config(data, content, explicitRoots("docs" to content)),
+                )
+            }
+            explicitFailure.message shouldBe (
+                "DATA_DIR ($data) is inside roots.${docs.value}'s reserved .plainbase directory, which holds " +
+                    "Discussions: place DATA_DIR outside .plainbase"
+                )
+        }
+    }
+
+    test("a data dir elsewhere under a root keeps today's disposition") {
+        withBase { base ->
+            val content = Files.createDirectories(base.resolve("content"))
+            val data = Files.createDirectories(content.resolve("state"))
+            ConfigBootInspector.requireContentDir(legacyConfig(dataDir = data, contentDir = content)) shouldBe content
+            ConfigBootInspector.requireContentDir(config(data, content, explicitRoots("docs" to content))) shouldBe content
+        }
+    }
+
     test("synthesized wiring seam: the registry's primary resolves to contentDir for a legacy config") {
         withBase { base ->
             val content = Files.createDirectories(base.resolve("content"))
