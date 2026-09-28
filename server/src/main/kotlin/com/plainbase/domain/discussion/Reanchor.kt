@@ -21,15 +21,31 @@ class ReanchorPage private constructor(
     internal val raw: ByteArray,
     val bodyStart: Int,
     val lineCount: Long,
-    val headingPaths: List<Pair<HeadingPath, String>>,
+    private val headings: List<Heading>,
 ) {
     companion object {
         fun of(raw: ByteArray, headings: List<Heading>): ReanchorPage = ReanchorPage(
             raw,
             FrontmatterBlock.detect(raw).bodyStart,
             SourceLines.lineCount(raw),
-            HeadingPath.pathsOf(headings),
+            headings,
         )
+    }
+
+    internal fun uniqueHeadingId(path: HeadingPath): String? {
+        if (path.entries.isEmpty()) return null
+        val stack = mutableListOf<HeadingPath.Entry>()
+        var match: String? = null
+        var count = 0
+        for (heading in headings) {
+            while (stack.lastOrNull()?.level?.let { it >= heading.level } == true) stack.removeLast()
+            stack += HeadingPath.Entry(heading.level, heading.text)
+            if (stack == path.entries) {
+                count++
+                if (count == 1) match = heading.id
+            }
+        }
+        return match.takeIf { count == 1 }
     }
 }
 

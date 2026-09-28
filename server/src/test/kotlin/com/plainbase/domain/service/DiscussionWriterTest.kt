@@ -11,7 +11,8 @@ import com.plainbase.domain.discussion.Anchor
 import com.plainbase.domain.discussion.AnchorSelection
 import com.plainbase.domain.discussion.Author
 import com.plainbase.domain.discussion.AuthorKind
-import com.plainbase.domain.discussion.CollectionRead
+import com.plainbase.domain.discussion.BootTombstone
+import com.plainbase.domain.discussion.CollectionVisit
 import com.plainbase.domain.discussion.CommentId
 import com.plainbase.domain.discussion.CommentRecord
 import com.plainbase.domain.discussion.Decoded
@@ -35,8 +36,10 @@ import com.plainbase.domain.discussion.MAX_MARKER_BYTES
 import com.plainbase.domain.discussion.PageRef
 import com.plainbase.domain.discussion.QuoteCapture
 import com.plainbase.domain.discussion.RawEntry
+import com.plainbase.domain.discussion.Stamp
 import com.plainbase.domain.discussion.StoreWrite
 import com.plainbase.domain.discussion.Tombstone
+import com.plainbase.domain.discussion.UnreadableReason
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.CommitOutcome
 import com.plainbase.domain.history.HistoryChange
@@ -45,6 +48,10 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.SubjectKey
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.service.RootSync
+import com.plainbase.frameworks.discussion.DbFaults
+import com.plainbase.frameworks.discussion.DiscussionDb
+import com.plainbase.frameworks.discussion.JdbcDiscussionRows
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import io.kotest.assertions.throwables.shouldThrow
@@ -61,6 +68,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 class DiscussionWriterTest : FunSpec({
@@ -480,7 +488,7 @@ class DiscussionWriterTest : FunSpec({
         withWriterFixture { fixture ->
             fixture.install(comments = emptyList(), rawComments = listOf(COMMENT_NAME to byteArrayOf(1)))
             fixture.index.lastPublishedById[ID] = DiscussionRead.Unreadable(
-                com.plainbase.domain.discussion.UnreadableReason.BAD_VALUE,
+                UnreadableReason.BAD_VALUE,
                 COMMENT_NAME.fileName,
                 PAGE.pageId,
             )
@@ -702,22 +710,79 @@ class DiscussionWriterTest : FunSpec({
         }
     }
 
-    test("a failed M6 reread logs a warning and still returns the commit result") {
+    test("a post-write publish failure turns the root unsynced once") {
         withWriterFixture { fixture ->
-            val logger = LoggerFactory.getLogger(DiscussionWriter::class.java) as Logger
-            val appender = ListAppender<ILoggingEvent>().apply { start() }
-            logger.addAppender(appender)
+            val databasePath = fixture.base.resolve("discussions.db")
+            DiscussionDb(databasePath).use { db ->
+                val rows = JdbcDiscussionRows(db)
+                val sync = DiscussionSyncState(setOf(ROOT))
+                val index = SyncedDiscussionIndex(rows, fixture.store, DiscussionFullReads(fixture.store), sync)
+                DbFaults(databasePath).use { faults ->
+                    faults.failWrites()
+
+                    val result = fixture.writer(index = index).write(
+                        DiscussionCommand.Start(ROOT, AUTHOR, PAGE, fixture.pageAnchor, "body"),
+                    )
+
+                    result.shouldBeInstanceOf<DiscussionWriteOutcome.Done>()
+                    val unsynced = sync.current(ROOT).shouldBeInstanceOf<RootSync.Unsynced>()
+                    unsynced.generation shouldBe 1L
+                }
+            }
+        }
+    }
+
+    test("an interrupted post-write publish keeps the committed result and interrupt flag") {
+        withWriterFixture { fixture ->
+            DiscussionDb(fixture.base.resolve("discussions.db")).use { db ->
+                val sync = DiscussionSyncState(setOf(ROOT))
+                val realIndex = SyncedDiscussionIndex(JdbcDiscussionRows(db), fixture.store, DiscussionFullReads(fixture.store), sync)
+                val index = object : DiscussionIndex by realIndex {
+                    override fun publish(root: RootName, id: DiscussionId, markerChanged: Boolean, read: () -> EntriesRead) {
+                        Thread.currentThread().interrupt()
+                        realIndex.publish(root, id, markerChanged, read)
+                    }
+                }
+                try {
+                    val result = fixture.writer(index = index).write(
+                        DiscussionCommand.Start(ROOT, AUTHOR, PAGE, fixture.pageAnchor, "body"),
+                    ).shouldBeInstanceOf<DiscussionWriteOutcome.Done>()
+
+                    result.id shouldBe START_ID
+                    sync.current(ROOT).shouldBeInstanceOf<RootSync.Unsynced>().generation shouldBe 1L
+                    Thread.currentThread().isInterrupted shouldBe true
+                    Thread.interrupted()
+                    try {
+                        fixture.comment(result.id, checkNotNull(result.commentId))?.body shouldBe "body"
+                        DiscussionCodec.decodeDiscussion(fixture.raw(result.id, EntryName.Marker))
+                            .shouldBeInstanceOf<Decoded.Ok<DiscussionRecord>>()
+                    } finally {
+                        Thread.currentThread().interrupt()
+                    }
+                    Thread.currentThread().isInterrupted shouldBe true
+                } finally {
+                    Thread.interrupted()
+                }
+            }
+        }
+    }
+
+    test("a failed post-write reread reaches the index and still returns the commit result") {
+        withWriterFixture { fixture ->
             val store = object : DiscussionStore by fixture.store {
                 var reads = 0
                 override fun read(root: RootName, id: DiscussionId, only: Set<EntryName>?): EntriesRead {
                     reads++
                     return if (reads == 1) {
-                        EntriesRead.Failed("M6 readback fault")
+                        EntriesRead.Failed("post-write readback fault")
                     } else {
                         fixture.store.read(root, id, only)
                     }
                 }
             }
+            val logger = LoggerFactory.getLogger(DiscussionWriter::class.java) as Logger
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            logger.addAppender(appender)
             try {
                 fixture.writer(store = store).write(
                     DiscussionCommand.Start(ROOT, AUTHOR, PAGE, fixture.pageAnchor, "body"),
@@ -726,11 +791,11 @@ class DiscussionWriterTest : FunSpec({
                 logger.detachAppender(appender)
                 appender.stop()
             }
-            appender.list.any {
-                it.level == Level.WARN && "discussion read failed for root ${ROOT.value}" in it.formattedMessage &&
-                    START_ID.value in it.formattedMessage && "M6 readback fault" in it.formattedMessage
-            } shouldBe true
             fixture.index.lastPublishedById.getValue(START_ID).shouldBeInstanceOf<DiscussionRead.Failed>()
+            appender.list.any {
+                it.level == Level.WARN && ROOT.value in it.formattedMessage && START_ID.value in it.formattedMessage &&
+                    "post-write readback fault" in it.formattedMessage
+            } shouldBe true
         }
     }
 
@@ -820,7 +885,7 @@ class DiscussionWriterTest : FunSpec({
             fixture.index.seedPublication(
                 ROOT,
                 ID,
-                DiscussionRead.Unreadable(com.plainbase.domain.discussion.UnreadableReason.BAD_VALUE, "x.md", PAGE.pageId),
+                DiscussionRead.Unreadable(UnreadableReason.BAD_VALUE, "x.md", PAGE.pageId),
             )
             expectRefusal(
                 fixture.writer().write(DiscussionCommand.Start(ROOT, AUTHOR, PAGE, fixture.pageAnchor, "body")),
@@ -865,7 +930,7 @@ class DiscussionWriterTest : FunSpec({
             shouldThrow<IllegalStateException> {
                 fixture.writer(index = index).write(DiscussionCommand.Start(ROOT, AUTHOR, PAGE, fixture.pageAnchor, "body"))
             }
-            fixture.store.list(ROOT) shouldBe CollectionRead.Absent
+            fixture.store.visit(ROOT) { _, _ -> } shouldBe CollectionVisit.Absent
         }
     }
 
@@ -1090,7 +1155,7 @@ class DiscussionWriterTest : FunSpec({
                 422,
                 "discussion_too_large",
             )
-            fixture.store.list(ROOT) shouldBe CollectionRead.Absent
+            fixture.store.visit(ROOT) { _, _ -> } shouldBe CollectionVisit.Absent
             fixture.history.requests shouldBe emptyList()
         }
     }
@@ -1178,7 +1243,7 @@ class DiscussionWriterTest : FunSpec({
             shouldThrow<IllegalArgumentException> {
                 fixture.writer().write(DiscussionCommand.Start(ROOT, malformedAuthor, PAGE, fixture.pageAnchor, "body"))
             }
-            fixture.store.list(ROOT) shouldBe CollectionRead.Absent
+            fixture.store.visit(ROOT) { _, _ -> } shouldBe CollectionVisit.Absent
             fixture.history.requests shouldBe emptyList()
         }
     }
@@ -1600,12 +1665,13 @@ private class FakeDiscussionIndex : DiscussionIndex {
         }
     }
 
-    override fun publish(root: RootName, id: DiscussionId, read: DiscussionRead, markerChanged: Boolean) {
+    override fun publish(root: RootName, id: DiscussionId, markerChanged: Boolean, read: () -> EntriesRead) {
+        val assembled = DiscussionAssembly.assemble(id, read())
         if (failPublish) throw IllegalStateException("publish failed")
         publishCount++
-        lastPublished = read
-        lastPublishedById[id] = read
-        latest[root to id] = read
+        lastPublished = assembled
+        lastPublishedById[id] = assembled
+        latest[root to id] = assembled
     }
 
     override fun publishFailed(root: RootName, cause: Exception) {
@@ -1644,7 +1710,12 @@ private class ScriptedDiscussionStore(private val delegate: DiscussionStore) : D
         return (answers[Key(operation, number)]?.invoke() ?: fallback()) as T
     }
 
-    override fun list(root: RootName): CollectionRead = call("list") { delegate.list(root) }
+    override fun visit(root: RootName, visitor: (DiscussionId, Boolean) -> Unit): CollectionVisit = call("visit") {
+        delegate.visit(root, visitor)
+    }
+    override fun stamp(root: RootName, id: DiscussionId): Stamp? = delegate.stamp(root, id)
+    override fun sweepBootResidue(root: RootName, now: Instant, minAge: Duration): List<BootTombstone> =
+        call("sweepBootResidue") { delegate.sweepBootResidue(root, now, minAge) }
     override fun read(root: RootName, id: DiscussionId, only: Set<EntryName>?): EntriesRead {
         val active = activeReads.incrementAndGet()
         maxReads.updateAndGet { maxOf(it, active) }

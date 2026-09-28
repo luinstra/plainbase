@@ -95,6 +95,12 @@ interface HistoryProvider {
      * (a diff we could not fully understand is not a smaller diff, and never "no deletions").
      */
     fun deletedIn(from: String, to: String): Set<TreePath>?
+
+    /** The regular blob ids under [dirs] at HEAD, or null when the tree cannot be verified. */
+    fun headBlobs(dirs: List<TreePath>): Map<TreePath, String>? = null
+
+    /** The object id Git would assign to [bytes] as a blob, or null when the format is unavailable. */
+    fun blobId(bytes: ByteArray): String? = null
 }
 
 /** One path mutation included in a single history commit. */

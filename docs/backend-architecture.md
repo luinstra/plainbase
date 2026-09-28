@@ -10,7 +10,8 @@ changes are merged. The reviewed source stamp records the pre-commit base plus t
 | --- | --- |
 | Content bytes | Local configured root directories own Markdown/assets, or the object bucket owns them in object mode. `DATA_DIR/mirror` and `mirror-state` are derived object-mode caches. |
 | Identity and application state | `DATA_DIR/plainbase.db` owns `id_map`, materialization, retirement history, aliases, users/tokens/sessions, roles, audit and proposal workflow. A materialized page ID also lives in frontmatter; an unmaterialized binding is DB-only and cannot be reconstructed with the same permalink after DB loss. Back up the content authority and this database; see [backup guidance](operating-plainbase.md#backups). |
-| Search | `DATA_DIR/search.db` is raw-JDBC/FTS5 derived state and is deletable/rebuildable; [ADR-0004](decisions/0004-raw-jdbc-for-derived-search-db.md) is the boundary. |
+| Search | `DATA_DIR/search.db` is raw-JDBC/FTS5 derived state and is deletable/rebuildable from the content tree; [ADR-0004](decisions/0004-raw-jdbc-for-derived-search-db.md) is the boundary. |
+| Discussions | `DATA_DIR/discussions.db` is raw-JDBC derived state and is deletable/rebuildable at boot from `.plainbase/discussions/` in each editable local root; those files are the source of truth. Object-mode, read-only and non-local roots do not support discussions. |
 | Published reads | `IndexBuilder.current` is the atomically published immutable `PageIndex`. It is a serving snapshot, not a transaction spanning the app DB, search DB and content source. |
 | History | Git and object-mode history bundles preserve optional commit history, which cannot be rebuilt from current content alone. They do not replace current content authority. See [Git ADR](decisions/0006-git-via-system-binary-not-jgit.md), [object-storage ADR](decisions/0010-object-storage-backend.md) and [operating guidance](operating-plainbase.md). |
 
@@ -49,7 +50,8 @@ workload-specific results, not edit/search or large/multi-root guarantees; see t
 ## Startup, recovery and shutdown
 
 Startup proceeds in this order: configuration/filesystem gates; root availability/history preparation; the `DATA_DIR`
-lock; app database and resource construction; object hydration/history restore; watcher setup; initial rebuild and
+lock; app database and resource construction; object hydration/history restore; discussion boot reconciliation and strict
+reparse; watcher setup; initial rebuild and
 snapshot publication; dirty-page and applying-proposal reconciliation; then the shutdown hook immediately before the
 server starts. The implementation and ordering comments are in [`Application.kt`](../server/src/main/kotlin/com/plainbase/Application.kt)
 and [`GitBundleDr.kt`](../server/src/main/kotlin/com/plainbase/frameworks/git/GitBundleDr.kt).
@@ -72,9 +74,10 @@ pending indefinitely. Production grace/default policy is unchanged; see the
 
 - Object mode remains one instance per bucket; `DataDirLock` only excludes a shared local `DATA_DIR`. See [the deployment rule](deploy/object-storage.md#one-instance-per-bucket-the-v1-rule).
 - Rebuilds/publication are serialized in [`IndexBuilder`](../server/src/main/kotlin/com/plainbase/domain/service/IndexBuilder.kt); `search.db` has one synchronized writer and bounded reader pool in [`SearchDb`](../server/src/main/kotlin/com/plainbase/frameworks/search/SearchDb.kt).
+- `discussions.db` has one synchronized writer and a bounded reader pool in [`DiscussionDb`](../server/src/main/kotlin/com/plainbase/frameworks/discussion/DiscussionDb.kt); [`JdbcDiscussionRows`](../server/src/main/kotlin/com/plainbase/frameworks/discussion/JdbcDiscussionRows.kt) provides discussion-row operations over it.
 - `/healthz` is unauthenticated liveness: `status` stays `ok` while per-root `available`, watcher `coverage` and `limbo` report different facts. Root unavailability is sticky until restart; watcher coverage can recover.
 - Enforced roles are global: VIEWER reads, EDITOR also edits/creates, and ADMIN also approves/manages. Agent READ_ONLY maps to VIEWER; PROPOSE/COMMIT map to EDITOR and cannot approve. Token mode is re-read per guarded call. These are not page ACLs; `auth.mode=off` bypasses the role matrix, while root editability still gates writes.
-- Search is embedded FTS5. Search engine totals/ranking/snippets can lag the current page snapshot; the 256-entry FTS rebuild batch bounds queued JDBC entries/flushes, not total retirement work or a cumulative SQLite-variable count. See [FTS5 operations](operating-plainbase.md#searchdb-is-derived-state).
+- Search is embedded FTS5. Search engine totals/ranking/snippets can lag the current page snapshot; the 256-entry FTS rebuild batch bounds queued JDBC entries/flushes, not total retirement work or a cumulative SQLite-variable count. See [FTS5 operations](operating-plainbase.md#searchdb-and-discussionsdb-are-derived-state).
 - Meilisearch, OCR and embeddings remain future/out-of-process proposals; current search is FTS5.
 
 ## REST and MCP ownership

@@ -220,20 +220,37 @@ wrapped in those transactions and can coexist with a reserved lock, while overla
 delay a writer's commit. If a reindex or large publication is in flight, wait for it to finish and retry after
 contention clears.
 
-The app DB is not WAL; the derived `search.db` uses WAL and has a separate busy timeout.
+The app DB is not WAL; the derived `search.db` and `discussions.db` use WAL and have separate busy timeouts.
 
-## `search.db` is derived state
+## `search.db` and `discussions.db` are derived state
 
 `DATA_DIR/search.db` is rebuildable from the content tree at any time and **deletable with zero data
 loss** - there are no migrations, ever. Delete it and reindex (or just restart, or let the next
 content change trigger a rebuild): the engine-truth diff self-heals from an empty index back to the
-full corpus. Only the content tree and `DATA_DIR/plainbase.db` carry durable state.
+full corpus. `DATA_DIR/discussions.db` is also derived and deletable with zero data loss. Boot rebuilds
+it from `.plainbase/discussions/` in each editable local root. Those discussion files are the source of
+truth, alongside the rest of each content root. Object-mode, read-only and non-local roots do not
+support discussions. In local mode the configured content roots are authoritative; in object mode the
+bucket is authoritative. `DATA_DIR/plainbase.db` carries the other durable state.
 
-One clarification on the delete-and-rebuild path: **stop the server before deleting `search.db`**
-(or just restart afterwards - a fresh boot recreates and repopulates it). Deleting the file under a
-running server unlinks it while the server's open connections keep reading and writing the unlinked
+### Discussion index unsynced state
+
+When an error prevents the discussion index from staying current, the server logs an ERROR line such
+as `discussion index for root 'docs' became unsynced: ...`. Discussion reads continue from the
+authoritative files while the index recovers. Recovery retries automatically with backoff capped at
+300 seconds. Creating a new discussion is refused until the index recovers; the caller must retry. To reset
+manually, stop Plainbase and delete
+`DATA_DIR/discussions.db`; boot rebuilds it from the discussion files.
+
+If cleanup after a committed comment purge fails, a `.pbpurge.*` file may retain the removed bytes.
+Boot preserves unresolved purge files. Stop the service and inspect the file's content and history
+before removing a residual confirmed to be unneeded.
+
+One clarification on the delete-and-rebuild path: **stop the server before deleting either derived
+database** (or restart afterwards - a fresh boot recreates and rebuilds them). Deleting a database under
+a running server unlinks it while the server's open connections keep reading and writing the unlinked
 copy, so the on-disk file only reappears on restart. On a *running* server, use
-`POST /api/v1/admin/reindex` for a rebuild-in-place instead - never a live delete.
+`POST /api/v1/admin/reindex` to rebuild search in place instead of deleting `search.db`.
 
 ## Multiple roots: what happens when one is not there
 
@@ -452,10 +469,12 @@ directory.** Which stores those are depends on `storage.backend`:
 
 Back up `DATA_DIR/plainbase.db` too, in EITHER mode: it holds durable identity bindings, retirement history and
 aliases as well as users, agent tokens, proposals, roles, sessions and the audit log - the one piece of `DATA_DIR`
-holding *real*, non-derived state. `DATA_DIR/search.db`
-needs no backup at all: it's fully [derived state](#searchdb-is-derived-state), rebuildable from the
-authoritative content at any time with `plainbase reindex` (and in object mode `DATA_DIR/mirror` /
-`DATA_DIR/mirror-state` are likewise derived and need none).
+holding *real*, non-derived state. `DATA_DIR/search.db` and `DATA_DIR/discussions.db` need no backup:
+both are fully [derived state](#searchdb-and-discussionsdb-are-derived-state). Search rebuilds from the content tree;
+discussions rebuild at boot from `.plainbase/discussions/` in each editable local root. Back up those
+discussion files with their content roots. Object-mode, read-only and non-local roots do not support
+discussions. In object mode `DATA_DIR/mirror` and `DATA_DIR/mirror-state`
+are likewise derived and need none.
 
 ### Object-storage backend (`storage.backend=object`)
 
@@ -605,6 +624,7 @@ bucket on the next boot). The authoritative content is the source of truth, so m
 - the directory itself (created on startup),
 - a fresh `plainbase.db`, created and migrated to the current schema,
 - a rebuilt, fully populated `search.db`,
+- a rebuilt `discussions.db` from `.plainbase/discussions/` in each editable local root,
 - the id of every page that carries `id:` in its frontmatter - those `/p/{root}/{id}` permalinks and
   citations keep working,
 - `redirect_from` aliases (re-derived from frontmatter),
@@ -708,7 +728,7 @@ Completion waits can also remain pending indefinitely when a collaborator or a s
 8-second `WARN` is a shutdown diagnostic; it is not a supervisor deadline and does not force Plainbase to return.
 
 A `shutdown wait: phase '…' exceeded its …ms forecast` warning identifies an incomplete phase. Current diagnostic inputs
-are 10s per watcher, 60s for the rebuild scheduler, 60s per unfinished Git-maintenance job, and 5s for each
+are 10s per watcher, 180s for the three schedulers, 60s per unfinished Git-maintenance job, and 5s for each
 transport/database/context/lock phase; HTTP uses 10s and DR uses 21min as described above. Pending construction adds a
 5s estimate. The initial aggregate is frozen at the first owner drain; each phase uses its own entry snapshot, so later
 maintenance work can change that phase's forecast without changing the initial aggregate. These are warning inputs,

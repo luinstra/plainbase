@@ -16,10 +16,12 @@ import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
+import com.plainbase.domain.service.PageReindexListener
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.ProposalAuthorLabeler
@@ -52,6 +54,48 @@ import kotlin.time.Instant
 
 /** Verifies index-only resolution and the serving projection's shared runtime provenance. */
 class IndexModuleWiringTest : FunSpec({
+
+    test("IndexModule passes page reindex listeners") {
+        withTempTree(seed = { root -> writePage(root, "docs/reindex.md", "# Reindex\n\nlistener wiring\n") }) { root ->
+            withTempTree(seed = {}) { dataDir ->
+                val config = ConfigLoader.fromEnv(
+                    mapOf("CONTENT_DIR" to root.toString(), "DATA_DIR" to dataDir.toString()),
+                )
+                val openers = ServerOpeners()
+                val inputs = prepareRootBootInputs(config, openers.openLocal)
+                val owner = ServerResourceOwner()
+                val observed = mutableListOf<Pair<RootName, String>>()
+                val listener = PageReindexListener { pageRoot, page -> observed += pageRoot to page.id.value }
+                val app = createOwnedTestKoinApplication(
+                    owner,
+                    listOf(
+                        module {
+                            single { config }
+                            single<PageReindexListener> { listener }
+                        },
+                        createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                        repositoryModule(owner),
+                        securityModule,
+                        createHistoryModule(config, inputs.history, owner),
+                        indexModule,
+                        module { single<SqlDriver> { DatabaseFactory.createInMemoryDriver() } },
+                    ),
+                )
+                try {
+                    inputs.signals.arm(app.koin.get<ObservationEpoch>()::broke)
+                    val builder = app.koin.get<IndexBuilder>()
+                    val snapshot = builder.rebuild()
+                    val expected = snapshot.pages.single { it.path == TreePath.require("docs/reindex.md") }
+
+                    builder.reindex(RootedPath(RootName.PRIMARY, expected.path))
+
+                    observed shouldBe listOf(RootName.PRIMARY to expected.id.value)
+                } finally {
+                    owner.close()
+                }
+            }
+        }
+    }
 
     test("the production module set resolves IndexBuilder (indexModule is installed)") {
         val config = ConfigLoader.fromEnv(emptyMap())

@@ -13,6 +13,7 @@ import com.plainbase.domain.discussion.Author
 import com.plainbase.domain.discussion.AuthorKind
 import com.plainbase.domain.discussion.CommentId
 import com.plainbase.domain.discussion.CommentRecord
+import com.plainbase.domain.discussion.DiscussionAssembly
 import com.plainbase.domain.discussion.DiscussionCodec
 import com.plainbase.domain.discussion.DiscussionId
 import com.plainbase.domain.discussion.DiscussionIndex
@@ -21,6 +22,7 @@ import com.plainbase.domain.discussion.DiscussionRead
 import com.plainbase.domain.discussion.DiscussionRecord
 import com.plainbase.domain.discussion.DiscussionStatus
 import com.plainbase.domain.discussion.DiscussionStore
+import com.plainbase.domain.discussion.EntriesRead
 import com.plainbase.domain.discussion.EntryName
 import com.plainbase.domain.discussion.EntryPut
 import com.plainbase.domain.discussion.FrontmatterExtras
@@ -848,8 +850,8 @@ private class GitWriterIndex : DiscussionIndex {
             }
         }
 
-    override fun publish(root: RootName, id: DiscussionId, read: DiscussionRead, markerChanged: Boolean) {
-        published[id] = read
+    override fun publish(root: RootName, id: DiscussionId, markerChanged: Boolean, read: () -> EntriesRead) {
+        published[id] = DiscussionAssembly.assemble(id, read())
         publishCount++
     }
 

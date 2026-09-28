@@ -14,6 +14,7 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
 import kotlin.io.path.deleteRecursively
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -71,6 +72,8 @@ class GitCliHistoryProvider(
      */
     private val claimedRepo: Boolean = false,
 ) : HistoryProvider {
+
+    private var objectFormatCache: String? = null
 
     override val enabled: Boolean = true
 
@@ -473,6 +476,99 @@ class GitCliHistoryProvider(
         if (!result.ok) return null
         val records = parseNameStatusRecords(result.stdout) ?: return null
         return records.filter { it.status == "D" && it.path.name.endsWith(".md") }.mapTo(mutableSetOf()) { it.path }
+    }
+
+    override fun headBlobs(dirs: List<TreePath>): Map<TreePath, String>? {
+        if (dirs.isEmpty()) return emptyMap()
+        val result = try {
+            exec.run(
+                NO_REPLACE_REFS + listOf("ls-tree", "-r", "-z", "--full-tree", "HEAD", "--") + dirs.map(repoPath),
+            )
+        } catch (_: Exception) {
+            return null
+        }
+        if (result.ok) return parseHeadBlobs(result.stdout)
+
+        val branch = try {
+            exec.run(listOf("symbolic-ref", "-q", "HEAD"))
+        } catch (_: Exception) {
+            return null
+        }
+        val branchName = branch.stdoutText.trim()
+        if (!branch.ok || !branchName.startsWith("refs/heads/") || branchName.length <= "refs/heads/".length) {
+            return null
+        }
+        val refs = try {
+            exec.run(listOf("for-each-ref", "--format=%(refname)", branchName))
+        } catch (_: Exception) {
+            return null
+        }
+        if (!refs.ok || refs.stdout.isNotEmpty()) return null
+        return emptyMap()
+    }
+
+    override fun blobId(bytes: ByteArray): String? {
+        val format = objectFormat()
+        val digest = when (format) {
+            "sha1" -> MessageDigest.getInstance("SHA-1")
+            "sha256" -> MessageDigest.getInstance("SHA-256")
+            else -> return null
+        }
+        val prefix = "blob ${bytes.size}\u0000".encodeToByteArray()
+        digest.update(prefix)
+        digest.update(bytes)
+        return digest.digest().toHexString()
+    }
+
+    private fun objectFormat(): String? = synchronized(this) {
+        objectFormatCache?.let { return@synchronized it }
+        val value = try {
+            val result = exec.run(NO_REPLACE_REFS + listOf("rev-parse", "--show-object-format"))
+            result.stdoutText.trim().takeIf { result.ok && it in SUPPORTED_OBJECT_FORMATS }
+        } catch (_: Exception) {
+            null
+        }
+        if (value != null) objectFormatCache = value
+        value
+    }
+
+    private fun parseHeadBlobs(output: ByteArray): Map<TreePath, String>? {
+        val blobs = linkedMapOf<TreePath, String>()
+        var start = 0
+        while (start < output.size) {
+            val end = findByte(output, 0, start, output.size)
+            if (end < 0) return null
+            if (end == start) return null
+            val tab = findByte(output, '\t'.code, start, end)
+            if (tab < 0) return null
+            val metadata = output.copyOfRange(start, tab).decodeToString()
+            val fields = metadata.split(' ')
+            if (fields.size != 3) return null
+            val mode = fields[0]
+            val type = fields[1]
+            val oid = fields[2]
+            val pathText = try {
+                output.copyOfRange(tab + 1, end).decodeToString(throwOnInvalidSequence = true)
+            } catch (_: CharacterCodingException) {
+                return null
+            }
+            val path = try {
+                TreePath.require(pathText)
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+            if (type == "blob" && mode in REGULAR_BLOB_MODES) {
+                if (!oid.matches(OBJECT_ID_PATTERN)) return null
+                if (blobs.put(path, oid) != null) return null
+            }
+            start = end + 1
+        }
+        return blobs
+    }
+
+    private fun findByte(bytes: ByteArray, value: Int, start: Int, end: Int): Int {
+        for (index in start until end) if (bytes[index].toInt() == value) return index
+        return -1
     }
 
     /**
@@ -955,6 +1051,9 @@ class GitCliHistoryProvider(
         // oracle. GitExecutor prepends its own PINNED_CONFIG `-c` flags, so extra leading `-c` args before the
         // subcommand are legal and precede it.
         private val NO_REPLACE_REFS = listOf("-c", "core.useReplaceRefs=false")
+        private val REGULAR_BLOB_MODES = setOf("100644", "100755")
+        private val SUPPORTED_OBJECT_FORMATS = setOf("sha1", "sha256")
+        private val OBJECT_ID_PATTERN = Regex("[0-9a-f]{40}|[0-9a-f]{64}")
 
         // The git version floor for the read path: `--diff-merges=first-parent` (in [FIRST_PARENT]) is only
         // a valid value since git 2.31.0 — that release taught `--diff-merges` the named convenience values

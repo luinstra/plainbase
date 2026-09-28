@@ -486,6 +486,7 @@ internal enum class ServerResourcePhase(val label: String, val service: Boolean)
     MAINTENANCE("git maintenance", true),
     DISASTER_RECOVERY("git bundle DR", true),
     OBJECT_TRANSPORT("object store transport", true),
+    DISCUSSION_DATABASE("discussion database", true),
     SEARCH_DATABASE("search database", true),
     APP_DATABASE("app database", true),
     KOIN_CONTEXT("Koin context", false),

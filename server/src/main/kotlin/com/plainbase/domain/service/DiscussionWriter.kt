@@ -564,24 +564,26 @@ class DiscussionWriter(
         mutation: Mutation,
         result: DiscussionWriteOutcome,
     ): DiscussionWriteOutcome {
-        var rootLoss: RootUnavailable? = null
         try {
-            val read = DiscussionAssembly.assemble(mutation.id, store.read(root, mutation.id))
-            if (read is DiscussionRead.Failed) {
-                logger.warn { "discussion read failed for root ${root.value}, discussion ${mutation.id.value}: ${read.cause}" }
+            index.publish(root, mutation.id, mutation.markerChanged) {
+                store.read(root, mutation.id).also { read ->
+                    if (read is EntriesRead.Failed) {
+                        logger.warn {
+                            "discussion pre-publish read failed for root ${root.value}, discussion ${mutation.id.value}: ${read.cause}"
+                        }
+                    }
+                }
             }
-            try {
-                index.publish(root, mutation.id, read, mutation.markerChanged)
-            } catch (failure: Exception) {
-                index.publishFailed(root, failure)
-            }
-            return result
         } catch (failure: RootUnavailable) {
-            rootLoss = failure
+            index.publishFailed(root, failure)
             throw failure
-        } finally {
-            rootLoss?.let { index.publishFailed(root, it) }
+        } catch (failure: InterruptedException) {
+            index.publishFailed(root, failure)
+            Thread.currentThread().interrupt()
+        } catch (failure: Exception) {
+            index.publishFailed(root, failure)
         }
+        return result
     }
 
     private fun now(): Instant = Instant.fromEpochMilliseconds(clock.now().toEpochMilliseconds())

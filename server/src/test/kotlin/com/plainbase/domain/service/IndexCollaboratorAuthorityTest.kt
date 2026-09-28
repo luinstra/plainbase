@@ -1156,7 +1156,8 @@ class IndexCollaboratorAuthorityTest : FunSpec({
         }
         val commentAndDecoyFixture = """
             package com.plainbase.domain.service
-            val schemaDecoy = "private val frontmatterParser: FrontmatterParser? fun read(root: Root, store: String, history: HistoryProvider): SourceScan"
+            val schemaDecoy = "private val frontmatterParser: FrontmatterParser? " +
+                "fun read(root: Root, store: String, history: HistoryProvider): SourceScan"
             private class Sibling(private val frontmatterParser: FrontmatterParser?) {
                 private fun read(root: Root, store: String, history: HistoryProvider): SourceScan = TODO()
             }
@@ -4406,16 +4407,21 @@ private class LocalValueOrderFixture {
 }
 
 private val EXPECTED_SERVICE_PATHS = setOf(
-    "AbsenceClassifier.kt", "AdminFacade.kt", "AdoptionPass.kt", "AgentDirectCommitDecision.kt", "ApiTokenService.kt",
+    "AbsenceClassifier.kt", "AdminFacade.kt", "AdoptionPass.kt", "AgentDirectCommitDecision.kt", "AnchorMatches.kt",
+    "AnchorPrecompute.kt", "ApiTokenService.kt",
     "ApplyDisposition.kt", "BindingVisibility.kt", "CanonicalUrlBuilder.kt", "CitationFactory.kt", "ContentWriteMonitor.kt",
-    "DiscussionIdProvider.kt", "DiscussionWriter.kt", "FrontmatterPatcher.kt",
+    "DiscussionFullReads.kt", "DiscussionIdProvider.kt", "DiscussionPageResolver.kt", "DiscussionPublicationSignal.kt",
+    "DiscussionReadFailed.kt",
+    "DiscussionReads.kt", "DiscussionReparseExecutor.kt", "DiscussionReparser.kt", "DiscussionSyncState.kt",
+    "DiscussionWriter.kt", "FrontmatterPatcher.kt",
     "IdProvider.kt", "IdResolution.kt", "IndexBuilder.kt", "IndexIdentityAssignments.kt", "IndexInputs.kt",
     "IndexSnapshotAssembler.kt", "IndexSourceReader.kt",
     "LinkChecker.kt",
     "LinkResolver.kt", "LoginService.kt", "MutatingFacade.kt", "PageIdentityService.kt", "PageRootResolver.kt",
     "PageService.kt", "PolicyService.kt", "ProposalAuthorLabeler.kt", "ProposalBaseReader.kt", "ProposalFacade.kt",
     "ProposalIdProvider.kt", "ProposalService.kt", "ReadFacade.kt", "RebuildScheduler.kt", "RootLossClassifier.kt",
-    "SearchIndexer.kt", "SearchService.kt", "SectionSplitter.kt", "SessionService.kt", "SetupService.kt", "TreeBuilder.kt",
+    "SearchIndexer.kt", "SearchService.kt", "SectionSplitter.kt", "SessionService.kt", "SetupService.kt",
+    "SyncedDiscussionIndex.kt", "TreeBuilder.kt",
     "UnifiedDiff.kt", "UrlAliasRegistry.kt", "UuidV7DiscussionIdProvider.kt", "UuidV7IdProvider.kt",
     "UuidV7ProposalIdProvider.kt", "WriteClass.kt",
     "WritePipeline.kt",
@@ -4432,6 +4438,7 @@ private val EXPECTED_INDEX_BUILDER_FIELDS = mapOf(
     "citations" to "com.plainbase.domain.service.CitationFactory",
     "registeredRoots" to "java.util.Set",
     "listeners" to "java.util.List",
+    "pageListeners" to "java.util.List",
     "searchIndexer" to "com.plainbase.domain.service.SearchIndexer",
     "availability" to "com.plainbase.domain.root.RootAvailability",
     "retirements" to "com.plainbase.domain.repository.RetirementRepository",
@@ -4458,6 +4465,7 @@ private val EXPECTED_SERVICE_NON_CLASS_DECLARATIONS = setOf(
     "ProposalService.kt|fun syntheticEmail",
     "ProposalService.kt|fun toGuard",
     "ProposalService.kt|fun toSummaryGuard",
+    "DiscussionReads.kt|fun failedSummary",
     "UnifiedDiff.kt|fun unifiedDiff",
     "UnifiedDiff.kt|fun replaceEverythingScript",
     "UnifiedDiff.kt|fun finalNewlineOnlyScript",
@@ -4489,6 +4497,9 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "AgentDirectCommitDecision.kt|AgentWriteDecision", "AgentDirectCommitDecision.kt|AgentWriteDecision.DirectCommit",
     "AgentDirectCommitDecision.kt|AgentWriteDecision.DegradeToProposal", "AgentDirectCommitDecision.kt|CommitGlob",
     "AgentDirectCommitDecision.kt|CommitGlob.Companion",
+    "AnchorMatches.kt|DiscussionAnchorMatch", "AnchorMatches.kt|AnchorMatches", "AnchorMatches.kt|AnchorMatches.Companion",
+    "AnchorPrecompute.kt|PageReindexListener", "AnchorPrecompute.kt|AnchorPrecompute",
+    "AnchorPrecompute.kt|AnchorPrecompute.Companion", "DiscussionPublicationSignal.kt|DiscussionPublicationSignal",
     "ApiTokenService.kt|ApiTokenService", "ApiTokenService.kt|ApiTokenService.Companion",
     "ApplyDisposition.kt|ApplyDisposition", "ApplyDisposition.kt|ApplyDisposition.Applied",
     "ApplyDisposition.kt|ApplyDisposition.Conflicted",
@@ -4497,6 +4508,28 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "CanonicalUrlBuilder.kt|CanonicalUrlBuilder.Result", "CanonicalUrlBuilder.kt|CanonicalUrlBuilder.Sibling",
     "CanonicalUrlBuilder.kt|CanonicalUrlBuilder.Collision", "CitationFactory.kt|CitationFactory",
     "ContentWriteMonitor.kt|ContentWriteMonitor",
+    "DiscussionFullReads.kt|DiscussionFullReads",
+    "DiscussionPageResolver.kt|DiscussionPageResolution", "DiscussionPageResolver.kt|DiscussionPageResolution.Match",
+    "DiscussionPageResolver.kt|DiscussionPageResolution.Unavailable", "DiscussionPageResolver.kt|DiscussionPageResolution.Orphaned",
+    "DiscussionPageResolver.kt|DiscussionPageResolution.Found", "DiscussionPageResolver.kt|DiscussionPageResolver",
+    "DiscussionReadFailed.kt|DiscussionReadFailed",
+    "DiscussionReads.kt|DiscussionFacts", "DiscussionReads.kt|DiscussionFacts.Missing",
+    "DiscussionReads.kt|DiscussionFacts.Unknown", "DiscussionReads.kt|DiscussionFacts.Known",
+    "DiscussionReads.kt|DiscussionSummary", "DiscussionReads.kt|PagedDiscussionSummaries",
+    "DiscussionReads.kt|DetailPage", "DiscussionReads.kt|DetailPage.Absent", "DiscussionReads.kt|DetailPage.Content",
+    "DiscussionReads.kt|DiscussionReads", "DiscussionReads.kt|DiscussionReads.Companion",
+    "DiscussionReparseExecutor.kt|DiscussionReparseExecutor", "DiscussionReparseExecutor.kt|DiscussionReparseExecutor.RootTaskState",
+    "DiscussionReparseExecutor.kt|DiscussionReparseExecutor.RecoverySlot",
+    "DiscussionReparseExecutor.kt|DiscussionReparseExecutor.RecoveryState",
+    "DiscussionReparseExecutor.kt|DiscussionReparseExecutor.Companion",
+    "DiscussionReparser.kt|ReparseOutcome", "DiscussionReparser.kt|ReparseOutcome.Applied",
+    "DiscussionReparser.kt|ReparseOutcome.Failed", "DiscussionReparser.kt|ReparseRootResult",
+    "DiscussionReparser.kt|ReparseRootResult.Complete", "DiscussionReparser.kt|ReparseRootResult.Failed",
+    "DiscussionReparser.kt|DiscussionReparser",
+    "DiscussionReparser.kt|DiscussionReparser.Companion",
+    "DiscussionSyncState.kt|RootSync", "DiscussionSyncState.kt|RootSync.Synced",
+    "DiscussionSyncState.kt|RootSync.Unsynced", "DiscussionSyncState.kt|DiscussionSyncState",
+    "SyncedDiscussionIndex.kt|SyncedDiscussionIndex",
     "DiscussionWriter.kt|DiscussionCommand", "DiscussionWriter.kt|DiscussionCommand.Start",
     "DiscussionWriter.kt|DiscussionCommand.AddComment", "DiscussionWriter.kt|DiscussionCommand.EditComment",
     "DiscussionWriter.kt|DiscussionCommand.RetractComment", "DiscussionWriter.kt|DiscussionCommand.SetStatus",

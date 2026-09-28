@@ -39,6 +39,20 @@ class ServerResourceOwnerTest : FunSpec({
         borrowedCloseCount.get() shouldBe 1
     }
 
+    test("the discussion database closes after the scheduler and before search") {
+        val owner = ServerResourceOwner()
+        val closed = ConcurrentLinkedQueue<String>()
+        val discussion = ServerResourcePhase.valueOf("DISCUSSION_DATABASE")
+
+        owner.own(ServerResourcePhase.SCHEDULER, "scheduler") { closed += it }
+        owner.own(discussion, "discussion") { closed += it }
+        owner.own(ServerResourcePhase.SEARCH_DATABASE, "search") { closed += it }
+
+        owner.close()
+
+        closed.toList() shouldContainExactly listOf("scheduler", "discussion", "search")
+    }
+
     test("should reject self-drain before sealing and roll back acquired entries on construction failure") {
         val owner = ServerResourceOwner()
         val closeCount = AtomicInteger()

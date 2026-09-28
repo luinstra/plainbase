@@ -24,6 +24,46 @@ class PlacementTest : FunSpec({
         Placement.of(oldPath, 5, page) shouldBe Placement.Heading("notes")
     }
 
+    test("placement walks headings only on the changed arm") {
+        var reads = 0
+        val headings = object : AbstractList<Heading>() {
+            override val size: Int = 10_000
+
+            override fun get(index: Int): Heading {
+                reads++
+                return when (index) {
+                    size - 2 -> Heading("a", 1, "A")
+                    size - 1 -> Heading("notes", 2, "Notes")
+                    else -> Heading("section-$index", 1, "Section $index")
+                }
+            }
+        }
+        val raw = "# A\n\n## Notes\n\nquote\n".encodeToByteArray()
+        val start = raw.decodeToString().indexOf("quote")
+        val anchor = Anchor.Quote(
+            "sha256:${"0".repeat(64)}",
+            null,
+            QuoteCapture(
+                "quote",
+                "",
+                "",
+                start.toLong(),
+                (start + 5).toLong(),
+                0,
+                4,
+                AnchorSelection.NARROWED,
+                oldPath,
+            ),
+        )
+
+        Reanchor.match(anchor, ReanchorPage.of(raw, headings)) shouldBe AnchorMatch.Exact(MatchRange(start, start + 5))
+        reads shouldBe 0
+
+        val changedPage = ReanchorPage.of("# A\n\n## Notes\n\nnew text\n".encodeToByteArray(), headings)
+        Reanchor.match(anchor, changedPage) shouldBe AnchorMatch.Changed(Placement.Heading("notes"))
+        reads shouldBe 10_000
+    }
+
     test("a line past eof is clamped") {
         val page = ReanchorPage.of("Short.\n".encodeToByteArray(), emptyList())
         Placement.of(HeadingPath.EMPTY, 9, page) shouldBe Placement.Line(1)

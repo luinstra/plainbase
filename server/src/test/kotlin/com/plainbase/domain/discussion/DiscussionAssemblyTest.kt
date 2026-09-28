@@ -85,6 +85,41 @@ class DiscussionAssemblyTest : FunSpec({
         DiscussionAssembly.assemble(DISCUSSION_ID, EntriesRead.Present(entries, 1))
         entries.forEach { entry -> shouldThrow<IllegalStateException> { entry.take() } }
     }
+
+    test("retain keeps only the window and assembly precedence is unchanged") {
+        val ids = listOf(
+            CommentId.require("01900000-0000-7000-8000-000000000003"),
+            CommentId.require("01900000-0000-7000-8000-000000000004"),
+            CommentId.require("01900000-0000-7000-8000-000000000005"),
+        )
+        val entries = listOf(markerEntry()) + ids.map { id ->
+            val record = commentRecord().copy(id = id)
+            raw(EntryName.Comment(id), DiscussionCodec.encodeComment(record))
+        }
+        val seen = mutableListOf<CommentId>()
+        val result = DiscussionAssembly.assemble(
+            DISCUSSION_ID,
+            EntriesRead.Present(entries, 3),
+            retain = { false },
+            onComment = { seen += (it.name as EntryName.Comment).id },
+        ).shouldBeInstanceOf<DiscussionRead.Ok>()
+
+        result.files.comments shouldBe emptyList()
+        seen shouldBe ids
+        entries.forEach { entry -> shouldThrow<IllegalStateException> { entry.take() } }
+
+        val incompleteId = DiscussionId.require("01900000-0000-7000-8000-000000000006")
+        val badComment = raw(
+            EntryName.Comment(COMMENT_ID),
+            DiscussionCodec.encodeComment(commentRecord()),
+        )
+        DiscussionAssembly.assemble(
+            incompleteId,
+            EntriesRead.Present(listOf(badComment), 1),
+            retain = { false },
+        ) shouldBe DiscussionRead.Incomplete(listOf(EntryName.Comment(COMMENT_ID).fileName))
+        shouldThrow<IllegalStateException> { badComment.take() }
+    }
 })
 
 private const val DISCUSSION_TEXT = "01900000-0000-7000-8000-000000000001"

@@ -13,11 +13,16 @@ import com.plainbase.domain.root.BindingStatus
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.DetachedRoots
 import com.plainbase.domain.root.ObservationEpoch
+import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.service.AnchorPrecompute
+import com.plainbase.domain.service.DiscussionPublicationSignal
+import com.plainbase.domain.service.DiscussionReparseExecutor
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.WritePipeline
@@ -35,10 +40,13 @@ import com.plainbase.frameworks.config.ConfigValuePolicy
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.TransportSecurityPolicy
+import com.plainbase.frameworks.discussion.DiscussionBoot
 import com.plainbase.frameworks.filesystem.DataDirLock
+import com.plainbase.frameworks.filesystem.DiscussionWatcher
 import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.createContentModule
+import com.plainbase.frameworks.koin.createDiscussionModule
 import com.plainbase.frameworks.koin.createHistoryModule
 import com.plainbase.frameworks.koin.createRepositoryModule
 import com.plainbase.frameworks.koin.createRestModule
@@ -46,6 +54,7 @@ import com.plainbase.frameworks.koin.createSearchModule
 import com.plainbase.frameworks.koin.indexModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.lifecycle.GitMaintenanceTasks
 import com.plainbase.frameworks.lifecycle.GracefulShutdown
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
@@ -62,6 +71,7 @@ import com.plainbase.frameworks.runtime.RootStores
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
+import com.plainbase.frameworks.security.ProxyCsrf
 import com.plainbase.frameworks.spike.NativeSpike
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.koin.core.Koin
@@ -87,7 +97,7 @@ fun main(args: Array<String>) {
         "reindex" -> exitProcess(ReindexCommand.runAsMain(args.drop(1), output))
         "admin" -> exitProcess(AdminCommand.runAsMain(args.drop(1), output))
         "root" -> exitProcess(RootCommand.runAsMain(args.drop(1), output))
-        // Hidden (not in the usage line): the credentialed C0 object-store smoke - operator-run, never CI.
+        // Hidden (not in the usage line): the credentialed object-store smoke - operator-run, never CI.
         "s3-smoke" -> exitProcess(S3SmokeCommand.runAsMain(args.drop(1), output))
         null, "serve" -> serve(output)
         else -> {
@@ -154,10 +164,11 @@ private fun runOwnedServer(
             indexModule,
             checkpointModule,
             createSearchModule(runOpeners.openSearch, control.closeSearch, resources),
+            createDiscussionModule(resources),
             createRestModule(resources, control.afterRouteContextBuilt, control.buildRouteContext),
         )
         val koin = app.koin
-        // THE BOOT GATE, consumed in STAGES (C5 S1.7). The gate itself - `evaluateBootGate` - is the ONE function
+        // THE BOOT GATE, consumed in stages. The gate itself - `evaluateBootGate` - is the ONE function
         // `plainbase root` also runs, over the candidate roots.conf it is about to write, so a refusal added to
         // boot lands in the CLI for free and neither can drift from the other.
         //
@@ -184,7 +195,7 @@ private fun runOwnedServer(
         val historySelection = bootInputs.history
         // Rev-3.4 DR nudge: an object boot that survives the gate check with git DISABLED (`git.enabled`
         // unset/false) has no commit-grained history, so name the exposure ONCE (backups are operator-owned).
-        // Since C5, `git.enabled=true` in object mode wires a real GitCliHistoryProvider + bundle DR, so this
+        // `git.enabled=true` in object mode wires a real GitCliHistoryProvider + bundle DR, so this
         // WARN no longer fires unconditionally on every object boot - only the git-disabled ones.
         objectModeGitDisabledWarning(config, historySelection.byRoot.getValue(bootInputs.registry.primary.name))?.let {
             logger.warn { it }
@@ -218,7 +229,7 @@ private fun runOwnedServer(
             if (config.storage.backend == StorageBackend.OBJECT) koin.get<ObjectContentStore>()
             val stores = koin.get<RootStores>()
             val historyProviders = koin.get<HistoryProviders>()
-            // Multi-root C2 boot guard (ADR-0011 D1/D15): bindings under roots absent from the config
+            // Multi-root boot guard (ADR-0011 D1/D15): bindings under roots absent from the config
             // WARN; a nonempty id_map ENTIRELY disjoint from the config refuses to serve. The driver
             // and post-lock content/history modules are resolved before this guard so their shared
             // instances are ready for the remainder of startup; all resource-bearing resolution stays here,
@@ -241,11 +252,11 @@ private fun runOwnedServer(
             // correctly. The first LIST is also the R16 fail-closed TLS/signature self-check; its refusal
             // surfaces via the same deterministic error channel and status-1 refusal path as the other gates.
             //
-            // C5: when git is enabled, a bundle-DR restore runs strictly BEFORE hydrate, and the boot
+            // When git is enabled, a bundle-DR restore runs strictly BEFORE hydrate, and the boot
             // reconcile strictly AFTER - both in this same lock region, hydrate/hydrate's mirror walk. Nested
             // behind `config.git.enabled == true` so a git-DISABLED object boot never constructs `GitBundleDr`
             // (the R9 lazy-wiring discipline: git-disabled object mode must stay byte-identical to the
-            // hydrate-only C4 boot).
+            // hydrate-only boot).
             hydrateObjectMode(config, koin, bootInputs.history.objectHistory, output, control)
             val now = Clock.System.now()
             // Startup-time prune, INSIDE the lock so no other process races the DB: drop dead session/setup-token
@@ -255,7 +266,7 @@ private fun runOwnedServer(
             // A4b: load-or-generate the proxy-CSRF HMAC server key NOW - inside the lock - so a concurrent boot can never
             // race a double-generate into app_meta. Resolving the ProxyCsrf single forces the key load here rather
             // than relying on the lazy RouteContext resolution timing.
-            koin.get<com.plainbase.frameworks.security.ProxyCsrf>()
+            koin.get<ProxyCsrf>()
             // A4a: on an empty / no-enabled-admin builtin DB, emit ONLY a NON-SECRET hint - NEVER a token on
             // the boot path (stdout/stderr are the scraped log under docker/systemd). The secret comes ONLY from the CLI.
             // Reads `countEnabledAdmins` only AFTER the lock is held + validated.
@@ -277,6 +288,19 @@ private fun runOwnedServer(
                     resources.own(ServerResourcePhase.SCHEDULER, it) { scheduler -> scheduler.close() }
                 }
             }
+            resources.construct("discussion boot") { koin.get<DiscussionBoot>().run() }
+            val discussionReparseExecutor = resources.construct("discussion re-parse executor") {
+                koin.get<DiscussionReparseExecutor>().also { executor ->
+                    resources.own(ServerResourcePhase.SCHEDULER, executor) { it.close() }
+                    executor.start()
+                }
+            }
+            resources.construct("discussion anchor pre-compute") {
+                koin.get<AnchorPrecompute>().also { precompute ->
+                    resources.own(ServerResourcePhase.SCHEDULER, precompute) { it.close() }
+                    koin.get<DiscussionPublicationSignal>().attach(precompute)
+                }
+            }
             // ONE watcher per AVAILABLE root, all feeding the ONE debounced scheduler. The scheduler stays root-BLIND
             // and needs no change: a rebuild is a whole-corpus pass, so a vanished root's queued events are harmless
             // (the next pass's probe skips it), and the root on each closure is carried for LOGGING only. A root that
@@ -294,7 +318,7 @@ private fun runOwnedServer(
             //    over a host-wide kernel limit, stickily, until a restart that only re-registers, re-fails and
             //    re-marks. So it lands in the non-sticky convergence holder, flips back on its own, and reaches the
             //    operator through `/healthz` rather than through an outage.
-            //  - onBreak is the C2 seam, and it is a THIRD kind of fact again: a GAP in the observation. A dropped-event
+            //  - onBreak is the seam, and it is a THIRD kind of fact again: a GAP in the observation. A dropped-event
             //    storm, a subtree that stopped being watched, a key that died under a directory still standing, a tree
             //    swapped out by a deploy - each one means this watcher cannot honestly say it has been watching without
             //    interruption, and an observation epoch is the only thing in the system that may turn "the page is not
@@ -307,7 +331,7 @@ private fun runOwnedServer(
                 .filter { availability.current().isAvailable(it.name) }
                 .map { root ->
                     control.onWatcherRegistration(root.name)
-                    // Installing the watcher is what makes an epoch EARNABLE here, so it is what declares it (C2), and
+                    // Installing the watcher is what makes an epoch EARNABLE here, so it is what declares it, and
                     // an object-backed main declares it too - the rebuild is what withholds EPOCH from a backend whose
                     // watch is a poller. A root with no watcher earns nothing, which is the honest floor: two scans with
                     // an `rm` between them and two scans with an unmounted submount between them are the same pair of
@@ -326,7 +350,25 @@ private fun runOwnedServer(
                             .also { watcher -> control.onWatcherAcquired(root.name, watcher) }
                     }
                 }
-            val routeContext = koin.get<com.plainbase.frameworks.ktor.RouteContext>()
+            val discussionWatcherRoots = watcherRoots(koin.get(), availability)
+            val discussionRootByPath = discussionWatcherRoots.associate { root ->
+                requireNotNull(root.localPath).toAbsolutePath().normalize() to root.name
+            }
+            resources.construct("discussion watcher") {
+                DiscussionWatcher.start(
+                    roots = discussionWatcherRoots.map { requireNotNull(it.localPath) },
+                    sinkFor = { path ->
+                        val normalized = path.toAbsolutePath().normalize()
+                        val root = requireNotNull(discussionRootByPath[normalized]) {
+                            "no discussion root for watcher path $normalized"
+                        }
+                        discussionReparseExecutor.sinkFor(root)
+                    },
+                ).also { watcher ->
+                    resources.own(ServerResourcePhase.WATCHERS, watcher) { it.close() }
+                }
+            }
+            val routeContext = koin.get<RouteContext>()
             control.onRuntimeContext(routeContext)
             val server = resources.construct("HTTP server") {
                 control.createHttpServer(config, routeContext).also { server ->
@@ -349,8 +391,8 @@ private fun runOwnedServer(
                 resources.steps(
                     mapOf(
                         ServerResourcePhase.HTTP to KtorServer.STOP_BOUND_MILLIS,
-                        ServerResourcePhase.WATCHERS to watchers.size * ContentStore.WATCH_CLOSE_BOUND_MILLIS,
-                        ServerResourcePhase.SCHEDULER to ExecutorAlarm.CLOSE_BOUND_MILLIS,
+                        ServerResourcePhase.WATCHERS to (watchers.size + 1) * ContentStore.WATCH_CLOSE_BOUND_MILLIS,
+                        ServerResourcePhase.SCHEDULER to 3 * ExecutorAlarm.CLOSE_BOUND_MILLIS,
                         ServerResourcePhase.DISASTER_RECOVERY to GitBundleDr.CLOSE_BOUND_MILLIS,
                     ),
                 ),
@@ -359,7 +401,7 @@ private fun runOwnedServer(
                 managesWarningPhases = false,
             )
             try {
-                // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand. The
+                // Full scan at startup builds the snapshot; the rescan route rebuilds on demand. The
                 // rebuild also self-heals the index for any page left dirty by a prior interrupted save.
                 control.initialRebuild(builder)
                 // PB-WRITE-1 fix H: write-ahead recovery of a prior interrupted save, after the index is whole
@@ -383,6 +425,13 @@ private fun runOwnedServer(
         }
     } finally {
         resources.close()
+    }
+}
+
+internal fun watcherRoots(registry: RootRegistry, availability: RootAvailability): List<Root> {
+    val snapshot = availability.current()
+    return registry.roots.filter { root ->
+        root.editable && root.backend is RootBackend.Local && snapshot.isAvailable(root.name)
     }
 }
 
@@ -543,7 +592,7 @@ private fun rethrowError(failure: Throwable) {
 }
 
 /**
- * How `serve()` CONSUMES the gate, in the order it has always emitted (C5 S1.7). Every [BootRefusal.Kind]
+ * How `serve()` CONSUMES the gate, in the order it has always emitted. Every [BootRefusal.Kind]
  * belongs to exactly one stage, and `BootRefusalLedgerTest` fails the build if a NEW kind belongs to none -
  * a refusal the gate produces and boot silently ignores would be the worst of both worlds.
  *
@@ -599,7 +648,7 @@ data class BootGate(val refusals: List<BootRefusal>, val verdicts: List<RootGate
 
 /**
  * THE boot gate. NOT a list of the checks `serve()` runs - it IS the code `serve()` runs, and `plainbase root`
- * runs it too, over the candidate config it is about to write (C5 D-C5-17). That is the whole mechanism: the
+ * runs it too, over the candidate config it is about to write. That is the whole mechanism: the
  * CLI cannot forget an item on a list it does not keep, and a check added here lands in the CLI for free.
  *
  * Every stage is evaluated (NO short-circuit) so a caller can DIFF two configs' refusal sets - a baseline that
@@ -711,9 +760,9 @@ fun bootGateFor(config: PlainbaseConfig): BootGate {
 }
 
 /**
- * The C2 boot guard's serve() shape (ADR-0011 D15): evaluates the pure [DetachedRoots] verdict,
+ * The multi-root boot guard's serve() shape (ADR-0011 D15): evaluates the pure [DetachedRoots] verdict,
  * logs the partial-detachment WARN itself, and returns the fatal refusal text (or null to serve).
- * A synthesized legacy config runs it with configured = {main}, and every pre-C2 DB migrates to
+ * A synthesized legacy config runs it with configured = {main}, and every prior DB migrates to
  * all-'main' rows, so it is trivially Clean there. The remediation is config-first, then TARGETED
  * and backup-first - it must never advise deleting plainbase.db, which also holds the security and
  * review truth (users, sessions, API tokens, roles, proposals, the audit log).

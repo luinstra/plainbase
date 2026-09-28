@@ -119,6 +119,43 @@ class DiscussionGitCommitNativeTest {
             }
         }
     }
+
+    @Test
+    fun headBlobsListsCommittedFilesAndVerifiesAnUnbornHead() {
+        withGitNative { root, home ->
+            val exec = GitExecutor(root, home)
+            val provider = nativeProvider(exec, root, home)
+            provider.prepare()
+            val directory = TreePath.require(".plainbase/discussions/01900000-0000-7000-8000-000000000021")
+            assertEquals(emptyMap(), provider.headBlobs(listOf(directory)))
+
+            val path = directory.resolveChild("discussion.md")
+            provider.commit(path, "native boot marker\n".encodeToByteArray())
+
+            val blobs = provider.headBlobs(listOf(directory))
+            assertEquals(1, blobs?.size)
+            assertTrue(blobs?.containsKey(path) == true)
+        }
+    }
+
+    @Test
+    fun blobIdEqualsHashObjectForSha1AndSha256Repositories() {
+        val bytes = "native blob identity\n".encodeToByteArray()
+        withGitNative { root, home ->
+            val exec = GitExecutor(root, home)
+            val provider = nativeProvider(exec, root, home)
+            provider.prepare()
+            val expected = exec.run(listOf("hash-object", "--stdin"), stdin = bytes).stdoutText.trim()
+            assertEquals(expected, provider.blobId(bytes))
+        }
+        withGitNative { root, home ->
+            val exec = GitExecutor(root, home)
+            assertTrue(exec.run(listOf("init", "--object-format=sha256")).ok)
+            val provider = nativeProvider(exec, root, home)
+            val expected = exec.run(listOf("hash-object", "--stdin"), stdin = bytes).stdoutText.trim()
+            assertEquals(expected, provider.blobId(bytes))
+        }
+    }
 }
 
 private val IDENTITY = CommitIdentity("Plainbase", "plainbase@localhost")

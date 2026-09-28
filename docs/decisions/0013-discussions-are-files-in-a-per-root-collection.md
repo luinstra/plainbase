@@ -57,7 +57,8 @@ attributed commit per discussion action, with a filterable `discussion: ` messag
 ship in a later slice; until then object-mode roots report Discussions unavailable.
 
 **Authority.** Files are the authority. The server keeps a derived, deletable discussion index, rebuilt
-from the files and kept current by a watcher exception scoped to `.plainbase/discussions/` only.
+from the files and kept current by a separate watcher over `.plainbase` and `.plainbase/discussions/`.
+A 60-second collection rescan detects edits inside existing discussion folders.
 
 ## Consequences
 

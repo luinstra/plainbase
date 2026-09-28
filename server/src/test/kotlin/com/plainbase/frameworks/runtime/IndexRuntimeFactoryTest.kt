@@ -24,6 +24,7 @@ import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
@@ -31,6 +32,7 @@ import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SearchResults
 import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.domain.service.PageReindexListener
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.TestIdProvider
@@ -171,6 +173,7 @@ class IndexRuntimeFactoryTest : FunSpec({
                             var observedRegisteredRoots: Set<RootName>? = null
                             var observedRank: ((RootName) -> Int)? = null
                             val observedBindingEpochRoots = mutableListOf<RootName>()
+                            val forwardedPageSignals = mutableListOf<Pair<RootName, String>>()
                             val observedProofs = slot<List<AbsenceProof>>()
                             val observed = IndexRuntimeFactory.observed(
                                 registry = registry,
@@ -185,6 +188,11 @@ class IndexRuntimeFactoryTest : FunSpec({
                                 epochs = epochs,
                                 bindings = bindings,
                                 listeners = emptyList(),
+                                pageListeners = listOf(
+                                    PageReindexListener { root, page ->
+                                    forwardedPageSignals += root to page.id.value
+                                },
+                                ),
                                 searchIndexer = null,
                                 sourceObserver = { sources, registeredRoots, rank ->
                                     observedSources = sources
@@ -360,6 +368,10 @@ class IndexRuntimeFactoryTest : FunSpec({
                             offline.rebuildSearchIndex() shouldBe 3
                             provider.indexCalls shouldBe 0
                             provider.rebuildCalls shouldBe 1
+
+                            val primaryTarget = observedSnapshot.pages.single { it.root == RootName.PRIMARY }
+                            observed.builder.reindex(RootedPath(RootName.PRIMARY, primaryTarget.path))
+                            forwardedPageSignals shouldBe listOf(RootName.PRIMARY to primaryTarget.id.value)
                         }
                     }
                 }

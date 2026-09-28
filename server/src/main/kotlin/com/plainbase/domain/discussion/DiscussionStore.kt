@@ -1,10 +1,16 @@
 package com.plainbase.domain.discussion
 
 import com.plainbase.domain.root.RootName
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Instant
 
 /** Filesystem-facing port for the raw files that remain authoritative for a discussion. */
 interface DiscussionStore {
-    fun list(root: RootName): CollectionRead
+    fun visit(root: RootName, visitor: (DiscussionId, Boolean) -> Unit): CollectionVisit
+    fun stamp(root: RootName, id: DiscussionId): Stamp?
+    fun sweepBootResidue(root: RootName, now: Instant, minAge: Duration = 24.hours): List<BootTombstone>
+    fun tombstoneBytes(root: RootName, tombstone: Tombstone): ByteArray? = null
     fun read(root: RootName, id: DiscussionId, only: Set<EntryName>? = null): EntriesRead
     fun createFiles(root: RootName, id: DiscussionId, puts: List<EntryPut>): StoreWrite
     fun replace(root: RootName, entry: EntryPath, version: EntryVersion, bytes: ByteArray): StoreWrite
@@ -33,12 +39,14 @@ class RawEntry(
     fun take(): ByteArray = checkNotNull(storedBytes) { "entry bytes were already consumed" }.also { storedBytes = null }
 }
 
-sealed interface CollectionRead {
-    data object Absent : CollectionRead
-    data object Symlinked : CollectionRead
-    data class Failed(val cause: String) : CollectionRead
-    data class Present(val ids: List<DiscussionId>, val symlinked: List<DiscussionId>) : CollectionRead
+sealed interface CollectionVisit {
+    data object Absent : CollectionVisit
+    data object Symlinked : CollectionVisit
+    data class Failed(val cause: String) : CollectionVisit
+    data class Visited(val count: Int) : CollectionVisit
 }
+
+data class BootTombstone(val tombstone: Tombstone, val targetMissing: Boolean)
 
 sealed interface EntriesRead {
     data object Absent : EntriesRead

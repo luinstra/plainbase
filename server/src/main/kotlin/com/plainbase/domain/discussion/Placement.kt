@@ -40,10 +40,7 @@ sealed interface Placement {
 
     companion object {
         fun of(path: HeadingPath, line: Long, page: ReanchorPage): Placement {
-            if (path.entries.isNotEmpty()) {
-                val matches = page.headingPaths.filter { (candidate, _) -> candidate == path }
-                if (matches.size == 1) return Heading(matches.single().second)
-            }
+            page.uniqueHeadingId(path)?.let { return Heading(it) }
             return Line(minOf(line, page.lineCount))
         }
     }

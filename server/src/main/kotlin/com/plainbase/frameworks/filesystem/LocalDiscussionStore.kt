@@ -1,7 +1,8 @@
 package com.plainbase.frameworks.filesystem
 
+import com.plainbase.domain.discussion.BootTombstone
 import com.plainbase.domain.discussion.COLLECTION_DIR
-import com.plainbase.domain.discussion.CollectionRead
+import com.plainbase.domain.discussion.CollectionVisit
 import com.plainbase.domain.discussion.DiscussionId
 import com.plainbase.domain.discussion.DiscussionStore
 import com.plainbase.domain.discussion.EntriesRead
@@ -13,6 +14,7 @@ import com.plainbase.domain.discussion.MARKER_NAME
 import com.plainbase.domain.discussion.MAX_COMMENT_ENTRIES
 import com.plainbase.domain.discussion.RESERVED_COLLECTION_ROOT
 import com.plainbase.domain.discussion.RawEntry
+import com.plainbase.domain.discussion.Stamp
 import com.plainbase.domain.discussion.StoreWrite
 import com.plainbase.domain.discussion.Tombstone
 import com.plainbase.domain.root.RootName
@@ -32,6 +34,9 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration
+import kotlin.time.Instant
 
 /** Local filesystem adapter for the reserved per-root discussion collection. */
 class LocalDiscussionStore(
@@ -50,10 +55,28 @@ class LocalDiscussionStore(
 ) : DiscussionStore {
     private val roots = roots.mapValues { (_, path) -> path.toAbsolutePath().normalize() }
 
-    override fun list(root: RootName): CollectionRead = rooted(
+    override fun visit(root: RootName, visitor: (DiscussionId, Boolean) -> Unit): CollectionVisit = rooted(
         root = root,
-        ambiguous = { it is CollectionRead.Absent || it is CollectionRead.Failed },
-        operation = ::listLocked,
+        ambiguous = { it is CollectionVisit.Absent || it is CollectionVisit.Failed },
+        operation = { base -> visitLocked(base, visitor) },
+    )
+
+    override fun stamp(root: RootName, id: DiscussionId): Stamp? = rooted(
+        root = root,
+        ambiguous = { it == null },
+        operation = { base -> stampLocked(base, id) },
+    )
+
+    override fun sweepBootResidue(root: RootName, now: Instant, minAge: Duration): List<BootTombstone> = rooted(
+        root = root,
+        ambiguous = { false },
+        operation = { base -> sweepBootResidueLocked(base, now, minAge) },
+    )
+
+    override fun tombstoneBytes(root: RootName, tombstone: Tombstone): ByteArray? = rooted(
+        root = root,
+        ambiguous = { it == null },
+        operation = { base -> tombstoneBytesLocked(base, tombstone) },
     )
 
     override fun read(root: RootName, id: DiscussionId, only: Set<EntryName>?): EntriesRead = rooted(
@@ -92,34 +115,200 @@ class LocalDiscussionStore(
         operation = { base -> discardLocked(root, base, tombstone) },
     )
 
-    private fun listLocked(base: Path): CollectionRead = try {
+    private fun visitLocked(base: Path, visitor: (DiscussionId, Boolean) -> Unit): CollectionVisit = try {
         when (val dirs = collectionDirectories(base, create = false)) {
                 is DirectoryWalk.Refused -> {
                     logger.debug { "Discussion list encountered a symbolic link at ${dirs.name}" }
-                    CollectionRead.Symlinked
+                    CollectionVisit.Symlinked
                 }
-            DirectoryWalk.Absent, DirectoryWalk.NotDirectory -> CollectionRead.Absent
+            DirectoryWalk.Absent, DirectoryWalk.NotDirectory -> CollectionVisit.Absent
             is DirectoryWalk.Ready -> {
-                val ids = mutableListOf<DiscussionId>()
-                val symlinked = mutableListOf<DiscussionId>()
+                var count = 0
                 withDirectoryStream(dirs.path) { stream ->
                     stream.forEach { child ->
-                        val id = DiscussionId.of(child.fileName.toString()) ?: return@forEach
+                        val raw = child.fileName.toString()
+                        val id = DiscussionId.of(raw)?.takeIf { it.value == raw } ?: return@forEach
                         when (inspect(child).kind) {
-                            NodeKind.DIRECTORY -> ids += id
-                            NodeKind.SYMLINK -> symlinked += id
+                            NodeKind.DIRECTORY -> {
+                                count++
+                                visitor(id, false)
+                            }
+                            NodeKind.SYMLINK -> {
+                                count++
+                                visitor(id, true)
+                            }
                             else -> Unit
                         }
                     }
                 }
-                if (symlinked.isNotEmpty()) {
-                    logger.debug { "Discussion list encountered symbolic-link entries: ${symlinked.joinToString { it.value }}" }
-                }
-                CollectionRead.Present(ids.sortedBy { it.value }, symlinked.sortedBy { it.value })
+                CollectionVisit.Visited(count)
             }
         }
     } catch (failure: IOException) {
-        CollectionRead.Failed(message(failure))
+        CollectionVisit.Failed(message(failure))
+    }
+
+    private fun stampLocked(base: Path, id: DiscussionId): Stamp? = when (val dirs = collectionDirectories(base, create = false)) {
+            is DirectoryWalk.Refused -> Stamp("symlink:${dirs.name}")
+            DirectoryWalk.Absent, DirectoryWalk.NotDirectory -> null
+            is DirectoryWalk.Ready -> {
+                val idPath = dirs.path.resolve(id.value)
+                when (inspect(idPath).kind) {
+                    NodeKind.MISSING, NodeKind.OTHER, NodeKind.REGULAR -> null
+                    NodeKind.SYMLINK -> Stamp("symlink:${id.value}/")
+                    NodeKind.DIRECTORY -> stampDirectory(idPath)
+                }
+            }
+        }
+
+    private fun stampDirectory(idPath: Path): Stamp? {
+        val entries = mutableListOf<StampedEntry>()
+        var oversized = false
+        withDirectoryStream(idPath) { stream ->
+            val iterator = stream.iterator()
+            while (iterator.hasNext()) {
+                val child = iterator.next()
+                val entry = EntryName.parse(child.fileName.toString())?.let { name ->
+                    val snapshot = inspect(child)
+                    when (snapshot.kind) {
+                        NodeKind.SYMLINK -> StampedEntry(name.fileName, "symlink", 0, 0, "")
+                        NodeKind.REGULAR -> snapshot.attributes?.let { attrs ->
+                            StampedEntry(
+                                name.fileName,
+                                "regular",
+                                attrs.size(),
+                                attrs.lastModifiedTime().to(TimeUnit.NANOSECONDS),
+                                attrs.fileKey()?.toString().orEmpty(),
+                            )
+                        }
+                        else -> null
+                    }
+                }
+                if (entry != null) {
+                    if (entries.size >= MAX_COMMENT_ENTRIES + 1) {
+                        oversized = true
+                        break
+                    }
+                    entries += entry
+                }
+            }
+        }
+        if (oversized) return null
+        return stampDirectorySnapshot(idPath, entries)
+    }
+
+    private fun stampDirectorySnapshot(idPath: Path, entries: MutableList<StampedEntry>): Stamp? {
+        val directory = inspect(idPath)
+        val directoryAttributes = when (directory.kind) {
+            NodeKind.DIRECTORY -> directory.attributes ?: return null
+            NodeKind.SYMLINK -> return Stamp("symlink:${idPath.fileName}/")
+            else -> return null
+        }
+        entries.sortBy { it.name }
+        val digest = MessageDigest.getInstance("SHA-256")
+        update(digest, "directory")
+        digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(directoryAttributes.size()).array())
+        val directoryModifiedNanos = directoryAttributes.lastModifiedTime().to(TimeUnit.NANOSECONDS)
+        digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(directoryModifiedNanos).array())
+        val directoryIdentity = directoryAttributes.fileKey()?.toString()
+            ?: "created:${directoryAttributes.creationTime().to(TimeUnit.NANOSECONDS)}"
+        update(digest, directoryIdentity)
+        digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(entries.size).array())
+        entries.forEach { entry ->
+            update(digest, entry.name)
+            update(digest, entry.kind)
+            digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(entry.size).array())
+            digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(entry.modifiedNanos).array())
+            update(digest, entry.fileKey)
+        }
+        val nowMillis = System.currentTimeMillis()
+        val newestMillis = entries.fold(TimeUnit.NANOSECONDS.toMillis(directoryModifiedNanos)) { newest, entry ->
+            maxOf(newest, TimeUnit.NANOSECONDS.toMillis(entry.modifiedNanos))
+        }
+        val racy = newestMillis > nowMillis || nowMillis - newestMillis <= RACY_STAMP_WINDOW_MILLIS
+        return Stamp("sha256:" + digest.digest().toHexString(), racy)
+    }
+
+    private fun sweepBootResidueLocked(base: Path, now: Instant, minAge: Duration): List<BootTombstone> {
+        require(minAge >= Duration.ZERO)
+        val dirs = when (val walk = collectionDirectories(base, create = false)) {
+            DirectoryWalk.Absent -> return emptyList()
+            DirectoryWalk.NotDirectory -> throw IOException("discussion collection is not a directory")
+            is DirectoryWalk.Refused -> throw IOException("symlink:${walk.name}")
+            is DirectoryWalk.Ready -> walk.path
+        }
+        val nowMillis = now.toEpochMilliseconds()
+        val cutoff = nowMillis - minAge.inWholeMilliseconds
+        val found = mutableListOf<BootTombstone>()
+        withDirectoryStream(dirs) { stream ->
+            stream.forEach { child ->
+                val rawId = child.fileName.toString()
+                val id = DiscussionId.of(rawId)?.takeIf { it.value == rawId } ?: return@forEach
+                if (inspect(child).kind != NodeKind.DIRECTORY) return@forEach
+                val tombstones = mutableListOf<BootTombstone>()
+                withDirectoryStream(child) { entries ->
+                    entries.forEach entryLoop@{ entry ->
+                        val fileName = entry.fileName.toString()
+                        val attrs = try {
+                            Files.readAttributes(entry, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+                        } catch (_: IOException) {
+                            return@entryLoop
+                        } catch (_: SecurityException) {
+                            return@entryLoop
+                        }
+                        val tempMatch = TEMP_PATTERN.matches(fileName)
+                        if (tempMatch && attrs.isRegularFile && attrs.lastModifiedTime().toMillis() <= cutoff) {
+                            try {
+                                delete(entry)
+                            } catch (_: IOException) {
+                                logger.warn { "Could not sweep aged discussion temp $entry" }
+                            } catch (_: SecurityException) {
+                                logger.warn { "Could not sweep aged discussion temp $entry" }
+                            }
+                        }
+                        val tombstoneMatch = TOMBSTONE_PATTERN.matchEntire(fileName)
+                        if (tombstoneMatch != null) {
+                            val targetName = tombstoneMatch.groupValues[1]
+                            val target = EntryName.parse(targetName)
+                            if (target != null && attrs.isRegularFile) {
+                                val targetMissing = try {
+                                    inspect(child.resolve(targetName)).kind == NodeKind.MISSING
+                                } catch (_: IOException) {
+                                    false
+                                } catch (_: SecurityException) {
+                                    false
+                                }
+                                tombstones += BootTombstone(Tombstone(EntryPath(id, target), fileName), targetMissing)
+                            }
+                        }
+                    }
+                }
+                found += tombstones
+                try {
+                    if (!directoryHasEntries(child)) delete(child)
+                } catch (_: IOException) {
+                    logger.warn { "Could not check discussion directory $child for boot cleanup" }
+                } catch (_: SecurityException) {
+                    logger.warn { "Could not check discussion directory $child for boot cleanup" }
+                }
+            }
+        }
+        return found
+    }
+
+    private fun tombstoneBytesLocked(base: Path, tombstone: Tombstone): ByteArray? {
+        if (validateTombstone(tombstone) != null) return null
+        val dirs = (collectionDirectories(base, create = false) as? DirectoryWalk.Ready)?.path ?: return null
+        val idPath = dirs.resolve(tombstone.entry.id.value)
+        if (inspect(idPath).kind != NodeKind.DIRECTORY) return null
+        val source = idPath.resolve(tombstone.fileName)
+        return try {
+            readEntry(source, tombstone.entry.name).takeIf { it.complete }?.take()
+        } catch (_: NoSuchFileException) {
+            null
+        } catch (_: FileSystemLinkException) {
+            null
+        }
     }
 
     private fun readLocked(base: Path, id: DiscussionId, only: Set<EntryName>?): EntriesRead = try {
@@ -868,6 +1057,14 @@ class LocalDiscussionStore(
         var commentCount: Int = 0,
     )
 
+    private data class StampedEntry(
+        val name: String,
+        val kind: String,
+        val size: Long,
+        val modifiedNanos: Long,
+        val fileKey: String,
+    )
+
     private sealed interface IdDirectorySetup {
         data class Ready(val createdAttributes: BasicFileAttributes?) : IdDirectorySetup
         data class Finished(val result: StoreWrite) : IdDirectorySetup
@@ -900,7 +1097,16 @@ class LocalDiscussionStore(
     companion object {
         private val logger = KotlinLogging.logger {}
         private val random = SecureRandom()
+        private const val RACY_STAMP_WINDOW_MILLIS = 2_000
+        private val TEMP_PATTERN = Regex("^\\.pbtmp\\.[0-9a-f]{16}\\.tmp$")
+        private val TOMBSTONE_PATTERN = Regex("^\\.pbpurge\\.(.+\\.md)\\.[0-9a-f]{16}$")
     }
+}
+
+private fun update(digest: MessageDigest, value: String) {
+    val bytes = value.encodeToByteArray()
+    digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes.size).array())
+    digest.update(bytes)
 }
 
 private fun cappedSha256(path: Path, cap: Int): EntryVersion {

@@ -9,6 +9,8 @@ import com.plainbase.domain.discussion.Actor
 import com.plainbase.domain.discussion.Anchor
 import com.plainbase.domain.discussion.Author
 import com.plainbase.domain.discussion.AuthorKind
+import com.plainbase.domain.discussion.BootTombstone
+import com.plainbase.domain.discussion.CollectionVisit
 import com.plainbase.domain.discussion.CommentId
 import com.plainbase.domain.discussion.CommentRecord
 import com.plainbase.domain.discussion.DiscussionCodec
@@ -25,6 +27,7 @@ import com.plainbase.domain.discussion.FrontmatterExtras
 import com.plainbase.domain.discussion.MAX_COMMENT_BYTES
 import com.plainbase.domain.discussion.MAX_COMMENT_ENTRIES
 import com.plainbase.domain.discussion.PageRef
+import com.plainbase.domain.discussion.Stamp
 import com.plainbase.domain.discussion.StoreWrite
 import com.plainbase.domain.discussion.Tombstone
 import com.plainbase.domain.principal.SubjectKey
@@ -36,6 +39,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.slf4j.LoggerFactory
 import java.io.IOException
@@ -44,8 +48,10 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.FileTime
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Instant
 
 class LocalDiscussionStoreTest : FunSpec({
@@ -62,6 +68,243 @@ class LocalDiscussionStoreTest : FunSpec({
             store.createFiles(ROOT, ID, startPuts()) shouldBe written()
             order shouldContainExactly listOf(COMMENT_NAME, EntryName.Marker.fileName)
             store.createFiles(ROOT, ID, startPuts()) shouldBe StoreWrite.Exists
+        }
+    }
+
+    test("stamp and visit agree with a full read on every arm") {
+        withDiscussionRoot { root ->
+            val largeId = idFromLast(3)
+            val tooManyId = idFromLast(4)
+            val markerLinkId = idFromLast(5)
+            val commentLinkId = idFromLast(6)
+            val incompleteId = idFromLast(7)
+            val emptyId = idFromLast(8)
+            val absentId = idFromLast(9)
+            val ids = listOf(ID, largeId, tooManyId, markerLinkId, commentLinkId, incompleteId, emptyId)
+            ids.forEach { Files.createDirectories(idDir(root, it)) }
+            Files.write(idDir(root, ID).resolve(EntryName.Marker.fileName), MARKER_BYTES)
+            Files.write(idDir(root, ID).resolve(COMMENT.fileName), COMMENT_BYTES)
+            Files.write(idDir(root, largeId).resolve(EntryName.Marker.fileName), MARKER_BYTES)
+            Files.write(idDir(root, largeId).resolve(COMMENT.fileName), ByteArray(600 * 1024))
+            Files.write(idDir(root, tooManyId).resolve(EntryName.Marker.fileName), MARKER_BYTES)
+            repeat(1_001) { index ->
+                val commentId = CommentId.require("01900000-0000-7000-8000-${index.toString(16).padStart(12, '0')}")
+                Files.write(idDir(root, tooManyId).resolve("${commentId.value}.md"), byteArrayOf())
+            }
+            val outside = Files.createTempDirectory("pb-discussion-scan")
+            try {
+                Files.write(outside.resolve("marker.md"), MARKER_BYTES)
+                Files.createSymbolicLink(idDir(root, markerLinkId).resolve(EntryName.Marker.fileName), outside.resolve("marker.md"))
+                Files.write(idDir(root, commentLinkId).resolve(EntryName.Marker.fileName), MARKER_BYTES)
+                Files.createSymbolicLink(idDir(root, commentLinkId).resolve(COMMENT.fileName), outside.resolve("marker.md"))
+                Files.write(idDir(root, incompleteId).resolve(COMMENT.fileName), COMMENT_BYTES)
+                val store = LocalDiscussionStore(mapOf(ROOT to root))
+                val visited = mutableListOf<Pair<DiscussionId, Boolean>>()
+
+                store.visit(ROOT) { id, symlinked -> visited += id to symlinked } shouldBe CollectionVisit.Visited(ids.size)
+                visited.map { it.first }.toSet() shouldBe ids.toSet()
+                visited.all { !it.second } shouldBe true
+                (ids + absentId).forEach { id ->
+                    val stamp = store.stamp(ROOT, id)
+                    if (id == tooManyId || id == absentId) {
+                        stamp shouldBe null
+                    } else {
+                        stamp shouldNotBe null
+                    }
+                }
+                store.stamp(ROOT, absentId) shouldBe null
+                store.stamp(ROOT, tooManyId) shouldBe null
+                ids.filterNot { it == tooManyId }.forEach { id ->
+                    val first = requireNotNull(store.stamp(ROOT, id))
+                    store.stamp(ROOT, id) shouldBe first
+                }
+                store.read(ROOT, ID).shouldBeInstanceOf<EntriesRead.Present>().entries.size shouldBe 2
+                store.read(ROOT, largeId).shouldBeInstanceOf<EntriesRead.Present>().entries
+                    .single { it.name == COMMENT }.complete shouldBe false
+                store.read(ROOT, tooManyId).shouldBeInstanceOf<EntriesRead.TooMany>().count shouldBe 1_001
+                store.read(ROOT, markerLinkId).shouldBeInstanceOf<EntriesRead.Symlinked>().entry shouldBe EntryName.Marker.fileName
+                store.read(ROOT, commentLinkId).shouldBeInstanceOf<EntriesRead.Symlinked>().entry shouldBe COMMENT.fileName
+                val markerLinkStamp = requireNotNull(store.stamp(ROOT, markerLinkId))
+                val commentLinkStamp = requireNotNull(store.stamp(ROOT, commentLinkId))
+                markerLinkStamp.value.startsWith("sha256:") shouldBe true
+                commentLinkStamp.value.startsWith("sha256:") shouldBe true
+                store.stamp(ROOT, markerLinkId) shouldBe markerLinkStamp
+                store.stamp(ROOT, commentLinkId) shouldBe commentLinkStamp
+                store.read(ROOT, incompleteId).shouldBeInstanceOf<EntriesRead.Present>().entries.map { it.name } shouldBe listOf(COMMENT)
+                store.read(ROOT, emptyId).shouldBeInstanceOf<EntriesRead.Present>().entries shouldBe emptyList()
+            } finally {
+                outside.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    test("a same size same mtime edit refuses the cas") {
+        withDiscussionRoot { root ->
+            Files.createDirectories(idDir(root))
+            val original = "original".encodeToByteArray()
+            val external = "external".encodeToByteArray()
+            val file = path(root, EntryName.Marker.fileName)
+            Files.write(file, original)
+            val fixedTime = FileTime.fromMillis(1_600_000_000_000)
+            Files.setLastModifiedTime(file, fixedTime)
+            val store = LocalDiscussionStore(
+                mapOf(ROOT to root),
+                onTempPath = {
+                    Files.write(file, external, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)
+                    Files.setLastModifiedTime(file, fixedTime)
+                },
+            )
+            val expected = version(store, EntryName.Marker)
+
+            store.replace(ROOT, EntryPath(ID, EntryName.Marker), expected, "replacement".encodeToByteArray())
+                .shouldBeInstanceOf<StoreWrite.Mismatch>()
+
+            Files.size(file) shouldBe original.size.toLong()
+            Files.getLastModifiedTime(file) shouldBe fixedTime
+            Files.readAllBytes(file).toList() shouldBe external.toList()
+        }
+    }
+
+    test("a stamp changes on every listing or stat change and not otherwise") {
+        withDiscussionRoot { root ->
+            val store = LocalDiscussionStore(mapOf(ROOT to root))
+            Files.createDirectories(idDir(root))
+            val before = requireNotNull(store.stamp(ROOT, ID))
+            Files.write(path(root, EntryName.Marker.fileName), MARKER_BYTES)
+            val added = requireNotNull(store.stamp(ROOT, ID))
+            (added != before) shouldBe true
+            Files.write(path(root, COMMENT.fileName), COMMENT_BYTES)
+            val commentAdded = requireNotNull(store.stamp(ROOT, ID))
+            (commentAdded != added) shouldBe true
+            Files.write(path(root, EntryName.Marker.fileName), MARKER_BYTES + byteArrayOf(1), StandardOpenOption.APPEND)
+            val appended = requireNotNull(store.stamp(ROOT, ID))
+            (appended != commentAdded) shouldBe true
+            Files.delete(path(root, COMMENT.fileName))
+            val removed = requireNotNull(store.stamp(ROOT, ID))
+            (removed != appended) shouldBe true
+            Files.setLastModifiedTime(path(root, EntryName.Marker.fileName), FileTime.fromMillis(System.currentTimeMillis() + 1_000))
+            val touched = requireNotNull(store.stamp(ROOT, ID))
+            (touched != removed) shouldBe true
+            store.stamp(ROOT, ID) shouldBe touched
+        }
+    }
+
+    test("a racy stamp is stored null and re-parsed") {
+        withDiscussionRoot { root ->
+            val store = LocalDiscussionStore(mapOf(ROOT to root))
+            Files.createDirectories(idDir(root))
+            Files.write(path(root, EntryName.Marker.fileName), MARKER_BYTES)
+            val recent = System.currentTimeMillis() - 1_500
+            Files.setLastModifiedTime(path(root, EntryName.Marker.fileName), FileTime.fromMillis(recent))
+            requireNotNull(store.stamp(ROOT, ID)).racy shouldBe true
+            Files.setLastModifiedTime(path(root, EntryName.Marker.fileName), FileTime.fromMillis(System.currentTimeMillis() + 3_000))
+            requireNotNull(store.stamp(ROOT, ID)).racy shouldBe true
+        }
+    }
+
+    test("a recent or future directory timestamp is racy with aged children") {
+        withDiscussionRoot { root ->
+            val directory = Files.createDirectories(idDir(root))
+            val marker = Files.write(directory.resolve(EntryName.Marker.fileName), MARKER_BYTES)
+            val store = LocalDiscussionStore(mapOf(ROOT to root))
+            val aged = FileTime.fromMillis(System.currentTimeMillis() - 10_000)
+            Files.setLastModifiedTime(marker, aged)
+            Files.setLastModifiedTime(directory, aged)
+            requireNotNull(store.stamp(ROOT, ID)).racy shouldBe false
+
+            Files.setLastModifiedTime(directory, FileTime.fromMillis(System.currentTimeMillis() - 500))
+            requireNotNull(store.stamp(ROOT, ID)).racy shouldBe true
+
+            Files.setLastModifiedTime(directory, FileTime.fromMillis(System.currentTimeMillis() + 3_000))
+            requireNotNull(store.stamp(ROOT, ID)).racy shouldBe true
+        }
+    }
+
+    test("a recent empty directory timestamp is racy") {
+        withDiscussionRoot { root ->
+            val directory = Files.createDirectories(idDir(root))
+            val store = LocalDiscussionStore(mapOf(ROOT to root))
+            Files.setLastModifiedTime(directory, FileTime.fromMillis(System.currentTimeMillis() - 10_000))
+            requireNotNull(store.stamp(ROOT, ID)).racy shouldBe false
+
+            Files.setLastModifiedTime(directory, FileTime.fromMillis(System.currentTimeMillis() - 500))
+            requireNotNull(store.stamp(ROOT, ID)).racy shouldBe true
+        }
+    }
+
+    test("a symlinked discussion stamps stably") {
+        withDiscussionRoot { root ->
+            val outside = Files.createTempDirectory("pb-discussion-stamp")
+            try {
+                Files.createDirectories(idDir(root).parent)
+                Files.createSymbolicLink(idDir(root), outside)
+                val store = LocalDiscussionStore(mapOf(ROOT to root))
+                store.stamp(ROOT, ID) shouldBe Stamp("symlink:${ID.value}/")
+                store.stamp(ROOT, ID) shouldBe Stamp("symlink:${ID.value}/")
+            } finally {
+                outside.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    test("a symlinked comment stamp changes with the marker") {
+        withDiscussionRoot { root ->
+            val outside = Files.createTempFile("pb-discussion-comment-stamp", ".md")
+            try {
+                Files.createDirectories(idDir(root))
+                Files.write(path(root, EntryName.Marker.fileName), MARKER_BYTES)
+                Files.createSymbolicLink(path(root, COMMENT.fileName), outside)
+                val store = LocalDiscussionStore(mapOf(ROOT to root))
+                val first = requireNotNull(store.stamp(ROOT, ID))
+
+                Files.write(path(root, EntryName.Marker.fileName), MARKER_BYTES + byteArrayOf(1))
+
+                val changed = requireNotNull(store.stamp(ROOT, ID))
+                changed.value shouldNotBe first.value
+                store.stamp(ROOT, ID) shouldBe changed
+            } finally {
+                Files.deleteIfExists(outside)
+            }
+        }
+    }
+
+    test("an oversized recognized directory has no stamp") {
+        withDiscussionRoot { root ->
+            Files.createDirectories(idDir(root))
+            Files.write(path(root, EntryName.Marker.fileName), MARKER_BYTES)
+            repeat(MAX_COMMENT_ENTRIES + 1) { index ->
+                val commentId = CommentId.require(
+                    "01900000-0000-7000-8000-${(index + 1).toString(16).padStart(12, '0')}",
+                )
+                Files.write(path(root, EntryName.Comment(commentId).fileName), byteArrayOf(1))
+            }
+
+            LocalDiscussionStore(mapOf(ROOT to root)).stamp(ROOT, ID) shouldBe null
+        }
+    }
+
+    test("boot sweep removes only aged temps and empty directories") {
+        withDiscussionRoot { root ->
+            val retainedId = ID
+            val emptyId = idFromLast(9)
+            val retained = Files.createDirectories(idDir(root, retainedId))
+            val empty = Files.createDirectories(idDir(root, emptyId))
+            val aged = retained.resolve(".pbtmp.0123456789abcdef.tmp")
+            val recent = retained.resolve(".pbtmp.fedcba9876543210.tmp")
+            Files.write(aged, byteArrayOf(1))
+            Files.write(recent, byteArrayOf(2))
+            Files.write(retained.resolve("other.tmp"), byteArrayOf(3))
+            val now = Instant.parse("2026-09-26T12:00:00Z")
+            Files.setLastModifiedTime(aged, FileTime.fromMillis(now.toEpochMilliseconds() - 48 * 60 * 60 * 1_000))
+            Files.setLastModifiedTime(recent, FileTime.fromMillis(now.toEpochMilliseconds()))
+            val store = LocalDiscussionStore(mapOf(ROOT to root))
+
+            store.sweepBootResidue(ROOT, now, 24.hours) shouldBe emptyList<BootTombstone>()
+            Files.exists(aged, LinkOption.NOFOLLOW_LINKS) shouldBe false
+            Files.exists(recent, LinkOption.NOFOLLOW_LINKS) shouldBe true
+            Files.exists(retained.resolve("other.tmp"), LinkOption.NOFOLLOW_LINKS) shouldBe true
+            Files.exists(empty, LinkOption.NOFOLLOW_LINKS) shouldBe false
+            Files.exists(retained, LinkOption.NOFOLLOW_LINKS) shouldBe true
         }
     }
 
@@ -629,7 +872,7 @@ class LocalDiscussionStoreTest : FunSpec({
                 }
                 val store = LocalDiscussionStore(mapOf(ROOT to root))
                 store.createFiles(ROOT, ID, startPuts()).shouldBeInstanceOf<StoreWrite.Refused>().reason shouldBe "symlink"
-                store.list(ROOT) shouldBe com.plainbase.domain.discussion.CollectionRead.Symlinked
+                store.visit(ROOT) { _, _ -> } shouldBe CollectionVisit.Symlinked
                 Files.readString(outside.resolve("sentinel")) shouldBe "outside"
                 Files.exists(outside.resolve(COLLECTION_DIR), LinkOption.NOFOLLOW_LINKS) shouldBe false
             } finally {
@@ -647,7 +890,7 @@ class LocalDiscussionStoreTest : FunSpec({
                 val store = LocalDiscussionStore(mapOf(ROOT to root))
                 store.read(ROOT, ID).shouldBeInstanceOf<EntriesRead.Symlinked>().entry shouldBe
                     "$RESERVED_COLLECTION_ROOT/$COLLECTION_DIR"
-                store.list(ROOT) shouldBe com.plainbase.domain.discussion.CollectionRead.Symlinked
+                store.visit(ROOT) { _, _ -> } shouldBe CollectionVisit.Symlinked
             } finally {
                 outside.toFile().deleteRecursively()
             }
@@ -662,8 +905,9 @@ class LocalDiscussionStoreTest : FunSpec({
                 Files.createSymbolicLink(idDir(root), outside)
                 val store = LocalDiscussionStore(mapOf(ROOT to root))
                 store.read(ROOT, ID).shouldBeInstanceOf<EntriesRead.Symlinked>().entry shouldBe "${ID.value}/"
-                store.list(ROOT).shouldBeInstanceOf<com.plainbase.domain.discussion.CollectionRead.Present>()
-                    .symlinked shouldBe listOf(ID)
+                val found = mutableListOf<Pair<DiscussionId, Boolean>>()
+                store.visit(ROOT) { id, symlinked -> found += id to symlinked } shouldBe CollectionVisit.Visited(1)
+                found shouldBe listOf(ID to true)
             } finally {
                 outside.toFile().deleteRecursively()
             }
@@ -800,7 +1044,7 @@ class LocalDiscussionStoreTest : FunSpec({
             logger.level = Level.WARN
             logger.addAppender(appender)
             try {
-                store.list(ROOT) shouldBe com.plainbase.domain.discussion.CollectionRead.Absent
+                store.visit(ROOT) { _, _ -> } shouldBe CollectionVisit.Absent
                 store.createFiles(ROOT, ID, startPuts()).shouldBeInstanceOf<StoreWrite.Refused>().reason shouldBe "not a directory"
 
                 Files.delete(root.resolve(RESERVED_COLLECTION_ROOT))
@@ -833,7 +1077,7 @@ class LocalDiscussionStoreTest : FunSpec({
             root.toFile().deleteRecursively()
             var marked = false
             val store = LocalDiscussionStore(mapOf(ROOT to root), onRootUnavailable = { marked = true })
-            shouldThrow<RootUnavailable> { store.list(ROOT) }
+            shouldThrow<RootUnavailable> { store.visit(ROOT) { _, _ -> } }
             marked shouldBe true
         }
     }
@@ -871,7 +1115,7 @@ class LocalDiscussionStoreTest : FunSpec({
     test("an unknown root name is a programming error") {
         withDiscussionRoot { root ->
             val store = LocalDiscussionStore(mapOf(ROOT to root))
-            shouldThrow<IllegalArgumentException> { store.list(RootName.require("other")) }
+            shouldThrow<IllegalArgumentException> { store.visit(RootName.require("other")) { _, _ -> } }
         }
     }
 })
@@ -925,6 +1169,12 @@ private fun withDiscussionRoot(block: (Path) -> Unit) {
 }
 
 private fun idDir(root: Path): Path = root.resolve("$RESERVED_COLLECTION_ROOT/$COLLECTION_DIR/${ID.value}")
+
+private fun idDir(root: Path, id: DiscussionId): Path =
+    root.resolve("$RESERVED_COLLECTION_ROOT/$COLLECTION_DIR/${id.value}")
+
+private fun idFromLast(value: Int): DiscussionId =
+    DiscussionId.require("01900000-0000-7000-8000-${value.toString(16).padStart(12, '0')}")
 
 private fun path(root: Path, name: String): Path = idDir(root).resolve(name)
 
