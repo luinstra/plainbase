@@ -10,9 +10,12 @@ import com.plainbase.domain.discussion.DiscussionStore
 import com.plainbase.domain.discussion.EntryName
 import com.plainbase.domain.discussion.MAX_COMMENT_BYTES
 import com.plainbase.domain.discussion.RowUpdate
+import com.plainbase.domain.discussion.SelectionRequest
+import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.page.RootSection
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.ApiTokenRepository
 import com.plainbase.domain.repository.AuditEntry
@@ -69,6 +72,53 @@ class GuardedDiscussionFacadeTest : FunSpec({
     val id = DiscussionId.require("01900000-0000-7000-8000-000000000001")
     val comment = CommentId.require("01900000-0000-7000-8000-000000000002")
     val human = Principal.Human("builtin", "owner")
+
+    test("preview checks read-only topology before page or discussion I O without an audit") {
+        val fixture = fixture(listOf(localRoot(root, editable = false)))
+        val pageId = PageId.require("01900000-0000-7000-8000-000000000010")
+        every { fixture.indexBuilder.current } returns mockk()
+        every { fixture.resolver.resolve(pageId) } returns IdResolution.One(root)
+
+        val failure = shouldThrow<AccessDenied> {
+            fixture.facade.preview(
+                human, pageId, null,
+                DiscussionAnchorRequest.Quote("sha256:" + "a".repeat(64), SelectionRequest.Agent("quote")),
+            )
+        }
+        failure.reason shouldBe DenyReason.ROOT_NOT_EDITABLE
+        fixture.audits shouldBe emptyList()
+        verify(exactly = 0) { fixture.absence.read(any(), any()) }
+        verify(exactly = 0) { fixture.reads.claim(any(), any(), any()) }
+    }
+
+    test("preview resolves a quote from the same page snapshot without an audit") {
+        val fixture = fixture(listOf(localRoot(root)))
+        val pageId = PageId.require("01900000-0000-7000-8000-000000000010")
+        val path = TreePath.require("guides/current.md")
+        val bytes = "# Current\n\nA stable sentence.\n".encodeToByteArray()
+        val hash = CitationFactory().contentHash(bytes)
+        val page = IndexedPage(
+            pageId, root, path, "current", path, "Current", Frontmatter(emptyMap()), true,
+            bytes.decodeToString(), hash, null, "", emptyList(), emptyList(), emptyList(),
+        )
+        val snapshot = PageIndex(listOf(RootSection(root, listOf(page), emptyList(), emptySet())))
+        every { fixture.indexBuilder.current } returns snapshot
+        every { fixture.resolver.resolve(pageId) } returns IdResolution.One(root)
+        every { fixture.absence.requireVerifiedAbsence(root, pageId, snapshot) } returns Unit
+        every { fixture.absence.read(fixture.store, RootedPath(root, path)) } returns ContentRead.Bytes(bytes)
+
+        val preview = fixture.facade.preview(
+            human, pageId, null,
+            DiscussionAnchorRequest.Quote(hash, SelectionRequest.Agent("stable")),
+        )
+        preview.contentHash shouldBe hash
+        preview.byteStart shouldBe bytes.decodeToString().indexOf("stable").toLong()
+        preview.byteEnd shouldBe preview.byteStart + 6
+        preview.selection shouldBe "narrowed"
+        preview.quoteText shouldBe "stable"
+        fixture.audits shouldBe emptyList()
+        verify(exactly = 0) { fixture.writer.write(any(), any()) }
+    }
 
     test("start audits the resolved page root and uses its current indexed path") {
         val fixture = fixture(listOf(localRoot(root)))
@@ -304,7 +354,7 @@ class GuardedDiscussionFacadeTest : FunSpec({
         }
     }
 
-    test("real marker read failures return 503 in synced and unsynced claims") {
+    test("synced failed row and unsynced marker I O failure return 503") {
         DiscussionWorld().use { world ->
             val discussion = world.startDiscussion()
             val marker = discussionFile(world, discussion, EntryName.Marker)

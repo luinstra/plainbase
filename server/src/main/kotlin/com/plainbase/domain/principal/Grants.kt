@@ -11,7 +11,7 @@ import com.plainbase.domain.service.ReliedOn
  * `reject`) REQUIRES one of these as a leading parameter — so a bypassed
  * `PolicyService.check()` is a COMPILE error even if someone injects the raw mutator. Most grants carry no payload;
  * [DiscussionGrant] carries the rooted action and relied-on identity facts. Each is a plain `class`, never a `data`
- * class — `copy()` would re-open forgery).
+ * class — `copy()` would re-open forgery.
  *
  * UNFORGEABILITY (the threat model the debate ratified):
  *  - The constructors are `internal`, so NO module outside `:server` can construct a grant — the COMPILER is the

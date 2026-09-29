@@ -221,11 +221,13 @@ class JdbcDiscussionRows(private val db: DiscussionDb) : DiscussionRows {
             }
             connection.prepareStatement(
                 "INSERT INTO discussion(root,id,state,reason,stamp,page_id,page_path,status,anchor_kind,anchor_hash," +
-                    "starter_key,created,updated,comment_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) " +
+                    "starter_key,created,updated,comment_count,starter_kind,starter_label,quote_preview) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) " +
                     "ON CONFLICT(root,id) DO UPDATE SET state=excluded.state,reason=excluded.reason,stamp=excluded.stamp," +
                     "page_id=excluded.page_id,page_path=excluded.page_path,status=excluded.status," +
                     "anchor_kind=excluded.anchor_kind,anchor_hash=excluded.anchor_hash,starter_key=excluded.starter_key," +
-                    "created=excluded.created,updated=excluded.updated,comment_count=excluded.comment_count",
+                    "created=excluded.created,updated=excluded.updated,comment_count=excluded.comment_count," +
+                    "starter_kind=excluded.starter_kind,starter_label=excluded.starter_label,quote_preview=excluded.quote_preview",
             ).use { statement ->
                 statement.setString(1, root.value)
                 statement.setString(2, id.value)
@@ -241,6 +243,9 @@ class JdbcDiscussionRows(private val db: DiscussionDb) : DiscussionRows {
                 statement.setNullableLong(12, row.created)
                 statement.setNullableLong(13, row.updated)
                 statement.setInt(14, row.commentCount)
+                statement.setNullableString(15, row.starterKind)
+                statement.setNullableString(16, row.starterLabel)
+                statement.setNullableString(17, row.quotePreview)
                 statement.executeUpdate()
             }
             connection.prepareStatement("DELETE FROM discussion_entry WHERE root=? AND id=?").use { statement ->
@@ -284,6 +289,9 @@ private fun ResultSet.discussionRow(): DiscussionRow = DiscussionRow(
     created = nullableLong("created"),
     updated = nullableLong("updated"),
     commentCount = getInt("comment_count"),
+    starterKind = getString("starter_kind"),
+    starterLabel = getString("starter_label"),
+    quotePreview = getString("quote_preview"),
 )
 
 private fun ResultSet.entryRow(): EntryRow = EntryRow(

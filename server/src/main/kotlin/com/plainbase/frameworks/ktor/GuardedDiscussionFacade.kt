@@ -45,6 +45,10 @@ import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.domain.service.RootedResource
+import com.plainbase.frameworks.markdown.FlexmarkRenderer
+import com.plainbase.frameworks.protocol.DiscussionDetailDto
+import com.plainbase.frameworks.protocol.DiscussionListDto
+import com.plainbase.frameworks.protocol.DiscussionPreviewDto
 
 class GuardedDiscussionFacade(
     private val policy: PolicyService,
@@ -58,7 +62,92 @@ class GuardedDiscussionFacade(
     private val stores: (RootName) -> ContentStore,
     private val labeler: ProposalAuthorLabeler,
     private val citations: CitationFactory = CitationFactory(),
+    private val projection: DiscussionReadProjection? = null,
 ) : DiscussionFacade {
+    fun pageList(principal: Principal, pageId: PageId, pin: RootName?, after: DiscussionId?, limit: Int): DiscussionListDto {
+        val snapshot = indexBuilder.current
+        val resolution = pin?.let { resolver.resolvePinned(it, pageId) } ?: resolver.resolve(pageId)
+        val root = (resolution as? IdResolution.One)?.root
+        val topology = policy.checkDiscussionRead(principal, RootedResource(root, "${pageId.value}/discussions"))
+        if (pin != null && registry.byName(pin) == null) throw DiscussionReadRefused(400, "invalid_root")
+        val owner = when (resolution) {
+            is IdResolution.One -> resolution.root
+            is IdResolution.Ambiguous -> throw DiscussionReadRefused(409, "ambiguous_page_id")
+            IdResolution.None -> throw DiscussionReadRefused(404, "page_not_found")
+        }
+        if (topology != null) return DiscussionListDto(emptyList(), null, false, unavailableReason(owner))
+        val page = page(snapshot, owner, pageId) ?: throw DiscussionReadRefused(404, "page_not_found")
+        return checkNotNull(projection).pageList(owner, page, snapshot, after, limit)
+    }
+
+    fun rootList(principal: Principal, root: RootName, after: DiscussionId?, limit: Int, state: String?): DiscussionListDto {
+        val snapshot = indexBuilder.current
+        val topology = policy.checkDiscussionRead(principal, RootedResource(root, "discussions"))
+        if (registry.byName(root) == null) throw DiscussionReadRefused(400, "invalid_root")
+        if (topology != null) return DiscussionListDto(emptyList(), null, false, unavailableReason(root))
+        return checkNotNull(projection).rootList(root, snapshot, after, limit, state)
+    }
+
+    fun detail(principal: Principal, id: DiscussionId, pin: RootName?, after: CommentId?, limit: Int): DiscussionDetailDto {
+        val snapshot = indexBuilder.current
+        if (pin != null && registry.byName(pin) != null) {
+            val topology = policy.checkDiscussionRead(principal, RootedResource(pin, "discussion/${id.value}"))
+            if (topology != null) return DiscussionDetailDto(null, emptyList(), null, false, unavailableReason(pin))
+        }
+        val target = target(id, pin, null)
+        policy.checkDiscussionRead(principal, RootedResource(target.root, "discussion/${id.value}"))
+        target.unknownRoots.firstOrNull { !availability.current().isAvailable(it) }?.let(::requireAvailable)
+        target.refusal?.let { throw DiscussionReadRefused(it.status, it.code) }
+        return checkNotNull(projection).detail(
+            target.root ?: throw DiscussionReadRefused(503, "content_unreadable"), id, snapshot, after, limit,
+        )
+    }
+
+    fun preview(
+        principal: Principal,
+        pageId: PageId,
+        pin: RootName?,
+        request: DiscussionAnchorRequest.Quote,
+    ): DiscussionPreviewDto {
+        val snapshot = indexBuilder.current
+        val resolution = pin?.let { resolver.resolvePinned(it, pageId) } ?: resolver.resolve(pageId)
+        val owner = (resolution as? IdResolution.One)?.root
+        policy.checkDiscussionRead(principal, RootedResource(owner, "${pageId.value}/discussions"), preview = true)
+        val root = previewRoot(resolution, pin)
+        val (page, bytes) = previewPageBytes(root, pageId, snapshot)
+        val answer = when (val resolved = resolveAnchor(page, bytes, request, snapshot)) {
+            is AnchorResolution.Resolved -> resolved.anchor as Anchor.Quote
+            is AnchorResolution.Refused -> throw DiscussionReadRefused(resolved.refusal.status, resolved.refusal.code)
+        }
+        return DiscussionPreviewDto(
+            answer.contentHash, answer.capture.byteStart, answer.capture.byteEnd,
+            answer.capture.selection.wire, answer.capture.quote,
+        )
+    }
+
+    private fun previewRoot(resolution: IdResolution, pin: RootName?): RootName {
+        if (pin != null && registry.byName(pin) == null) throw DiscussionReadRefused(400, "invalid_root")
+        return when (resolution) {
+            is IdResolution.One -> resolution.root
+            is IdResolution.Ambiguous -> throw DiscussionReadRefused(409, "ambiguous_page_id")
+            IdResolution.None -> throw DiscussionReadRefused(404, "page_not_found")
+        }
+    }
+
+    private fun previewPageBytes(root: RootName, pageId: PageId, snapshot: PageIndex): Pair<IndexedPage, ByteArray> {
+        val page = page(snapshot, root, pageId) ?: throw DiscussionReadRefused(404, "page_not_found")
+        val bytes = when (val read = readPage(page)) {
+            is ContentRead.Bytes -> read.bytes
+            ContentRead.ConfirmedAbsent -> throw DiscussionReadRefused(404, "page_not_found")
+            ContentRead.AbsenceUnknown -> throw AbsenceUnverified(root, pageId.value)
+            ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
+        }
+        return page to bytes
+    }
+
+    private fun unavailableReason(root: RootName): String =
+        if (registry.byName(root)?.editable == false) "read_only_root" else "object_storage"
+
     override fun start(
         principal: Principal,
         pageId: PageId,
@@ -85,7 +174,7 @@ class GuardedDiscussionFacade(
             ContentRead.AbsenceUnknown -> throw AbsenceUnverified(owner, pageId.value)
             ContentRead.RootDown -> throw RootUnavailable(owner, UnavailableCause.VANISHED)
         }
-        val resolved = when (val answer = resolveAnchor(page, bytes, anchor)) {
+        val resolved = when (val answer = resolveAnchor(page, bytes, anchor, snapshot)) {
             is AnchorResolution.Resolved -> answer.anchor
             is AnchorResolution.Refused -> return DiscussionWriteOutcome.Refused(answer.refusal)
         }
@@ -142,14 +231,15 @@ class GuardedDiscussionFacade(
         val owner = target.root ?: return refused(503, "content_unreadable")
         factsRefusal(DiscussionAction.REATTACH, target.facts, grant)?.let { return it }
         val pageId = (target.facts as? DiscussionFacts.Known)?.pageId ?: return refused(503, "content_unreadable")
-        val page = page(indexBuilder.current, owner, pageId) ?: return refused(404, "page_not_found")
+        val snapshot = indexBuilder.current
+        val page = page(snapshot, owner, pageId) ?: return refused(404, "page_not_found")
         val bytes = when (val read = readPage(page)) {
             is ContentRead.Bytes -> read.bytes
             ContentRead.ConfirmedAbsent -> return refused(404, "page_not_found")
             ContentRead.AbsenceUnknown -> throw AbsenceUnverified(owner, pageId.value)
             ContentRead.RootDown -> throw RootUnavailable(owner, UnavailableCause.VANISHED)
         }
-        val resolved = when (val answer = resolveAnchor(page, bytes, anchor)) {
+        val resolved = when (val answer = resolveAnchor(page, bytes, anchor, snapshot)) {
             is AnchorResolution.Resolved -> answer.anchor as Anchor.Quote
             is AnchorResolution.Refused -> return DiscussionWriteOutcome.Refused(answer.refusal)
         }
@@ -236,7 +326,12 @@ class GuardedDiscussionFacade(
 
     private fun readPage(page: IndexedPage): ContentRead = absence.read(stores(page.root), RootedPath(page.root, page.path))
 
-    private fun resolveAnchor(page: IndexedPage, bytes: ByteArray, request: DiscussionAnchorRequest): AnchorResolution {
+    private fun resolveAnchor(
+        page: IndexedPage,
+        bytes: ByteArray,
+        request: DiscussionAnchorRequest,
+        snapshot: PageIndex,
+    ): AnchorResolution {
         if (citations.contentHash(bytes) != request.contentHash) {
             return AnchorResolution.Refused(DiscussionRefusal(409, "page_changed"))
         }
@@ -244,7 +339,7 @@ class GuardedDiscussionFacade(
         return when (request) {
             is DiscussionAnchorRequest.Page -> AnchorResolution.Resolved(Anchor.Page(request.contentHash, commit))
             is DiscussionAnchorRequest.Quote -> {
-                val rendered = indexBuilder.renderPreview(page.root, page.path, bytes)
+                val rendered = FlexmarkRenderer(snapshot.view(page.root)).render(page.path, bytes)
                 when (val selected = SelectionResolver.resolve(bytes, rendered.blocks, rendered.headings, request.selection)) {
                     is SelectionResult.Resolved ->
                         AnchorResolution.Resolved(Anchor.Quote(request.contentHash, commit, selected.capture))

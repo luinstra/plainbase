@@ -48,15 +48,27 @@ object DiscussionAssembly {
         retain: (EntryName.Comment) -> Boolean,
         onComment: (Stored<CommentRecord>) -> Unit,
     ): DiscussionRead {
-        val ordered = rawEntries.sortedBy { it.name.fileName }
-        val versions = ordered.associate { it.name to it.version }
-        val markerPresent = ordered.any { it.name == EntryName.Marker }
-        val comments = mutableListOf<Stored<CommentRecord>>()
-        var pageId: PageId? = null
-        var firstUnreadable: DiscussionRead.Unreadable? = null
-        var firstMismatch: String? = null
-        var markerRecord: DiscussionRecord? = null
-        for (entry in ordered) {
+        val accumulator = Accumulator(id, retain, onComment)
+        rawEntries.sortedBy { it.name.fileName }.forEach(accumulator::accept)
+        return accumulator.finish()
+    }
+
+    class Accumulator(
+        private val id: DiscussionId,
+        private val retain: (EntryName.Comment) -> Boolean = { true },
+        private val onComment: (Stored<CommentRecord>) -> Unit = {},
+    ) {
+        private val comments = mutableListOf<Stored<CommentRecord>>()
+        private val commentNames = mutableListOf<String>()
+        private var pageId: PageId? = null
+        private var firstUnreadable: DiscussionRead.Unreadable? = null
+        private var firstMismatch: String? = null
+        private var marker: Stored<DiscussionRecord>? = null
+        private var markerPresent = false
+
+        fun accept(entry: RawEntry) {
+            if (entry.name == EntryName.Marker) markerPresent = true
+            if (entry.name is EntryName.Comment) commentNames += entry.name.fileName
             val bytes = entry.take()
             val decoded: Decoded<*> = when {
                 !entry.complete -> Decoded.Unreadable(
@@ -69,44 +81,43 @@ object DiscussionAssembly {
             when (decoded) {
                 is Decoded.Unreadable -> {
                     if (entry.name == EntryName.Marker) pageId = DiscussionCodec.peekPageId(bytes)
-                    if (firstUnreadable == null) {
+                    if (firstUnreadable == null || entry.name.fileName < checkNotNull(firstUnreadable).entry) {
                         firstUnreadable = DiscussionRead.Unreadable(decoded.reason, entry.name.fileName, pageId, decoded.detail)
                     }
                 }
                 is Decoded.Ok<*> -> {
                     when (val name = entry.name) {
                         EntryName.Marker -> {
-                            markerRecord = decoded.value as DiscussionRecord
-                            pageId = markerRecord.page.pageId
-                            if (markerRecord.id != id && firstMismatch == null) firstMismatch = name.fileName
+                            val record = decoded.value as DiscussionRecord
+                            marker = Stored(name, entry.version, record)
+                            pageId = record.page.pageId
+                            if (record.id != id) mismatch(name.fileName)
                         }
                         is EntryName.Comment -> {
                             val comment = decoded.value as CommentRecord
                             val stored = Stored(name, entry.version, comment)
                             onComment(stored)
                             if (retain(name)) comments += stored
-                            if ((comment.id != name.id || comment.discussionId != id) && firstMismatch == null) {
-                                firstMismatch = name.fileName
-                            }
+                            if (comment.id != name.id || comment.discussionId != id) mismatch(name.fileName)
                         }
                     }
                 }
             }
         }
-        if (!markerPresent) {
-            val names = ordered.mapNotNull { entry -> (entry.name as? EntryName.Comment)?.fileName }
-            return DiscussionRead.Incomplete(names)
+
+        private fun mismatch(name: String) {
+            if (firstMismatch == null || name < checkNotNull(firstMismatch)) firstMismatch = name
         }
-        firstUnreadable?.let { failure ->
-            return failure.copy(pageId = pageId ?: failure.pageId)
+
+        fun finish(): DiscussionRead {
+            if (!markerPresent) return DiscussionRead.Incomplete(commentNames.sorted())
+            firstUnreadable?.let { failure -> return failure.copy(pageId = pageId ?: failure.pageId) }
+            firstMismatch?.let { mismatch ->
+                return DiscussionRead.Unreadable(UnreadableReason.BAD_VALUE, mismatch, pageId)
+            }
+            val markerStored = marker
+                ?: return DiscussionRead.Unreadable(UnreadableReason.BAD_VALUE, EntryName.Marker.fileName, pageId)
+            return DiscussionRead.Ok(DiscussionFiles(markerStored, comments.sortedBy { it.name.fileName }))
         }
-        if (firstMismatch != null) {
-            return DiscussionRead.Unreadable(UnreadableReason.BAD_VALUE, firstMismatch, pageId)
-        }
-        val markerName = EntryName.Marker
-        val marker = markerRecord
-            ?: return DiscussionRead.Unreadable(UnreadableReason.BAD_VALUE, markerName.fileName, pageId)
-        val markerStored = Stored(markerName, versions.getValue(markerName), marker)
-        return DiscussionRead.Ok(DiscussionFiles(markerStored, comments.sortedBy { it.name.fileName }))
     }
 }

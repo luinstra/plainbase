@@ -43,6 +43,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Instant
 
@@ -56,6 +57,31 @@ private const val LIST_ROWS_BYTES = 1_840_000L
 
 /** Opt-in local profile measurement for one writer, one detail read, one list miss, and two reparses. */
 class DiscussionHeapProbeTest : FunSpec({
+    test("maximum-size indexed detail retains one selected comment")
+        .config(enabled = System.getenv("PLAINBASE_DISCUSSION_HEAP_PROBE") == "1") {
+            val reads = AtomicInteger()
+            val world = DiscussionWorld(readEntryBytes = { path, _ ->
+                reads.incrementAndGet()
+                Files.readAllBytes(path)
+            })
+            try {
+                val id = seedDerivationCorpus(world, DiscussionWorld.discussionId(950), 0, exactMaximum = true)
+                world.reparser().reparseOne(DiscussionWorld.ROOT, id).shouldBeInstanceOf<ReparseOutcome.Applied>()
+                reads.set(0)
+                val detail = world.reads.detail(
+                    DiscussionWorld.ROOT, id,
+                    afterComment = DiscussionWorld.commentId(20_998), limit = 1,
+                )
+                    .shouldBeInstanceOf<DetailPage.Content>()
+                detail.read.shouldBeInstanceOf<com.plainbase.domain.discussion.DiscussionRead.Ok>()
+                    .files.comments.map { it.value.id } shouldBe listOf(DiscussionWorld.commentId(20_999))
+                detail.summary?.commentCount shouldBe MAX_COMMENT_ENTRIES
+                reads.get() shouldBe 2
+            } finally {
+                world.close()
+            }
+        }
+
     test("local profile heap probe")
         .config(enabled = System.getenv("PLAINBASE_DISCUSSION_HEAP_PROBE") == "1") {
             val pageBytes = pageBytesWithHeadings()
@@ -267,6 +293,7 @@ private fun seedDerivationCorpus(
     world: DiscussionWorld,
     id: DiscussionId,
     corpus: Int,
+    exactMaximum: Boolean = false,
 ): DiscussionId {
     val directory = Files.createDirectories(world.rootPath.resolve(".plainbase/discussions/${id.value}"))
     val markerBytes = DiscussionCodec.encodeDiscussion(marker(world, id, corpus))
@@ -274,18 +301,23 @@ private fun seedDerivationCorpus(
     val bodyTail = "x".repeat(64 * 1024)
     repeat(MAX_COMMENT_ENTRIES) { index ->
         val commentId = DiscussionWorld.commentId(20_000 + corpus * MAX_COMMENT_ENTRIES + index)
-        val bytes = DiscussionCodec.encodeComment(
-            CommentRecord(
+        val record = CommentRecord(
                 id = commentId,
                 discussionId = id,
                 author = world.actor,
                 created = Instant.parse("2026-09-26T10:00:00Z"),
                 editedAt = null,
                 retraction = null,
-                body = "corpus-$corpus-comment-$index\n$bodyTail",
+                body = "",
                 extras = FrontmatterExtras.NONE,
-            ),
-        )
+            )
+        val body = if (exactMaximum) {
+            "x".repeat(MAX_COMMENT_BYTES - DiscussionCodec.encodeComment(record).size)
+        } else {
+            "corpus-$corpus-comment-$index\n$bodyTail"
+        }
+        val bytes = DiscussionCodec.encodeComment(record.copy(body = body))
+        if (exactMaximum) bytes.size shouldBe MAX_COMMENT_BYTES
         check(bytes.size <= MAX_COMMENT_BYTES)
         Files.write(directory.resolve(EntryName.Comment(commentId).fileName), bytes)
     }

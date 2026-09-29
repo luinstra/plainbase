@@ -156,6 +156,7 @@ class DiscussionDb internal constructor(
                 CREATE TABLE discussion(
                   root TEXT NOT NULL, id TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, stamp TEXT,
                   page_id TEXT, page_path TEXT, status TEXT, anchor_kind TEXT, anchor_hash TEXT, starter_key TEXT,
+                  starter_kind TEXT, starter_label TEXT, quote_preview TEXT,
                   created INTEGER, updated INTEGER, comment_count INTEGER NOT NULL, PRIMARY KEY(root, id)
                 )
                 """.trimIndent(),
@@ -189,7 +190,7 @@ class DiscussionDb internal constructor(
     }
 
     companion object {
-        const val SCHEMA_VERSION: Int = 1
+        const val SCHEMA_VERSION: Int = 2
         const val READER_POOL_SIZE: Int = 4
         const val BUSY_TIMEOUT_MS: Int = 5_000
         private val logger = KotlinLogging.logger {}

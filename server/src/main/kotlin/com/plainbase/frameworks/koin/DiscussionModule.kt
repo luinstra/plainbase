@@ -37,6 +37,7 @@ import com.plainbase.frameworks.discussion.DiscussionDb
 import com.plainbase.frameworks.discussion.JdbcDiscussionRows
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import com.plainbase.frameworks.filesystem.rootLivenessProbe
+import com.plainbase.frameworks.ktor.DiscussionReadProjection
 import com.plainbase.frameworks.ktor.GuardedDiscussionFacade
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.lifecycle.ServerResourcePhase
@@ -108,13 +109,19 @@ internal fun createDiscussionModule(resourceOwner: ServerResourceOwner) = module
             clock = Clock.System,
         )
     }
-    single<DiscussionFacade> {
+    single {
         val index = get<ObservedIndexRuntime>()
         val stores = get<RootStores>()
         GuardedDiscussionFacade(
             policy = get(), writer = get(), reads = get(), registry = get(), availability = get(),
             resolver = get(), absence = get(), indexBuilder = index.builder, stores = stores::get, labeler = get(),
+            projection = get(),
         )
+    }
+    single<DiscussionFacade> { get<GuardedDiscussionFacade>() }
+    single {
+        val stores = get<RootStores>()
+        DiscussionReadProjection(get(), get(), get(), get(), stores::get)
     }
     single<SyncedDiscussionIndex> {
         SyncedDiscussionIndex(get(), get(), get(), get())

@@ -46,7 +46,7 @@ import kotlin.time.Clock
  *
  * Mode-aware ([enforced]): under `auth.mode = off` (loopback-dev — the phase-4 plan's "open behavior") the
  * matrix is NOT consulted for humans/Anonymous — a grant is minted and a mutating decision is audited as
- * `allowed`. Agents still require a live token and discussion mode capability. Under `builtin`/`proxy` the
+ * `allowed`. Discussion checks still require a live agent token and discussion mode capability. Under `builtin`/`proxy` the
  * role×action [permits] matrix decides. This
  * is a CONFIG decision, not a claim — non-escalation holds (an OFF deployment is the operator's explicit choice,
  * never a header/frontmatter input).

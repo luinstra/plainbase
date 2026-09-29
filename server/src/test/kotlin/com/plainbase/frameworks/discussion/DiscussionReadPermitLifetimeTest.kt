@@ -3,6 +3,7 @@ package com.plainbase.frameworks.discussion
 import com.plainbase.domain.discussion.DiscussionId
 import com.plainbase.domain.discussion.DiscussionStore
 import com.plainbase.domain.discussion.EntriesRead
+import com.plainbase.domain.discussion.EntryListing
 import com.plainbase.domain.discussion.EntryName
 import com.plainbase.domain.discussion.RawEntry
 import com.plainbase.domain.discussion.Stamp
@@ -39,9 +40,10 @@ class DiscussionReadPermitLifetimeTest : FunSpec({
                     return world.store.stamp(root, id)
                 }
 
-                override fun read(root: RootName, id: DiscussionId, only: Set<EntryName>?): EntriesRead {
-                    if (only == null && reads.incrementAndGet() == 2) detailEntered.countDown()
-                    return world.store.read(root, id, only)
+                override fun listEntries(root: RootName, id: DiscussionId): EntryListing {
+                    reads.incrementAndGet()
+                    detailEntered.countDown()
+                    return world.store.listEntries(root, id)
                 }
             }
             val limiter = DiscussionFullReads(store)
@@ -58,7 +60,7 @@ class DiscussionReadPermitLifetimeTest : FunSpec({
                 }
                 requested.await(5, TimeUnit.SECONDS) shouldBe true
                 detailEntered.await(200, TimeUnit.MILLISECONDS) shouldBe false
-                reads.get() shouldBe 1
+                reads.get() shouldBe 0
                 releaseStamp.countDown()
                 reparse.get(10, TimeUnit.SECONDS).shouldBeInstanceOf<ReparseOutcome.Applied>().state shouldBe "ok"
                 read.get(10, TimeUnit.SECONDS).shouldBeInstanceOf<DetailPage.Content>()

@@ -6,6 +6,7 @@ import com.plainbase.domain.discussion.CollectionVisit
 import com.plainbase.domain.discussion.DiscussionId
 import com.plainbase.domain.discussion.DiscussionStore
 import com.plainbase.domain.discussion.EntriesRead
+import com.plainbase.domain.discussion.EntryListing
 import com.plainbase.domain.discussion.EntryName
 import com.plainbase.domain.discussion.EntryPath
 import com.plainbase.domain.discussion.EntryPut
@@ -52,6 +53,7 @@ class LocalDiscussionStore(
     private val onRootUnavailable: (RootName) -> Unit = {},
     private val tempSuffix: (() -> String)? = null,
     private val onTempPath: ((Path) -> Unit)? = null,
+    private val onEntryNameScanned: (EntryName) -> Unit = {},
 ) : DiscussionStore {
     private val roots = roots.mapValues { (_, path) -> path.toAbsolutePath().normalize() }
 
@@ -84,6 +86,95 @@ class LocalDiscussionStore(
         ambiguous = { it is EntriesRead.Absent || it is EntriesRead.Failed },
         operation = { base -> readLocked(base, id, only) },
     )
+
+    override fun listEntries(root: RootName, id: DiscussionId): EntryListing = rooted(
+        root = root,
+        ambiguous = { it is EntryListing.Absent || it is EntryListing.Failed },
+        operation = { base -> listEntriesLocked(base, id) },
+    )
+
+    override fun readKnownEntry(root: RootName, id: DiscussionId, name: EntryName): EntriesRead = rooted(
+        root = root,
+        ambiguous = { it is EntriesRead.Absent || it is EntriesRead.Failed },
+        operation = { base -> readKnownEntryLocked(base, id, name) },
+    )
+
+    private fun readKnownEntryLocked(base: Path, id: DiscussionId, name: EntryName): EntriesRead = try {
+        when (val dirs = collectionDirectories(base, create = false)) {
+            DirectoryWalk.Absent, DirectoryWalk.NotDirectory -> EntriesRead.Absent
+            is DirectoryWalk.Refused -> symlinkedRead(dirs.name)
+            is DirectoryWalk.Ready -> {
+                val idPath = dirs.path.resolve(id.value)
+                when (inspect(idPath).kind) {
+                    NodeKind.MISSING, NodeKind.OTHER, NodeKind.REGULAR -> EntriesRead.Absent
+                    NodeKind.SYMLINK -> symlinkedRead("${id.value}/")
+                    NodeKind.DIRECTORY -> {
+                        val path = idPath.resolve(name.fileName)
+                        when (inspect(path).kind) {
+                            NodeKind.MISSING, NodeKind.OTHER, NodeKind.DIRECTORY -> EntriesRead.Present(emptyList(), 0)
+                            NodeKind.SYMLINK -> symlinkedRead(name.fileName)
+                            NodeKind.REGULAR -> EntriesRead.Present(
+                                listOf(readEntry(path, name)), if (name is EntryName.Comment) 1 else 0,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    } catch (failure: FileSystemLinkException) {
+        symlinkedRead(failure.entry)
+    } catch (failure: IOException) {
+        EntriesRead.Failed(message(failure))
+    }
+
+    private fun listEntriesLocked(base: Path, id: DiscussionId): EntryListing = try {
+        when (val dirs = collectionDirectories(base, create = false)) {
+            DirectoryWalk.Absent, DirectoryWalk.NotDirectory -> EntryListing.Absent
+            is DirectoryWalk.Refused -> EntryListing.Symlinked(dirs.name)
+            is DirectoryWalk.Ready -> {
+                val path = dirs.path.resolve(id.value)
+                when (inspect(path).kind) {
+                    NodeKind.MISSING, NodeKind.OTHER, NodeKind.REGULAR -> EntryListing.Absent
+                    NodeKind.SYMLINK -> EntryListing.Symlinked("${id.value}/")
+                    NodeKind.DIRECTORY -> listNames(path)
+                }
+            }
+        }
+    } catch (failure: IOException) {
+        EntryListing.Failed(message(failure))
+    }
+
+    private fun listNames(path: Path): EntryListing {
+        var marker = false
+        var markerLink = false
+        var symlink: EntryName? = null
+        var count = 0
+        val comments = ArrayList<EntryName.Comment>()
+        withDirectoryStream(path) { stream ->
+            stream.forEach { child ->
+                val name = EntryName.parse(child.fileName.toString()) ?: return@forEach
+                onEntryNameScanned(name)
+                when (inspect(child).kind) {
+                    NodeKind.REGULAR -> when (name) {
+                        EntryName.Marker -> marker = true
+                        is EntryName.Comment -> {
+                            count++
+                            if (count <= MAX_COMMENT_ENTRIES + 1) comments += name
+                        }
+                    }
+                    NodeKind.SYMLINK -> {
+                        if (name == EntryName.Marker) markerLink = true
+                        if (symlink == null || name.fileName < checkNotNull(symlink).fileName) symlink = name
+                    }
+                    else -> Unit
+                }
+            }
+        }
+        if (markerLink) return EntryListing.Symlinked(MARKER_NAME)
+        if (count > MAX_COMMENT_ENTRIES) return EntryListing.TooMany(count)
+        symlink?.let { return EntryListing.Symlinked(it.fileName) }
+        return EntryListing.Present(marker, comments.sortedBy { it.fileName }, count)
+    }
 
     override fun createFiles(root: RootName, id: DiscussionId, puts: List<EntryPut>): StoreWrite = rooted(
         root = root,
@@ -346,6 +437,7 @@ class LocalDiscussionStore(
         withDirectoryStream(idPath) { stream ->
             stream.forEach { child ->
                 val name = EntryName.parse(child.fileName.toString()) ?: return@forEach
+                onEntryNameScanned(name)
                 when (inspect(child).kind) {
                     NodeKind.REGULAR -> recordRegularEntry(name, only, scan)
                     NodeKind.SYMLINK -> recordSymlinkEntry(name, only, scan)

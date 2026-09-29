@@ -21,6 +21,9 @@ data class DiscussionRow(
     val created: Long?,
     val updated: Long?,
     val commentCount: Int,
+    val starterKind: String? = null,
+    val starterLabel: String? = null,
+    val quotePreview: String? = null,
 )
 
 data class EntryRow(
@@ -50,6 +53,9 @@ data class DiscussionRowData(
     val created: Long? = null,
     val updated: Long? = null,
     val commentCount: Int = 0,
+    val starterKind: String? = null,
+    val starterLabel: String? = null,
+    val quotePreview: String? = null,
 )
 
 sealed interface RowUpdate {

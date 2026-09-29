@@ -1,6 +1,7 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.discussion.Anchor
 import com.plainbase.domain.discussion.CollectionVisit
 import com.plainbase.domain.discussion.CommentId
 import com.plainbase.domain.discussion.DiscussionAssembly
@@ -11,6 +12,7 @@ import com.plainbase.domain.discussion.DiscussionRowData
 import com.plainbase.domain.discussion.DiscussionRows
 import com.plainbase.domain.discussion.DiscussionStore
 import com.plainbase.domain.discussion.EntriesRead
+import com.plainbase.domain.discussion.EntryListing
 import com.plainbase.domain.discussion.EntryName
 import com.plainbase.domain.discussion.IdentityDigest
 import com.plainbase.domain.discussion.PageAttachment
@@ -57,13 +59,16 @@ data class DiscussionSummary(
     val created: Long?,
     val updated: Long?,
     val commentCount: Int,
+    val starterKind: String? = null,
+    val starterLabel: String? = null,
+    val quotePreview: String? = null,
 )
 
 data class PagedDiscussionSummaries(val discussions: List<DiscussionSummary>, val next: DiscussionId?)
 
 sealed interface DetailPage {
     data object Absent : DetailPage
-    data class Content(val read: DiscussionRead, val nextComment: CommentId?) : DetailPage
+    data class Content(val read: DiscussionRead, val nextComment: CommentId?, val summary: DiscussionSummary) : DetailPage
 }
 
 @Suppress("TooGenericExceptionCaught", "SwallowedException", "ThrowsCount")
@@ -172,25 +177,15 @@ class DiscussionReads(
         root: RootName,
         after: DiscussionId? = null,
         limit: Int = ROOT_LIMIT,
+        accepts: (DiscussionSummary) -> Boolean = { true },
     ): PagedDiscussionSummaries {
         require(limit in 1..ROOT_LIMIT)
         sync.current(root)
         requireAvailable(root)
         if (!sync.isUnsynced(root)) {
-            try {
-                val selected = rows.rowsAfter(root, after, limit)
-                val next = if (selected.size == limit) selected.last().id else null
-                return PagedDiscussionSummaries(selected.map(::summary), next)
-            } catch (failure: RootUnavailable) {
-                throw failure
-            } catch (failure: InterruptedException) {
-                Thread.currentThread().interrupt()
-                throw failure
-            } catch (failure: Exception) {
-                sync.enter(root, failure.message ?: "discussion root rows query failed")
-            }
+            rootRows(root, after, limit, accepts)?.let { return it }
         }
-        return rootFiles(root, after, limit)
+        return rootFiles(root, after, limit, accepts)
     }
 
     fun detail(
@@ -203,27 +198,9 @@ class DiscussionReads(
         sync.current(root)
         requireAvailable(root)
         return try {
-            fullReads.withFullRead(root, id) { entries ->
-                val names = (entries as? EntriesRead.Present)?.entries
-                    ?.mapNotNull { it.name as? EntryName.Comment }
-                    ?.map { it.id }
-                    ?.filter { afterComment == null || it.value > afterComment.value }
-                    ?.sortedBy { it.value }
-                    .orEmpty()
-                val selectedNames = names.take(limit)
-                val window = selectedNames.toSet()
-                val next = if (names.size > limit) selectedNames.lastOrNull() else null
-                val read = DiscussionAssembly.assemble(
-                    id,
-                    entries,
-                    retain = { it.id in window },
-                )
-                when (read) {
-                    DiscussionRead.Absent -> DetailPage.Absent
-                    is DiscussionRead.Failed -> throw DiscussionReadFailed(root, read.cause)
-                    else -> DetailPage.Content(read, next)
-                }
-            }
+            val indexed = indexedDetailRow(root, id)
+            indexed?.let(::indexedDetailProjection)?.let { return it }
+            fullReads.withPermit { readWindow(root, id, afterComment, limit, indexed) }
         } catch (failure: RootUnavailable) {
             throw failure
         } catch (failure: DiscussionReadFailed) {
@@ -234,6 +211,164 @@ class DiscussionReads(
         } catch (failure: Exception) {
             throw DiscussionReadFailed(root, failure.message ?: "detail read failed")
         }
+    }
+
+    private fun indexedDetailRow(root: RootName, id: DiscussionId): DiscussionRow? = if (sync.isUnsynced(root)) {
+        null
+    } else {
+        try {
+            rows.row(root, id)
+        } catch (failure: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw failure
+        } catch (failure: Exception) {
+            sync.enter(root, failure.message ?: "discussion detail row query failed")
+            null
+        }
+    }
+
+    private fun indexedDetailProjection(row: DiscussionRow): DetailPage.Content? {
+        val read = when (row.state) {
+            "unreadable", "failed" -> DiscussionRead.Unreadable(UnreadableReason.BAD_VALUE, row.reason ?: "discussion", row.pageId)
+            else -> return null
+        }
+        return DetailPage.Content(read, null, summary(row))
+    }
+
+    private fun readWindow(root: RootName, id: DiscussionId, after: CommentId?, limit: Int, indexed: DiscussionRow?): DetailPage {
+        repeat(2) {
+            when (val before = listing(root, id)) {
+                EntryListing.Absent -> return DetailPage.Absent
+                is EntryListing.Failed -> throw DiscussionReadFailed(root, before.cause)
+                is EntryListing.Symlinked -> return metadataUnreadable(
+                    id, UnreadableReason.SYMLINK, before.entry, indexed, indexed?.commentCount ?: 0,
+                )
+                is EntryListing.TooMany -> return metadataUnreadable(
+                    id, UnreadableReason.TOO_MANY_COMMENTS, "${id.value}/", indexed, before.count,
+                )
+                is EntryListing.Present -> readPresentWindow(root, id, after, limit, indexed, before)?.let { return it }
+            }
+        }
+        throw DiscussionReadFailed(root, "discussion entries changed during detail read")
+    }
+
+    private fun metadataUnreadable(
+        id: DiscussionId,
+        reason: UnreadableReason,
+        entry: String,
+        indexed: DiscussionRow?,
+        commentCount: Int,
+    ): DetailPage.Content {
+        val read = DiscussionRead.Unreadable(reason, entry, indexed?.pageId)
+        val projected = fileSummary(id, read, commentCount, null).copy(pagePath = indexed?.pagePath)
+        return DetailPage.Content(read, null, projected)
+    }
+
+    private fun readPresentWindow(
+        root: RootName,
+        id: DiscussionId,
+        after: CommentId?,
+        limit: Int,
+        indexed: DiscussionRow?,
+        before: EntryListing.Present,
+    ): DetailPage.Content? {
+        val names = before.comments.filter { after == null || it.id.value > after.value }
+        val window = names.take(limit)
+        val selected = setOf<EntryName>(EntryName.Marker) + window
+        val streamed = if (indexed?.state == "ok") {
+            val entries = store.read(root, id, selected)
+            if (!hasSelected(entries, selected, before.markerPresent)) {
+                null to null
+            } else {
+                DiscussionAssembly.assemble(id, entries, retain = { it in window }) to null
+            }
+        } else {
+            streamEntries(root, id, before, window)
+        }
+        val raw = streamed.first
+        if (before != listing(root, id) || raw == null) return null
+        if (raw is DiscussionRead.Failed) throw DiscussionReadFailed(root, raw.cause)
+        val next = names.getOrNull(limit)?.let { window.lastOrNull()?.id }
+        val selectedLatest = (raw as? DiscussionRead.Ok)?.files?.comments?.flatMap { stored ->
+            val comment = stored.value
+            listOfNotNull(
+                comment.created.toEpochMilliseconds(), comment.editedAt?.toEpochMilliseconds(),
+                comment.retraction?.at?.toEpochMilliseconds(),
+            )
+        }?.maxOrNull()
+        val latest = listOfNotNull(streamed.second, indexed?.updated, selectedLatest).maxOrNull()
+        val projected = fileSummary(id, raw, before.commentCount, latest).let { fresh ->
+            if (raw is DiscussionRead.Unreadable) {
+                fresh.copy(pageId = fresh.pageId ?: indexed?.pageId, pagePath = indexed?.pagePath)
+            } else {
+                fresh
+            }
+        }
+        return DetailPage.Content(raw, next, projected)
+    }
+
+    private fun listing(root: RootName, id: DiscussionId): EntryListing = store.listEntries(root, id)
+
+    private fun hasSelected(read: EntriesRead, selected: Set<EntryName>, markerPresent: Boolean): Boolean =
+        read is EntriesRead.Present && read.entries.mapTo(mutableSetOf()) { it.name } ==
+        selected.filterTo(mutableSetOf()) { it != EntryName.Marker || markerPresent }
+
+    private fun streamEntries(
+        root: RootName,
+        id: DiscussionId,
+        listing: EntryListing.Present,
+        window: List<EntryName.Comment>,
+    ): Pair<DiscussionRead?, Long?> {
+        val markerRead = store.readKnownEntry(root, id, EntryName.Marker)
+        if (!hasSelected(markerRead, setOf(EntryName.Marker), listing.markerPresent)) return null to null
+        val chosen = window.toSet()
+        var latest: Long? = null
+        val accumulator = DiscussionAssembly.Accumulator(
+            id,
+            retain = { it in chosen },
+            onComment = { stored ->
+                val comment = stored.value
+                latest = listOfNotNull(
+                    latest, comment.created.toEpochMilliseconds(), comment.editedAt?.toEpochMilliseconds(),
+                    comment.retraction?.at?.toEpochMilliseconds(),
+                ).maxOrNull()
+            },
+        )
+        (markerRead as EntriesRead.Present).entries.forEach(accumulator::accept)
+        for (name in listing.comments) {
+            val read = store.readKnownEntry(root, id, name)
+            if (!hasSelected(read, setOf(name), false)) return null to null
+            (read as EntriesRead.Present).entries.forEach(accumulator::accept)
+        }
+        return accumulator.finish() to latest
+    }
+
+    private fun fileSummary(id: DiscussionId, read: DiscussionRead, count: Int, latest: Long?): DiscussionSummary = when (read) {
+        is DiscussionRead.Ok -> {
+            val marker = read.files.marker.value
+            val updated = listOfNotNull(
+                marker.created.toEpochMilliseconds(), marker.statusChange?.at?.toEpochMilliseconds(),
+                marker.reattachment?.at?.toEpochMilliseconds(), latest,
+            ).maxOrNull()
+            DiscussionSummary(
+                id, "ok", null, marker.page.pageId, marker.page.path, marker.status.wire,
+                if (marker.anchor is Anchor.Page) "page" else "quote", read.files.marker.version.token,
+                IdentityDigest.of(marker.startedBy.actor.subject), marker.created.toEpochMilliseconds(), updated, count,
+                marker.startedBy.kind.wire, RowDerivation.clipUtf8(marker.startedBy.actor.label),
+                (marker.reattachment?.anchor ?: marker.anchor).let {
+                    (it as? Anchor.Quote)?.capture?.quote?.let(RowDerivation::clipUtf8)
+                },
+            )
+        }
+        is DiscussionRead.Incomplete -> DiscussionSummary(
+            id, "incomplete", null, null, null, null, null, null, null,
+            null, null, count,
+        )
+        is DiscussionRead.Unreadable -> DiscussionSummary(
+            id, "unreadable", "${read.reason.wire}:${read.entry}", read.pageId,
+            null, null, null, null, null, null, null, count,
+        )
+        else -> throw IllegalStateException("detail summary requires a present discussion")
     }
 
     private fun pageFiles(
@@ -302,13 +437,19 @@ class DiscussionReads(
         return PagedDiscussionSummaries(summaries, next)
     }
 
-    private fun rootFiles(root: RootName, after: DiscussionId?, limit: Int): PagedDiscussionSummaries {
-        val selected = PriorityQueue<DiscussionId>(limit + 1, compareByDescending { it.value })
+    private fun rootFiles(
+        root: RootName,
+        after: DiscussionId?,
+        limit: Int,
+        accepts: (DiscussionSummary) -> Boolean,
+    ): PagedDiscussionSummaries {
+        val cap = 4 * limit + 1
+        val selected = PriorityQueue<DiscussionId>(cap, compareByDescending { it.value })
         var count = 0
         visit(root) { id, _ ->
             if (after != null && id.value <= after.value) return@visit
             count++
-            if (selected.size < limit) {
+            if (selected.size < cap) {
                 selected += id
             } else if (id.value < selected.peek().value) {
                 selected.remove()
@@ -316,9 +457,61 @@ class DiscussionReads(
             }
         }
         val ids = selected.toList().sortedBy { it.value }
-        val summaries = ids.mapNotNull { id -> fullSummary(root, id) }
-        val next = if (count > limit) ids.lastOrNull() else null
-        return PagedDiscussionSummaries(summaries, next)
+        val output = ArrayList<DiscussionSummary>(limit)
+        var inspected = 0
+        while (inspected < minOf(4 * limit, ids.size) && output.size < limit) {
+            val summary = fullSummary(root, ids[inspected])
+            inspected++
+            if (summary != null && accepts(summary)) output += summary
+        }
+        val next = if (inspected < count) ids[inspected - 1] else null
+        return PagedDiscussionSummaries(output, next)
+    }
+
+    private fun rootRows(
+        root: RootName,
+        after: DiscussionId?,
+        limit: Int,
+        accepts: (DiscussionSummary) -> Boolean,
+    ): PagedDiscussionSummaries? {
+        val output = ArrayList<DiscussionSummary>(limit)
+        var cursor = after
+        var inspected = 0
+        val budget = 4 * limit
+        while (inspected < budget && output.size < limit) {
+            val batchLimit = minOf(limit - output.size, budget - inspected)
+            val batch = queryRows(root) { rows.rowsAfter(root, cursor, batchLimit) } ?: return null
+            if (batch.isEmpty()) return PagedDiscussionSummaries(output, null)
+            for (row in batch) {
+                inspected++
+                cursor = row.id
+                val candidate = summary(row)
+                if (accepts(candidate)) output += candidate
+            }
+            if (batch.size < batchLimit) return PagedDiscussionSummaries(output, null)
+        }
+        val next = if (cursor != null && (queryRows(root) { rows.ids(root, cursor, 1) } ?: return null).isNotEmpty()) {
+            cursor
+        } else {
+            null
+        }
+        return PagedDiscussionSummaries(output, next)
+    }
+
+    private fun <T> queryRows(root: RootName, query: () -> T): T? = try {
+        query()
+    } catch (failure: RootUnavailable) {
+        throw failure
+    } catch (failure: DiscussionReadFailed) {
+        throw failure
+    } catch (failure: AbsenceUnverified) {
+        throw failure
+    } catch (failure: InterruptedException) {
+        Thread.currentThread().interrupt()
+        throw failure
+    } catch (failure: Exception) {
+        sync.enter(root, failure.message ?: "discussion root rows query failed")
+        null
     }
 
     private fun fullSummary(root: RootName, id: DiscussionId): DiscussionSummary? = try {
@@ -382,6 +575,9 @@ class DiscussionReads(
         created = row.created,
         updated = row.updated,
         commentCount = row.commentCount,
+        starterKind = row.starterKind,
+        starterLabel = row.starterLabel,
+        quotePreview = row.quotePreview,
     )
 
     private fun RowUpdate.toDiscussionRow(root: RootName, id: DiscussionId): DiscussionRow? = when (this) {
@@ -406,6 +602,9 @@ class DiscussionReads(
         created = created,
         updated = updated,
         commentCount = commentCount,
+        starterKind = starterKind,
+        starterLabel = starterLabel,
+        quotePreview = quotePreview,
     )
 
     private fun DiscussionRowData.toSummary(id: DiscussionId) = DiscussionSummary(
@@ -421,6 +620,9 @@ class DiscussionReads(
         created = created,
         updated = updated,
         commentCount = commentCount,
+        starterKind = starterKind,
+        starterLabel = starterLabel,
+        quotePreview = quotePreview,
     )
 
     private fun belongsToPage(

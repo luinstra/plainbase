@@ -61,6 +61,11 @@ object RowDerivation {
                 anchorKind = if (marker.anchor is Anchor.Page) "page" else "quote",
                 anchorHash = files.marker.version.token,
                 starterKey = IdentityDigest.of(marker.startedBy.actor.subject),
+                starterKind = marker.startedBy.kind.wire,
+                starterLabel = clipUtf8(marker.startedBy.actor.label),
+                quotePreview = (marker.reattachment?.anchor ?: marker.anchor).let { anchor ->
+                    (anchor as? Anchor.Quote)?.capture?.quote?.let(::clipUtf8)
+                },
                 created = marker.created.toEpochMilliseconds(),
                 updated = updated,
                 commentCount = commentCount,
@@ -74,6 +79,24 @@ object RowDerivation {
         return EntryRowData(name, digest, version.token, authorKey)
     }
 
+    fun clipUtf8(value: String): String {
+        var bytes = 0
+        var end = 0
+        while (end < value.length) {
+            val codePoint = Character.codePointAt(value, end)
+            val width = when {
+                codePoint <= 0x7f -> 1
+                codePoint <= 0x7ff -> 2
+                codePoint <= 0xffff -> 3
+                else -> 4
+            }
+            if (bytes + width > 256) break
+            bytes += width
+            end += Character.charCount(codePoint)
+        }
+        return value.substring(0, end)
+    }
+
     private fun data(
         state: String,
         reason: String? = null,
@@ -83,11 +106,17 @@ object RowDerivation {
         anchorKind: String? = null,
         anchorHash: String? = null,
         starterKey: String? = null,
+        starterKind: String? = null,
+        starterLabel: String? = null,
+        quotePreview: String? = null,
         created: Long? = null,
         updated: Long? = null,
         commentCount: Int = 0,
     ) = RowUpdate.Upsert(
-        DiscussionRowData(state, reason, pageId, pagePath, status, anchorKind, anchorHash, starterKey, created, updated, commentCount),
+        DiscussionRowData(
+            state, reason, pageId, pagePath, status, anchorKind, anchorHash, starterKey,
+            created, updated, commentCount, starterKind, starterLabel, quotePreview,
+        ),
         emptyList(),
     )
 

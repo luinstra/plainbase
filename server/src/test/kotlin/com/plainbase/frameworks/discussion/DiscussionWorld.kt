@@ -12,6 +12,7 @@ import com.plainbase.domain.discussion.DiscussionPageSource
 import com.plainbase.domain.discussion.DiscussionRowWriter
 import com.plainbase.domain.discussion.DiscussionRows
 import com.plainbase.domain.discussion.DiscussionStore
+import com.plainbase.domain.discussion.EntryName
 import com.plainbase.domain.discussion.PageRef
 import com.plainbase.domain.discussion.RowUpdate
 import com.plainbase.domain.discussion.Stamp
@@ -46,6 +47,7 @@ import kotlin.time.Instant
 internal class DiscussionWorld(
     readEntryBytes: ((Path, Int) -> ByteArray)? = null,
     pageBytes: ByteArray = "# Discussion page\n\nA stable page body.\n".encodeToByteArray(),
+    onEntryNameScanned: (EntryName) -> Unit = {},
 ) : AutoCloseable {
     val base: Path = Files.createTempDirectory("plainbase-discussion-world")
     val rootPath: Path = Files.createDirectories(base.resolve(ROOT.value))
@@ -56,7 +58,9 @@ internal class DiscussionWorld(
     private val observedRows = ObservedDiscussionRows(rows, rowObserver)
     val sync = DiscussionSyncState(listOf(ROOT))
     val availability = RootAvailability(TEST_CLOCK)
-    val store = LocalDiscussionStore(mapOf(ROOT to rootPath), readEntryBytes = readEntryBytes)
+    val store = LocalDiscussionStore(
+        mapOf(ROOT to rootPath), readEntryBytes = readEntryBytes, onEntryNameScanned = onEntryNameScanned,
+    )
     val fullReads = DiscussionFullReads(store)
     val index = SyncedDiscussionIndex(observedRows, store, fullReads, sync)
     val alarm = ManualAlarm()

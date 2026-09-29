@@ -211,7 +211,7 @@ class DiscussionUnsyncedTest : FunSpec({
         }
     }
 
-    test("detail reads the files on a synced root") {
+    test("detail reads the files on a synced root even when the index says incomplete") {
         withDiscussionIndexFixture { _, db, store ->
             writeReadableDiscussion(store, DISCUSSION)
             val rows = JdbcDiscussionRows(db)
@@ -228,7 +228,8 @@ class DiscussionUnsyncedTest : FunSpec({
 
             val detail = reads.detail(ROOT, DISCUSSION) as DetailPage.Content
 
-            (detail.read as DiscussionRead.Ok).files.marker.value.status shouldBe DiscussionStatus.OPEN
+            detail.read.shouldBeInstanceOf<DiscussionRead.Ok>().files.comments.size shouldBe 1
+            detail.summary.commentCount shouldBe 1
         }
     }
 
@@ -341,7 +342,8 @@ class DiscussionUnsyncedTest : FunSpec({
     test("a failed detail read throws") {
         withDiscussionIndexFixture { _, db, baseStore ->
             val store = object : DiscussionStore by baseStore {
-                override fun read(root: RootName, id: DiscussionId, only: Set<EntryName>?): EntriesRead = EntriesRead.Failed("disk failed")
+                override fun listEntries(root: RootName, id: DiscussionId): com.plainbase.domain.discussion.EntryListing =
+                    com.plainbase.domain.discussion.EntryListing.Failed("disk failed")
             }
             val reads = reads(JdbcDiscussionRows(db), store, DiscussionSyncState(setOf(ROOT)))
 
@@ -354,7 +356,7 @@ class DiscussionUnsyncedTest : FunSpec({
     test("a root lost mid read propagates") {
         withDiscussionIndexFixture { _, db, baseStore ->
             val store = object : DiscussionStore by baseStore {
-                override fun read(root: RootName, id: DiscussionId, only: Set<EntryName>?): EntriesRead =
+                override fun listEntries(root: RootName, id: DiscussionId): com.plainbase.domain.discussion.EntryListing =
                     throw RootUnavailable(root, UnavailableCause.VANISHED)
             }
             val reads = reads(JdbcDiscussionRows(db), store, DiscussionSyncState(setOf(ROOT)))

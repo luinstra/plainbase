@@ -12,11 +12,23 @@ interface DiscussionStore {
     fun sweepBootResidue(root: RootName, now: Instant, minAge: Duration = 24.hours): List<BootTombstone>
     fun tombstoneBytes(root: RootName, tombstone: Tombstone): ByteArray? = null
     fun read(root: RootName, id: DiscussionId, only: Set<EntryName>? = null): EntriesRead
+    fun listEntries(root: RootName, id: DiscussionId): EntryListing
+
+    /** Read a name already validated by a membership scan, with the same path and entry guards as [read]. */
+    fun readKnownEntry(root: RootName, id: DiscussionId, name: EntryName): EntriesRead = read(root, id, setOf(name))
     fun createFiles(root: RootName, id: DiscussionId, puts: List<EntryPut>): StoreWrite
     fun replace(root: RootName, entry: EntryPath, version: EntryVersion, bytes: ByteArray): StoreWrite
     fun purge(root: RootName, entry: EntryPath, version: EntryVersion): StoreWrite
     fun restore(root: RootName, tombstone: Tombstone): StoreWrite
     fun discard(root: RootName, tombstone: Tombstone): StoreWrite
+}
+
+sealed interface EntryListing {
+    data object Absent : EntryListing
+    data class Failed(val cause: String) : EntryListing
+    data class Symlinked(val entry: String) : EntryListing
+    data class TooMany(val count: Int) : EntryListing
+    data class Present(val markerPresent: Boolean, val comments: List<EntryName.Comment>, val commentCount: Int) : EntryListing
 }
 
 data class EntryVersion(val token: String)
