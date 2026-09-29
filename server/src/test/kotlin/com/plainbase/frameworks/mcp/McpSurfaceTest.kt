@@ -17,7 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * The MCP surface + REST↔MCP parity (WI-7, extended in C4). The original seven tools use the guarded facades +
+ * The MCP surface + REST↔MCP parity. The original seven tools use the guarded facades +
  * frozen DTOs as REST, so their six read/list/get tools are byte-identical to their REST endpoints for the same
  * fixture/input, and `propose_change` is structural-parity excluding the freshly minted id. A divergence here means
  * the MCP path drifted from REST (an `explicitNulls` slip, a wrong serializer, a wrong surface).

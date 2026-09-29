@@ -8,7 +8,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * The frozen seven P3 tools plus four C4 discussion tools.
+ * The eleven MCP tools.
  * `read_page` is the sole whole-file read (read_section/read_file dropped, owner-settled): it returns the verbatim
  * on-disk markdown (frontmatter header + body), exactly as `GET /api/v1/pages/{id}` does. These names + their input
  * schemas are checked against the wire inventory in McpSurfaceTest.

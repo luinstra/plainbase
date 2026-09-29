@@ -119,15 +119,15 @@ class DiscussionReads(
                 DiscussionRead.Absent -> DiscussionClaim.Absent
                 is DiscussionRead.Ok -> DiscussionClaim.Present(
                     DiscussionFacts.Known(
-                    state = "ok",
-                    pageId = assembled.files.marker.value.page.pageId,
-                    status = assembled.files.marker.value.status.wire,
-                    starterKey = IdentityDigest.of(assembled.files.marker.value.startedBy.actor.subject),
-                    authorKey = comment?.let { name ->
-                        assembled.files.comments.firstOrNull { it.name == EntryName.Comment(name) }
-                            ?.value?.author?.actor?.subject?.let(IdentityDigest::of)
-                    },
-                ),
+                        state = "ok",
+                        pageId = assembled.files.marker.value.page.pageId,
+                        status = assembled.files.marker.value.status.wire,
+                        starterKey = IdentityDigest.of(assembled.files.marker.value.startedBy.actor.subject),
+                        authorKey = comment?.let { name ->
+                            assembled.files.comments.firstOrNull { it.name == EntryName.Comment(name) }
+                                ?.value?.author?.actor?.subject?.let(IdentityDigest::of)
+                        },
+                    ),
                 )
                 is DiscussionRead.Failed -> DiscussionClaim.Unknown
                 is DiscussionRead.Unreadable -> if (assembled.reason == UnreadableReason.SYMLINK) {

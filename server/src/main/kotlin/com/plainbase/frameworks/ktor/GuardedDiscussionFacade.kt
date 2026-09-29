@@ -203,7 +203,7 @@ class GuardedDiscussionFacade(
 
     override fun retract(principal: Principal, id: DiscussionId, root: RootName?, commentId: CommentId): DiscussionWriteOutcome =
         mutate(principal, id, root, DiscussionAction.RETRACT, "discussion/${id.value}/comment/${commentId.value}", commentId) {
-                owner,
+            owner,
             actor,
             ->
             DiscussionCommand.RetractComment(owner, actor, id, commentId)
@@ -252,7 +252,7 @@ class GuardedDiscussionFacade(
 
     override fun purge(principal: Principal, id: DiscussionId, root: RootName?, commentId: CommentId): DiscussionWriteOutcome =
         mutate(principal, id, root, DiscussionAction.PURGE, "discussion/${id.value}/comment/${commentId.value}", commentId) {
-                owner,
+            owner,
             actor,
             ->
             DiscussionCommand.PurgeComment(owner, actor, id, commentId)

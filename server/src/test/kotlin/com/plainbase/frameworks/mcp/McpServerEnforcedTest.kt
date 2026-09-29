@@ -13,7 +13,7 @@ import io.ktor.http.HttpStatusCode
  * The enforced-mode MCP auth suite (WI-7, the `ci-runs-auth-off-blind` rule): CI/smoke boot `auth.mode=off`, under
  * which the WHOLE gate (connect auth + facade gate + existence-non-leak) is INVISIBLE. These drive a REAL SSE MCP
  * client against an `enforced = true` server so a gating regression is caught. The connect-reject checks read the
- * pre-upgrade status (no stream); the role/deny checks open an authed stream and exercise the seven tools.
+ * pre-upgrade status (no stream); the role/deny checks open an authed stream and exercise the original tools.
  */
 class McpServerEnforcedTest : FunSpec({
 

@@ -164,9 +164,21 @@ call. The six original read/list/get tools and two discussion reads have shared 
 endpoints; authentication, session and error envelopes remain transport-specific. `propose_change` is
 `POST /api/v1/changes`; `start_discussion` and `add_comment` use the discussion REST facades. Separately executed
 proposal creates mint independent IDs even though their response structure is shared. Every MCP tool has a REST equivalent you
-can drive with the same `pb_` bearer. The reverse is not total: a few write paths are REST-only (the
-`PUT /api/v1/pages/{id}` direct commit for an in-glob COMMIT token, and direct page creation), with no MCP tool -
-over MCP you propose page changes instead.
+can drive with the same `pb_` bearer. REST also offers direct page edit (`PUT /api/v1/pages/{id}` for an in-glob
+COMMIT token) and creation (`POST /api/v1/pages`); over MCP, you propose page changes instead. The following
+discussion endpoints are REST-only:
+
+| Operation | Endpoint |
+|---|---|
+| Edit comment | `POST /api/v1/discussions/{id}/comments/{commentId}/edit` |
+| Retract comment | `POST /api/v1/discussions/{id}/comments/{commentId}/retract` |
+| Resolve discussion | `POST /api/v1/discussions/{id}/resolve` |
+| Reopen discussion | `POST /api/v1/discussions/{id}/reopen` |
+| Reattach discussion | `POST /api/v1/discussions/{id}/reattach` |
+| Purge comment | `POST /api/v1/discussions/{id}/comments/{commentId}/purge` |
+| Preview anchor | `POST /api/v1/pages/{id}/discussions/anchor-preview` |
+
+Anchor preview does not mutate anything, despite using POST.
 
 For the REST document URL matrix, opt-in Markdown representation, source-byte semantics, and the JSON `ETag` write
 base-hash rule, see the [HTTP API reference](http-api.md). MCP's `read_page` remains the structured JSON read contract.

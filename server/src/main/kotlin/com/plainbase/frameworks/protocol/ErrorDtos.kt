@@ -125,7 +125,7 @@ object ErrorCodes {
 
     const val DISCUSSIONS_UNSUPPORTED: String = "discussions_unsupported"
 
-    // Discussions C4: transport grammar and selection refusals.
+    // Discussion transport grammar and selection refusals.
     const val INVALID_UTF8: String = "invalid_utf8"
     const val ANCHOR_TOO_LARGE: String = "anchor_too_large"
     const val COMMENT_EMPTY: String = "comment_empty"

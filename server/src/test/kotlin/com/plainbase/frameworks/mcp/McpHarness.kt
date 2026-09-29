@@ -63,7 +63,7 @@ class McpHarness(
     /** Optional visibility boundary for the seeded root; the store is populated first so this exercises facade gating. */
     primaryPolicy: ContentPathPolicy = ContentPathPolicy.ALL,
     /**
-     * C4 window fixture: the roots a FAKE [AmbiguousIdMap] reports as holding the SEEDED page id. Non-empty wraps the
+     * Window fixture: the roots a FAKE [AmbiguousIdMap] reports as holding the SEEDED page id. Non-empty wraps the
      * real idMap for that one id, which is the only way to pose Ambiguity under `UNIQUE(id)`. Threaded into BOTH the
      * resolver AND the classifier deliberately - a resolver-only fake leaves `requireVerifiedAbsence` reading the real
      * list, and the two would answer from different facts (the REV14 FIX-1 defect).
@@ -270,7 +270,7 @@ class McpHarness(
     }
 }
 
-/** The text payload of a (non-structured) tool result — the single `TextContent` block all seven tools emit. */
+/** The text payload of a (non-structured) tool result. */
 fun CallToolResult.text(): String = (content.first() as TextContent).text
 
 /** Whether the result is an error result (`isError == true`). */
