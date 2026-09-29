@@ -54,6 +54,7 @@ import com.plainbase.domain.service.DiscussionWriter
 import com.plainbase.domain.service.RootSync
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.domain.service.SyncedDiscussionIndex
+import com.plainbase.domain.service.write
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.git.providerOver

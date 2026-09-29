@@ -16,6 +16,7 @@ import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.createContentModule
+import com.plainbase.frameworks.koin.createDiscussionModule
 import com.plainbase.frameworks.koin.createHistoryModule
 import com.plainbase.frameworks.koin.createRepositoryModule
 import com.plainbase.frameworks.koin.createRestModule
@@ -517,6 +518,7 @@ object NativeSpike {
                 indexModule,
                 checkpointModule,
                 createSearchModule(openers.openSearch, { it.close() }, resources),
+                createDiscussionModule(resources),
                 createHistoryModule(config, bootInputs.history, resources),
                 createRestModule(resources),
             )

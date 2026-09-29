@@ -33,6 +33,7 @@ import com.plainbase.domain.service.DiscussionWriteOutcome
 import com.plainbase.domain.service.DiscussionWriter
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.SyncedDiscussionIndex
+import com.plainbase.domain.service.write
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import java.nio.file.Files

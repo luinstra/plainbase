@@ -123,6 +123,8 @@ object ErrorCodes {
     /** 403: the target root is declared `editable = false` — page-mutation writes are refused there in EVERY auth mode. */
     const val ROOT_NOT_EDITABLE: String = "root_not_editable"
 
+    const val DISCUSSIONS_UNSUPPORTED: String = "discussions_unsupported"
+
     /** 400: a request named a root that is not a legal slug, or names no configured root. */
     const val INVALID_ROOT: String = "invalid_root"
 

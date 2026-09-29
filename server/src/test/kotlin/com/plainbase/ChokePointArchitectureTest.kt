@@ -85,15 +85,18 @@ class ChokePointArchitectureTest : FunSpec({
         "GuardedReadFacade",
         "GuardedMutatingFacade",
         "GuardedProposalFacade",
+        "GuardedDiscussionFacade",
         "RestServices",
         "EditGrant(",
         "CreateGrant(",
         "ManageGrant(",
         "ApproveGrant(",
+        "DiscussionGrant(",
         "grantForTests",
         "createGrantForTests",
         "manageGrantForTests",
         "approveGrantForTests",
+        "discussionGrantForTests",
     )
 
     test("the scan sees every expected file in every registered root") {

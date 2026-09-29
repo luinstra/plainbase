@@ -277,14 +277,18 @@ class DiscussionUnsyncedTest : FunSpec({
                 val reads = reads(JdbcDiscussionRows(db), store, sync)
 
                 val incomplete = reads.facts(ROOT, incompleteId).shouldBeInstanceOf<DiscussionFacts.Known>()
+                reads.claim(ROOT, incompleteId).shouldBeInstanceOf<DiscussionClaim.Present>().facts shouldBe incomplete
                 incomplete.state shouldBe "incomplete"
                 incomplete.pageId shouldBe null
                 incomplete.status shouldBe null
                 val unreadable = reads.facts(ROOT, unreadableId).shouldBeInstanceOf<DiscussionFacts.Known>()
+                reads.claim(ROOT, unreadableId).shouldBeInstanceOf<DiscussionClaim.Present>().facts shouldBe unreadable
                 unreadable.state shouldBe "unreadable"
                 unreadable.pageId shouldBe null
                 reads.facts(ROOT, failedId) shouldBe DiscussionFacts.Unknown
                 reads.facts(ROOT, symlinkedId) shouldBe DiscussionFacts.Unknown
+                reads.claim(ROOT, failedId) shouldBe DiscussionClaim.Unknown
+                reads.claim(ROOT, symlinkedId) shouldBe DiscussionClaim.Unknown
             } finally {
                 outside.toFile().deleteRecursively()
             }
@@ -305,6 +309,32 @@ class DiscussionUnsyncedTest : FunSpec({
             val unsynced = reads.facts(ROOT, DISCUSSION, COMMENT_ID)
 
             synced shouldBe unsynced
+            reads.claim(ROOT, DISCUSSION, COMMENT_ID).shouldBeInstanceOf<DiscussionClaim.Present>().facts shouldBe synced
+        }
+    }
+
+    test("a synced symlink row retains known presence while file fallback cannot establish it") {
+        withDiscussionIndexFixture { rootPath, db, store ->
+            val symlinkedId = discussionId(2_005)
+            Files.createDirectories(discussionDirectory(rootPath, symlinkedId))
+            val outside = Files.createTempDirectory("pb-discussion-symlink-row")
+            try {
+                val target = Files.write(outside.resolve("discussion.md"), byteArrayOf(1))
+                Files.createSymbolicLink(markerPath(rootPath, symlinkedId), target)
+                val rows = JdbcDiscussionRows(db)
+                val sync = DiscussionSyncState(setOf(ROOT))
+                val index = SyncedDiscussionIndex(rows, store, DiscussionFullReads(store), sync)
+                index.publish(ROOT, symlinkedId, markerChanged = true) { store.read(ROOT, symlinkedId) }
+                val reads = reads(rows, store, sync)
+
+                val known = reads.claim(ROOT, symlinkedId).shouldBeInstanceOf<DiscussionClaim.Present>().facts
+                    .shouldBeInstanceOf<DiscussionFacts.Known>()
+                known.state shouldBe "unreadable"
+                sync.enter(ROOT, "force fallback")
+                reads.claim(ROOT, symlinkedId) shouldBe DiscussionClaim.Unknown
+            } finally {
+                outside.toFile().deleteRecursively()
+            }
         }
     }
 

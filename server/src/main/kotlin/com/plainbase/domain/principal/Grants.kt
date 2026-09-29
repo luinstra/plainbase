@@ -1,12 +1,16 @@
 package com.plainbase.domain.principal
 
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.service.DiscussionAction
+import com.plainbase.domain.service.ReliedOn
+
 /**
  * Unforgeable typed authorization grants (A3, the compile-time floor). A mutating domain operation
  * ([com.plainbase.domain.service.WritePipeline.write]/`create`, `ContentStore.writeAssetExclusive`, the gated
  * `IndexBuilder.rebuild(grant)`, the P1a proposal status transition `ProposalService.proposeEdit`/`proposeCreate`/
  * `reject`) REQUIRES one of these as a leading parameter — so a bypassed
- * `PolicyService.check()` is a COMPILE error even if someone injects the raw mutator. The grants carry NO payload:
- * they exist purely to make "I called check()" a value the mutator can demand (a plain `class`, never a `data`
+ * `PolicyService.check()` is a COMPILE error even if someone injects the raw mutator. Most grants carry no payload;
+ * [DiscussionGrant] carries the rooted action and relied-on identity facts. Each is a plain `class`, never a `data`
  * class — `copy()` would re-open forgery).
  *
  * UNFORGEABILITY (the threat model the debate ratified):
@@ -27,6 +31,13 @@ class ManageGrant internal constructor()
 /** Gates the P1a proposal STATUS TRANSITION (approve/reject) — NOT a content-tree write (that is the EditGrant). */
 class ApproveGrant internal constructor()
 
+class DiscussionGrant internal constructor(
+    val root: RootName?,
+    val action: DiscussionAction,
+    val reliedOn: ReliedOn,
+    val ownershipRequired: Boolean,
+)
+
 /**
  * TEST-ONLY grant mint, PUBLIC in `src/main` so JVM and native test source sets can mint through one deliberate
  * test seam. NEVER referenced from production — the source-scan tests enforce that.
@@ -38,3 +49,6 @@ fun createGrantForTests(): CreateGrant = CreateGrant()
 fun manageGrantForTests(): ManageGrant = ManageGrant()
 
 fun approveGrantForTests(): ApproveGrant = ApproveGrant()
+
+fun discussionGrantForTests(root: RootName, action: DiscussionAction, reliedOn: ReliedOn = ReliedOn()): DiscussionGrant =
+    DiscussionGrant(root, action, reliedOn, ownershipRequired = false)

@@ -1,7 +1,10 @@
 package com.plainbase.frameworks.koin
 
 import app.cash.sqldelight.db.SqlDriver
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.discussion.DiscussionPageSource
+import com.plainbase.domain.discussion.PageRef
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.repository.ProposalOperation
@@ -18,6 +21,9 @@ import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.AbsenceClassifier
+import com.plainbase.domain.service.ContentWriteMonitor
+import com.plainbase.domain.service.DiscussionFacade
+import com.plainbase.domain.service.DiscussionWriter
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
@@ -144,6 +150,7 @@ class IndexModuleWiringTest : FunSpec({
                         module { single<IdProvider> { deterministicIds } },
                         checkpointModule,
                         searchModule(owner),
+                        createDiscussionModule(owner),
                         createRestModule(
                             resourceOwner = owner,
                             onServingRuntimeCollected = collected::add,
@@ -162,6 +169,10 @@ class IndexModuleWiringTest : FunSpec({
                         RootName.PRIMARY,
                         PageId.require("01900000-0000-7000-8000-000000000001"),
                     )
+                    val planted = PageRef(seeded.id, TreePath.require("planted/marker-path.md"))
+                    val discussionPage = app.koin.get<DiscussionPageSource>().read(seeded.root, planted)
+                        .shouldBeInstanceOf<ContentRead.Bytes>()
+                    discussionPage.bytes.decodeToString() shouldBe "# Runtime\n\nserving graph\n"
 
                     val context = app.koin.get<RouteContext>()
                     app.koin.get<RouteContext>() shouldBeSameInstanceAs context
@@ -190,6 +201,13 @@ class IndexModuleWiringTest : FunSpec({
                     serving.resolver shouldBeSameInstanceAs app.koin.get<PageRootResolver>()
                     serving.proposalService shouldBeSameInstanceAs app.koin.get<ProposalService>()
                     serving.proposalLabeler shouldBeSameInstanceAs app.koin.get<ProposalAuthorLabeler>()
+                    serving.discussionFacade shouldBeSameInstanceAs app.koin.get<DiscussionFacade>()
+                    context.discussions shouldBeSameInstanceAs serving.discussionFacade
+                    val monitor = app.koin.get<ContentWriteMonitor>()
+                    DiscussionWriter::class.java.getDeclaredField("monitor").apply { isAccessible = true }
+                        .get(app.koin.get<DiscussionWriter>()) shouldBeSameInstanceAs monitor
+                    WritePipeline::class.java.getDeclaredField("monitor").apply { isAccessible = true }
+                        .get(serving.writePipeline) shouldBeSameInstanceAs monitor
                     context.registry shouldBeSameInstanceAs serving.index.registry
                     context.availability shouldBeSameInstanceAs serving.index.availability
                     context.convergence shouldBeSameInstanceAs serving.index.convergence

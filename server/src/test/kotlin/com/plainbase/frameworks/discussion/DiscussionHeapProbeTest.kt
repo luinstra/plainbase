@@ -32,6 +32,7 @@ import com.plainbase.domain.service.DetailPage
 import com.plainbase.domain.service.DiscussionCommand
 import com.plainbase.domain.service.DiscussionWriteOutcome
 import com.plainbase.domain.service.ReparseOutcome
+import com.plainbase.domain.service.write
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe

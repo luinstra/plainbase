@@ -1,7 +1,9 @@
 package com.plainbase.frameworks.koin
 
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.discussion.DiscussionIndex
+import com.plainbase.domain.discussion.DiscussionPageSource
 import com.plainbase.domain.discussion.DiscussionRows
 import com.plainbase.domain.discussion.DiscussionStore
 import com.plainbase.domain.history.CommitIdentity
@@ -9,29 +11,37 @@ import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AnchorMatches
 import com.plainbase.domain.service.AnchorPrecompute
+import com.plainbase.domain.service.DiscussionFacade
 import com.plainbase.domain.service.DiscussionFullReads
+import com.plainbase.domain.service.DiscussionIdProvider
 import com.plainbase.domain.service.DiscussionPageResolver
 import com.plainbase.domain.service.DiscussionPublicationSignal
 import com.plainbase.domain.service.DiscussionReads
 import com.plainbase.domain.service.DiscussionReparseExecutor
 import com.plainbase.domain.service.DiscussionReparser
 import com.plainbase.domain.service.DiscussionSyncState
+import com.plainbase.domain.service.DiscussionWriter
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageReindexListener
 import com.plainbase.domain.service.SyncedDiscussionIndex
+import com.plainbase.domain.service.UuidV7DiscussionIdProvider
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.discussion.DiscussionBoot
 import com.plainbase.frameworks.discussion.DiscussionDb
 import com.plainbase.frameworks.discussion.JdbcDiscussionRows
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import com.plainbase.frameworks.filesystem.rootLivenessProbe
+import com.plainbase.frameworks.ktor.GuardedDiscussionFacade
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.runtime.HistoryProviders
+import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.RootStores
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import org.koin.core.qualifier.named
@@ -74,6 +84,38 @@ internal fun createDiscussionModule(resourceOwner: ServerResourceOwner) = module
         DiscussionSyncState(roots)
     }
     single { DiscussionFullReads(get<DiscussionStore>()) }
+    single<DiscussionIdProvider> { UuidV7DiscussionIdProvider() }
+    single<DiscussionPageSource> {
+        val builder = get<ObservedIndexRuntime>().builder
+        val absence = get<AbsenceClassifier>()
+        val stores = get<RootStores>()
+        DiscussionPageSource { root, ref ->
+            val snapshot = builder.current
+            absence.requireVerifiedAbsence(root, ref.pageId, snapshot)
+            val page = snapshot.pageAt(RootedPageId(root, ref.pageId))
+            if (page == null) ContentRead.ConfirmedAbsent else absence.read(stores[root], RootedPath(root, page.path))
+        }
+    }
+    single {
+        val histories = get<HistoryProviders>()
+        DiscussionWriter(
+            monitor = get(),
+            store = get(),
+            pages = get(),
+            histories = histories::get,
+            index = get(),
+            ids = get(),
+            clock = Clock.System,
+        )
+    }
+    single<DiscussionFacade> {
+        val index = get<ObservedIndexRuntime>()
+        val stores = get<RootStores>()
+        GuardedDiscussionFacade(
+            policy = get(), writer = get(), reads = get(), registry = get(), availability = get(),
+            resolver = get(), absence = get(), indexBuilder = index.builder, stores = stores::get, labeler = get(),
+        )
+    }
     single<SyncedDiscussionIndex> {
         SyncedDiscussionIndex(get(), get(), get(), get())
     }

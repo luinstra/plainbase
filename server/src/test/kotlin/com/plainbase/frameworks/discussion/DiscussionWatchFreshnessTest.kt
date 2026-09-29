@@ -16,6 +16,7 @@ import com.plainbase.domain.service.DiscussionFacts
 import com.plainbase.domain.service.DiscussionReparseExecutor
 import com.plainbase.domain.service.DiscussionWriteOutcome
 import com.plainbase.domain.service.RebuildScheduler
+import com.plainbase.domain.service.write
 import com.plainbase.frameworks.filesystem.DiscussionWatcher
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import io.kotest.core.spec.style.FunSpec

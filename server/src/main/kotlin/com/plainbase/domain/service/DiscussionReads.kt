@@ -38,6 +38,12 @@ sealed interface DiscussionFacts {
     ) : DiscussionFacts
 }
 
+sealed interface DiscussionClaim {
+    data class Present(val facts: DiscussionFacts) : DiscussionClaim
+    data object Absent : DiscussionClaim
+    data object Unknown : DiscussionClaim
+}
+
 data class DiscussionSummary(
     val id: DiscussionId,
     val state: String,
@@ -68,17 +74,23 @@ class DiscussionReads(
     private val sync: DiscussionSyncState,
     private val availability: RootAvailability,
 ) {
-    fun facts(root: RootName, id: DiscussionId, comment: CommentId? = null): DiscussionFacts {
+    fun facts(root: RootName, id: DiscussionId, comment: CommentId? = null): DiscussionFacts = when (val claim = claim(root, id, comment)) {
+        is DiscussionClaim.Present -> claim.facts
+        DiscussionClaim.Absent -> DiscussionFacts.Missing
+        DiscussionClaim.Unknown -> DiscussionFacts.Unknown
+    }
+
+    fun claim(root: RootName, id: DiscussionId, comment: CommentId? = null): DiscussionClaim {
         sync.current(root)
-        if (!available(root)) return DiscussionFacts.Unknown
         if (!sync.isUnsynced(root)) {
             try {
-                val row = rows.row(root, id) ?: return DiscussionFacts.Missing
-                if (row.state == "failed") return DiscussionFacts.Unknown
+                val row = rows.row(root, id) ?: return if (available(root)) DiscussionClaim.Absent else DiscussionClaim.Unknown
+                if (!available(root)) return DiscussionClaim.Present(DiscussionFacts.Unknown)
+                if (row.state == "failed") return DiscussionClaim.Present(DiscussionFacts.Unknown)
                 val author = comment?.let { rows.entry(root, id, EntryName.Comment(it))?.authorKey }
-                return DiscussionFacts.Known(row.state, row.pageId, row.status, row.starterKey, author)
+                return DiscussionClaim.Present(DiscussionFacts.Known(row.state, row.pageId, row.status, row.starterKey, author))
             } catch (failure: RootUnavailable) {
-                return DiscussionFacts.Unknown
+                return DiscussionClaim.Unknown
             } catch (failure: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw failure
@@ -86,17 +98,22 @@ class DiscussionReads(
                 sync.enter(root, failure.message ?: "discussion facts query failed")
             }
         }
+        if (!available(root)) return DiscussionClaim.Unknown
         return try {
             val only = buildSet {
                 add(EntryName.Marker)
                 comment?.let { add(EntryName.Comment(it)) }
             }
             val assembled = fullReads.withNarrowed {
-                DiscussionAssembly.assemble(id, store.read(root, id, only), retain = { it.id == comment })
+                val read = store.read(root, id, only)
+                if (read is EntriesRead.Symlinked || read is EntriesRead.Failed) return@withNarrowed null
+                DiscussionAssembly.assemble(id, read, retain = { it.id == comment })
             }
             when (assembled) {
-                DiscussionRead.Absent -> DiscussionFacts.Missing
-                is DiscussionRead.Ok -> DiscussionFacts.Known(
+                null -> DiscussionClaim.Unknown
+                DiscussionRead.Absent -> DiscussionClaim.Absent
+                is DiscussionRead.Ok -> DiscussionClaim.Present(
+                    DiscussionFacts.Known(
                     state = "ok",
                     pageId = assembled.files.marker.value.page.pageId,
                     status = assembled.files.marker.value.status.wire,
@@ -105,22 +122,23 @@ class DiscussionReads(
                         assembled.files.comments.firstOrNull { it.name == EntryName.Comment(name) }
                             ?.value?.author?.actor?.subject?.let(IdentityDigest::of)
                     },
+                ),
                 )
-                is DiscussionRead.Failed -> DiscussionFacts.Unknown
+                is DiscussionRead.Failed -> DiscussionClaim.Unknown
                 is DiscussionRead.Unreadable -> if (assembled.reason == UnreadableReason.SYMLINK) {
-                    DiscussionFacts.Unknown
+                    DiscussionClaim.Unknown
                 } else {
-                    DiscussionFacts.Known("unreadable", assembled.pageId, null, null, null)
+                    DiscussionClaim.Present(DiscussionFacts.Known("unreadable", assembled.pageId, null, null, null))
                 }
-                is DiscussionRead.Incomplete -> DiscussionFacts.Known("incomplete", null, null, null, null)
+                is DiscussionRead.Incomplete -> DiscussionClaim.Present(DiscussionFacts.Known("incomplete", null, null, null, null))
             }
         } catch (_: RootUnavailable) {
-            DiscussionFacts.Unknown
+            DiscussionClaim.Unknown
         } catch (failure: InterruptedException) {
             Thread.currentThread().interrupt()
             throw failure
         } catch (_: Exception) {
-            DiscussionFacts.Unknown
+            DiscussionClaim.Unknown
         }
     }
 

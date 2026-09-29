@@ -36,6 +36,7 @@ import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.CommitOutcome
 import com.plainbase.domain.history.HistoryChange
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.principal.DiscussionGrant
 import com.plainbase.domain.principal.SubjectKey
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.UnavailableCause
@@ -68,7 +69,6 @@ sealed interface DiscussionCommand {
         val id: DiscussionId,
         val commentId: CommentId,
         val body: String,
-        val reliedOn: ReliedOn = ReliedOn(),
     ) : DiscussionCommand
 
     data class RetractComment(
@@ -76,7 +76,6 @@ sealed interface DiscussionCommand {
         override val actor: Author,
         val id: DiscussionId,
         val commentId: CommentId,
-        val reliedOn: ReliedOn = ReliedOn(),
     ) : DiscussionCommand
 
     data class SetStatus(
@@ -84,7 +83,6 @@ sealed interface DiscussionCommand {
         override val actor: Author,
         val id: DiscussionId,
         val target: DiscussionStatus,
-        val reliedOn: ReliedOn = ReliedOn(),
     ) : DiscussionCommand
 
     data class Reattach(
@@ -92,7 +90,6 @@ sealed interface DiscussionCommand {
         override val actor: Author,
         val id: DiscussionId,
         val anchor: Anchor.Quote,
-        val reliedOn: ReliedOn = ReliedOn(),
     ) : DiscussionCommand
 
     data class PurgeComment(
@@ -101,6 +98,16 @@ sealed interface DiscussionCommand {
         val id: DiscussionId,
         val commentId: CommentId,
     ) : DiscussionCommand
+}
+
+fun DiscussionCommand.action(): DiscussionAction = when (this) {
+    is DiscussionCommand.Start -> DiscussionAction.START
+    is DiscussionCommand.AddComment -> DiscussionAction.COMMENT
+    is DiscussionCommand.EditComment -> DiscussionAction.EDIT
+    is DiscussionCommand.RetractComment -> DiscussionAction.RETRACT
+    is DiscussionCommand.SetStatus -> if (target == DiscussionStatus.RESOLVED) DiscussionAction.RESOLVE else DiscussionAction.REOPEN
+    is DiscussionCommand.Reattach -> DiscussionAction.REATTACH
+    is DiscussionCommand.PurgeComment -> DiscussionAction.PURGE
 }
 
 data class ReliedOn(val author: SubjectKey? = null, val starter: SubjectKey? = null)
@@ -123,15 +130,26 @@ class DiscussionWriter(
     private val clock: Clock,
     private val hasher: (ByteArray) -> String = CitationFactory()::contentHash,
 ) {
-    fun write(command: DiscussionCommand): DiscussionWriteOutcome = monitor.withLock { writeLocked(command) }
+    fun write(grant: DiscussionGrant, command: DiscussionCommand): DiscussionWriteOutcome {
+        require(grant.root == command.root && grant.action == command.action()) { "discussion grant does not match command" }
+        if (grant.ownershipRequired) {
+            val proved = when (grant.action) {
+                DiscussionAction.EDIT, DiscussionAction.RETRACT -> grant.reliedOn.author != null
+                DiscussionAction.RESOLVE, DiscussionAction.REOPEN, DiscussionAction.REATTACH -> grant.reliedOn.starter != null
+                else -> true
+            }
+            if (!proved) return refused(503, "content_unreadable")
+        }
+        return monitor.withLock { writeLocked(command, grant.reliedOn) }
+    }
 
-    private fun writeLocked(command: DiscussionCommand): DiscussionWriteOutcome = when (command) {
+    private fun writeLocked(command: DiscussionCommand, reliedOn: ReliedOn): DiscussionWriteOutcome = when (command) {
         is DiscussionCommand.Start -> start(command)
         is DiscussionCommand.AddComment -> addComment(command)
-        is DiscussionCommand.EditComment -> editComment(command)
-        is DiscussionCommand.RetractComment -> retractComment(command)
-        is DiscussionCommand.SetStatus -> setStatus(command)
-        is DiscussionCommand.Reattach -> reattach(command)
+        is DiscussionCommand.EditComment -> editComment(command, reliedOn)
+        is DiscussionCommand.RetractComment -> retractComment(command, reliedOn)
+        is DiscussionCommand.SetStatus -> setStatus(command, reliedOn)
+        is DiscussionCommand.Reattach -> reattach(command, reliedOn)
         is DiscussionCommand.PurgeComment -> purgeComment(command)
     }
 
@@ -211,14 +229,14 @@ class DiscussionWriter(
         return persist(command.root, mutation, store.createFiles(command.root, id, listOf(EntryPut(name, bytes))))
     }
 
-    private fun editComment(command: DiscussionCommand.EditComment): DiscussionWriteOutcome {
+    private fun editComment(command: DiscussionCommand.EditComment, reliedOn: ReliedOn): DiscussionWriteOutcome {
         val id = command.id
         val name = EntryName.Comment(command.commentId)
         val loaded = load(command.root, id, setOf(EntryName.Marker, name), undoName = name)
         val files = loaded.filesOrNull() ?: return checkNotNull(loaded.refusal)
         val marker = files.marker.value
         val comment = files.comments.firstOrNull { it.name == name }?.value ?: return refused(404, "comment_not_found")
-        checkRelied(command.reliedOn, marker, comment, checkAuthor = true)?.let { return it }
+        checkRelied(reliedOn, marker, comment, checkAuthor = true)?.let { return it }
         if (comment.retraction != null) return refused(409, "comment_retracted")
         val priorBytes = loaded.priorBytes ?: error("the narrowed read did not retain the target comment's bytes")
         val target = files.comments.first { it.name == name }
@@ -236,14 +254,14 @@ class DiscussionWriter(
         return persist(command.root, mutation, store.replace(command.root, EntryPath(id, name), target.version, bytes))
     }
 
-    private fun retractComment(command: DiscussionCommand.RetractComment): DiscussionWriteOutcome {
+    private fun retractComment(command: DiscussionCommand.RetractComment, reliedOn: ReliedOn): DiscussionWriteOutcome {
         val id = command.id
         val name = EntryName.Comment(command.commentId)
         val loaded = load(command.root, id, setOf(EntryName.Marker, name), undoName = name)
         val files = loaded.filesOrNull() ?: return checkNotNull(loaded.refusal)
         val marker = files.marker.value
         val comment = files.comments.firstOrNull { it.name == name }?.value ?: return refused(404, "comment_not_found")
-        checkRelied(command.reliedOn, marker, comment, checkAuthor = true)?.let { return it }
+        checkRelied(reliedOn, marker, comment, checkAuthor = true)?.let { return it }
         if (comment.retraction != null) return refused(409, "comment_retracted")
         val priorBytes = loaded.priorBytes ?: error("the narrowed read did not retain the target comment's bytes")
         val target = files.comments.first { it.name == name }
@@ -264,12 +282,12 @@ class DiscussionWriter(
         return persist(command.root, mutation, store.replace(command.root, EntryPath(id, name), target.version, bytes))
     }
 
-    private fun setStatus(command: DiscussionCommand.SetStatus): DiscussionWriteOutcome {
+    private fun setStatus(command: DiscussionCommand.SetStatus, reliedOn: ReliedOn): DiscussionWriteOutcome {
         val id = command.id
         val loaded = load(command.root, id, setOf(EntryName.Marker), undoName = EntryName.Marker)
         val files = loaded.filesOrNull() ?: return checkNotNull(loaded.refusal)
         val marker = files.marker
-        checkRelied(command.reliedOn, marker.value, comment = null, checkAuthor = false)?.let { return it }
+        checkRelied(reliedOn, marker.value, comment = null, checkAuthor = false)?.let { return it }
         if (command.target == DiscussionStatus.RESOLVED && marker.value.status == DiscussionStatus.RESOLVED) {
             return refused(409, "already_resolved")
         }
@@ -297,12 +315,12 @@ class DiscussionWriter(
         )
     }
 
-    private fun reattach(command: DiscussionCommand.Reattach): DiscussionWriteOutcome {
+    private fun reattach(command: DiscussionCommand.Reattach, reliedOn: ReliedOn): DiscussionWriteOutcome {
         val id = command.id
         val loaded = load(command.root, id, setOf(EntryName.Marker), undoName = EntryName.Marker)
         val files = loaded.filesOrNull() ?: return checkNotNull(loaded.refusal)
         val marker = files.marker
-        checkRelied(command.reliedOn, marker.value, comment = null, checkAuthor = false)?.let { return it }
+        checkRelied(reliedOn, marker.value, comment = null, checkAuthor = false)?.let { return it }
         if (marker.value.status == DiscussionStatus.RESOLVED) return refused(409, "discussion_resolved")
         if (marker.value.anchor is Anchor.Page) return refused(422, "reattach_page_level")
         val pageRead = pages.read(command.root, marker.value.page)

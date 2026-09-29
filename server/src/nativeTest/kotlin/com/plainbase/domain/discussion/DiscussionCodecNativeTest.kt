@@ -2,6 +2,7 @@ package com.plainbase.domain.discussion
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.principal.SubjectKey
 import org.junit.jupiter.api.Tag
 import kotlin.test.Test
@@ -12,6 +13,19 @@ import kotlin.time.Instant
 
 @Tag("native")
 class DiscussionCodecNativeTest {
+    @Test
+    fun principalKeysMatchPersistedIdentityDigests() {
+        val cases = listOf(
+            Principal.Human("builtin", "u-1") to SubjectKey("builtin", "u-1"),
+            Principal.Agent("token-1") to SubjectKey("agent", "token-1"),
+            Principal.Anonymous to SubjectKey("anonymous", "local"),
+        )
+        cases.forEach { (principal, persisted) ->
+            assertEquals(persisted, SubjectKey.of(principal))
+            assertEquals(IdentityDigest.of(persisted), IdentityDigest.of(SubjectKey.of(principal)))
+        }
+    }
+
     @Test
     fun escapedStringsRoundTripToPinnedBytes() {
         val id = CommentId.require("01900000-0000-7000-8000-000000000002")

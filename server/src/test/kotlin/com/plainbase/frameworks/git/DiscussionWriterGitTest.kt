@@ -46,6 +46,7 @@ import com.plainbase.domain.service.DiscussionWriter
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.domain.service.WriteIntent
+import com.plainbase.domain.service.write
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly

@@ -21,6 +21,7 @@ import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.CommitGlob
+import com.plainbase.domain.service.DiscussionFacade
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
@@ -228,4 +229,5 @@ internal class ServingRuntime(
     val proposalService: ProposalService,
     val proposalLabeler: ProposalAuthorLabeler,
     val agentDirectCommitGlobs: List<CommitGlob>,
+    val discussionFacade: DiscussionFacade? = null,
 )

@@ -1,10 +1,12 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AdminFacade
 import com.plainbase.domain.service.ContentWriteMonitor
+import com.plainbase.domain.service.DiscussionFacade
 import com.plainbase.domain.service.LoginService
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
@@ -103,6 +105,7 @@ internal fun createRestModule(
             enforced = get<PlainbaseConfig>().auth.mode != AuthMode.OFF,
             // Fails CLOSED on an unknown name - a belt behind the wire-level `invalid_root` check.
             editableOf = { registry.byName(it)?.editable == true },
+            objectBackendOf = { registry.byName(it)?.backend is RootBackend.Object },
         )
     }
     // A4a session/login/setup/admin services. Session id ROTATES on login/change/reset (§5); the TTLs use the
@@ -194,6 +197,7 @@ internal fun createRestModule(
                     absence = get(),
                     proposalService = get(),
                     proposalLabeler = get(),
+                    discussionFacade = get<DiscussionFacade>(),
                     agentDirectCommitGlobs = ConfigValuePolicy.agentDirectCommitGlobs(config),
                 )
                 onServingRuntimeCollected(serving)

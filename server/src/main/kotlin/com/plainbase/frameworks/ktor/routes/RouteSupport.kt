@@ -362,6 +362,12 @@ internal suspend inline fun ApplicationCall.guarded(remedy: AmbiguityRemedy = Am
                     ErrorCodes.ROOT_NOT_EDITABLE,
                     "This root is configured read-only (editable = false); page writes are not accepted here",
                 )
+            denied.reason == DenyReason.DISCUSSIONS_UNSUPPORTED ->
+                respondError(
+                    HttpStatusCode.Forbidden,
+                    ErrorCodes.DISCUSSIONS_UNSUPPORTED,
+                    "Discussions are unavailable for object-backed roots",
+                )
             denied.principal is Principal.Anonymous ->
                 respondError(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, "Authentication required")
             else -> respondError(HttpStatusCode.Forbidden, ErrorCodes.FORBIDDEN, "You do not have permission for this action")

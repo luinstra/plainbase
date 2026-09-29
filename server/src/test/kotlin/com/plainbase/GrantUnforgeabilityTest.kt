@@ -33,10 +33,12 @@ class GrantUnforgeabilityTest : FunSpec({
         "CreateGrant(",
         "ManageGrant(",
         "ApproveGrant(",
+        "DiscussionGrant(",
         "grantForTests",
         "createGrantForTests",
         "manageGrantForTests",
         "approveGrantForTests",
+        "discussionGrantForTests",
     )
 
     // The ONLY production files allowed to reference the mint: PolicyService (the sole production mint site) and

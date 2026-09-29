@@ -45,7 +45,10 @@ import com.plainbase.domain.history.CommitOutcome
 import com.plainbase.domain.history.HistoryChange
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.principal.SubjectKey
+import com.plainbase.domain.principal.discussionGrantForTests
+import com.plainbase.domain.repository.Role
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.RootSync
@@ -54,6 +57,10 @@ import com.plainbase.frameworks.discussion.DiscussionDb
 import com.plainbase.frameworks.discussion.JdbcDiscussionRows
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import com.plainbase.frameworks.sqldelight.SqlDelightApiTokenRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightAuditRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
@@ -187,8 +194,9 @@ class DiscussionWriterTest : FunSpec({
             val before = fixture.raw(ID, COMMENT_NAME)
             fixture.writer().write(
                 DiscussionCommand.EditComment(
-                    ROOT, AUTHOR, ID, COMMENT_ID, "edit", ReliedOn(author = RELIED_COMMENT_AUTHOR.actor.subject),
+                    ROOT, AUTHOR, ID, COMMENT_ID, "edit",
                 ),
+                ReliedOn(author = RELIED_COMMENT_AUTHOR.actor.subject),
             ).shouldBeInstanceOf<DiscussionWriteOutcome.Done>()
             fixture.raw(ID, COMMENT_NAME).contentEquals(before) shouldBe false
         }
@@ -197,7 +205,8 @@ class DiscussionWriterTest : FunSpec({
             val before = fixture.raw(ID, COMMENT_NAME)
             expectRefusal(
                 fixture.writer().write(
-                    DiscussionCommand.EditComment(ROOT, AUTHOR, ID, COMMENT_ID, "edit", ReliedOn(author = AUTHOR.actor.subject)),
+                    DiscussionCommand.EditComment(ROOT, AUTHOR, ID, COMMENT_ID, "edit"),
+                    ReliedOn(author = AUTHOR.actor.subject),
                 ),
                 409,
                 "discussion_changed",
@@ -210,8 +219,9 @@ class DiscussionWriterTest : FunSpec({
             expectRefusal(
                 fixture.writer().write(
                     DiscussionCommand.EditComment(
-                        ROOT, AUTHOR, ID, COMMENT_ID, "edit", ReliedOn(author = RELIED_STARTER.actor.subject),
+                        ROOT, AUTHOR, ID, COMMENT_ID, "edit",
                     ),
+                    ReliedOn(author = RELIED_STARTER.actor.subject),
                 ),
                 409,
                 "discussion_changed",
@@ -225,8 +235,9 @@ class DiscussionWriterTest : FunSpec({
             fixture.install(comments = listOf(comment(author = RELIED_COMMENT_AUTHOR)), starter = RELIED_STARTER)
             fixture.writer().write(
                 DiscussionCommand.RetractComment(
-                    ROOT, AUTHOR, ID, COMMENT_ID, ReliedOn(author = RELIED_COMMENT_AUTHOR.actor.subject),
+                    ROOT, AUTHOR, ID, COMMENT_ID,
                 ),
+                ReliedOn(author = RELIED_COMMENT_AUTHOR.actor.subject),
             ).shouldBeInstanceOf<DiscussionWriteOutcome.Done>()
         }
         withWriterFixture { fixture ->
@@ -234,7 +245,8 @@ class DiscussionWriterTest : FunSpec({
             val before = fixture.raw(ID, COMMENT_NAME)
             expectRefusal(
                 fixture.writer().write(
-                    DiscussionCommand.RetractComment(ROOT, AUTHOR, ID, COMMENT_ID, ReliedOn(author = AUTHOR.actor.subject)),
+                    DiscussionCommand.RetractComment(ROOT, AUTHOR, ID, COMMENT_ID),
+                    ReliedOn(author = AUTHOR.actor.subject),
                 ),
                 409,
                 "discussion_changed",
@@ -248,8 +260,9 @@ class DiscussionWriterTest : FunSpec({
             fixture.install(comments = listOf(comment(author = RELIED_COMMENT_AUTHOR)), starter = RELIED_STARTER)
             fixture.writer().write(
                 DiscussionCommand.SetStatus(
-                    ROOT, AUTHOR, ID, DiscussionStatus.RESOLVED, ReliedOn(starter = RELIED_STARTER.actor.subject),
+                    ROOT, AUTHOR, ID, DiscussionStatus.RESOLVED,
                 ),
+                ReliedOn(starter = RELIED_STARTER.actor.subject),
             ).shouldBeInstanceOf<DiscussionWriteOutcome.Done>()
         }
         withWriterFixture { fixture ->
@@ -258,8 +271,9 @@ class DiscussionWriterTest : FunSpec({
             expectRefusal(
                 fixture.writer().write(
                     DiscussionCommand.SetStatus(
-                        ROOT, AUTHOR, ID, DiscussionStatus.RESOLVED, ReliedOn(starter = AUTHOR.actor.subject),
+                        ROOT, AUTHOR, ID, DiscussionStatus.RESOLVED,
                     ),
+                    ReliedOn(starter = AUTHOR.actor.subject),
                 ),
                 409,
                 "discussion_changed",
@@ -277,8 +291,9 @@ class DiscussionWriterTest : FunSpec({
             )
             fixture.writer().write(
                 DiscussionCommand.Reattach(
-                    ROOT, AUTHOR, ID, fixture.quoteAnchor, ReliedOn(starter = RELIED_STARTER.actor.subject),
+                    ROOT, AUTHOR, ID, fixture.quoteAnchor,
                 ),
+                ReliedOn(starter = RELIED_STARTER.actor.subject),
             ).shouldBeInstanceOf<DiscussionWriteOutcome.Done>()
         }
         withWriterFixture { fixture ->
@@ -291,13 +306,68 @@ class DiscussionWriterTest : FunSpec({
             expectRefusal(
                 fixture.writer().write(
                     DiscussionCommand.Reattach(
-                        ROOT, AUTHOR, ID, fixture.quoteAnchor, ReliedOn(starter = AUTHOR.actor.subject),
+                        ROOT, AUTHOR, ID, fixture.quoteAnchor,
                     ),
+                    ReliedOn(starter = AUTHOR.actor.subject),
                 ),
                 409,
                 "discussion_changed",
             )
             fixture.raw(ID, EntryName.Marker) shouldBe before
+        }
+    }
+
+    test("an author appearing after policy facts cannot be edited or retracted without a relied identity") {
+        listOf(
+            DiscussionFacts.Known("ok", PAGE.pageId, "open", null, null),
+            DiscussionFacts.Unknown,
+        ).forEach { facts ->
+            listOf(DiscussionAction.EDIT, DiscussionAction.RETRACT).forEach { operation ->
+                withWriterFixture { fixture ->
+                DatabaseFactory.createInMemoryDriver().use { driver ->
+                    val db = DatabaseFactory.createDatabase(driver)
+                    val roles = SqlDelightRoleRepository(db)
+                    val principal = Principal.Human("builtin", "u-1")
+                    val fixedClock = object : Clock {
+                        override fun now(): Instant = WRITER_NOW
+                    }
+                    roles.upsert("builtin", "u-1", Role.VIEWER, WRITER_NOW)
+                    val policy = PolicyService(
+                        roles, SqlDelightApiTokenRepository(db), SqlDelightAuditRepository(db),
+                        IdProvider { PAGE.pageId }, fixedClock, enforced = true,
+                    )
+                    val grant = policy.checkDiscussion(
+                        principal, operation, facts, RootedResource(ROOT, "discussion/${ID.value}/comment/${COMMENT_ID.value}"),
+                    )
+                    fixture.install(comments = listOf(comment(author = AUTHOR)))
+                    val before = fixture.raw(ID, COMMENT_NAME)
+                    val command = if (operation == DiscussionAction.EDIT) {
+                        DiscussionCommand.EditComment(ROOT, AUTHOR, ID, COMMENT_ID, "unauthorized")
+                    } else {
+                        DiscussionCommand.RetractComment(ROOT, AUTHOR, ID, COMMENT_ID)
+                    }
+                    val refused = fixture.writer().write(grant, command)
+                        .shouldBeInstanceOf<DiscussionWriteOutcome.Refused>()
+                    refused.refusal.status shouldBe 503
+                    refused.refusal.code shouldBe "content_unreadable"
+                    fixture.raw(ID, COMMENT_NAME) shouldBe before
+                }
+            }
+            }
+        }
+    }
+
+    test("a discussion grant cannot be reused for another action") {
+        withWriterFixture { fixture ->
+            fixture.install()
+            val before = fixture.raw(ID, COMMENT_NAME)
+            shouldThrow<IllegalArgumentException> {
+                fixture.writer().write(
+                    discussionGrantForTests(ROOT, DiscussionAction.COMMENT),
+                    DiscussionCommand.EditComment(ROOT, AUTHOR, ID, COMMENT_ID, "changed"),
+                )
+            }
+            fixture.raw(ID, COMMENT_NAME) shouldBe before
         }
     }
 
@@ -344,7 +414,8 @@ class DiscussionWriterTest : FunSpec({
         withWriterFixture { fixture ->
             fixture.install()
             fixture.writer().write(
-                DiscussionCommand.EditComment(ROOT, AUTHOR, ID, COMMENT_ID, "edited", ReliedOn()),
+                DiscussionCommand.EditComment(ROOT, AUTHOR, ID, COMMENT_ID, "edited"),
+                ReliedOn(),
             ).shouldBeInstanceOf<DiscussionWriteOutcome.Done>()
         }
     }
@@ -358,8 +429,8 @@ class DiscussionWriterTest : FunSpec({
                     AUTHOR,
                     ID,
                     DiscussionStatus.RESOLVED,
-                    ReliedOn(author = SubjectKey("builtin", "not-the-comment-author")),
                 ),
+                ReliedOn(author = SubjectKey("builtin", "not-the-comment-author")),
             ).shouldBeInstanceOf<DiscussionWriteOutcome.Done>()
         }
     }
