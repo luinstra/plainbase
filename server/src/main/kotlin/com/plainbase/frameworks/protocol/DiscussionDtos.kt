@@ -72,3 +72,10 @@ data class DiscussionPreviewDto(
     val selection: String,
     @SerialName("quote_text") val quoteText: String,
 )
+
+@Serializable
+data class DiscussionMutationDto(
+    val id: String,
+    @SerialName("comment_id") val commentId: String?,
+    val commit: String?,
+)

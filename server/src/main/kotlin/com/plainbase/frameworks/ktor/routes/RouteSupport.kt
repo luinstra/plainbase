@@ -8,8 +8,10 @@ import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.DenyReason
+import com.plainbase.domain.service.DiscussionReadFailed
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.frameworks.ktor.CsrfGuard
+import com.plainbase.frameworks.ktor.DiscussionReadRefused
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.Source
@@ -422,6 +424,10 @@ internal suspend inline fun ApplicationCall.guarded(remedy: AmbiguityRemedy = Am
             ),
             HttpStatusCode.Conflict,
         )
+    } catch (refused: DiscussionReadRefused) {
+        respondDiscussionRefusal(refused.status, refused.code)
+    } catch (_: DiscussionReadFailed) {
+        respondDiscussionRefusal(503, ErrorCodes.CONTENT_UNREADABLE)
     }
 }
 

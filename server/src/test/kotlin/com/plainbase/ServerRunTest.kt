@@ -786,6 +786,15 @@ class ServerRunTest : FunSpec({
                     closed.headers["connection"]?.lowercase() shouldBe "close"
                     closed.headers["content-type"]?.startsWith("application/json") shouldBe true
                     closed.body shouldBe "{\"error\":{\"code\":\"server_shutting_down\",\"message\":\"Server is shutting down\"}}"
+                    val discussionReceiveObserved = AtomicBoolean(false)
+                    server.captureNextReceiveForTest { discussionReceiveObserved.set(true) }
+                    openRawHttpSocket(port).use { discussionSocket ->
+                        val rejectedDiscussion = rawHttpDiscussionPost(discussionSocket, pageId, token)
+                        rejectedDiscussion.statusCode shouldBe 503
+                        rejectedDiscussion.body shouldBe closed.body
+                    }
+                    discussionReceiveObserved.get() shouldBe false
+                    Files.exists(content.resolve(".plainbase/discussions")) shouldBe false
                 } finally {
                     established.close()
                 }
@@ -2698,6 +2707,22 @@ private fun openRawHttpSocket(port: Int): Socket = Socket().also {
 private fun rawHttpGet(socket: Socket): RawHttpResponse {
     socket.getOutputStream().write(
         "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n".toByteArray(StandardCharsets.US_ASCII),
+    )
+    socket.getOutputStream().flush()
+    return readRawHttpResponse(socket)
+}
+
+private fun rawHttpDiscussionPost(socket: Socket, pageId: String, token: String): RawHttpResponse {
+    val body = "{}"
+    socket.getOutputStream().write(
+        (
+            "POST /api/v1/pages/$pageId/discussions HTTP/1.1\r\n" +
+                "Host: 127.0.0.1\r\n" +
+                "Authorization: Bearer $token\r\n" +
+                "Content-Type: application/json\r\n" +
+                "Content-Length: ${body.length}\r\n" +
+                "Connection: close\r\n\r\n" + body
+            ).toByteArray(StandardCharsets.US_ASCII),
     )
     socket.getOutputStream().flush()
     return readRawHttpResponse(socket)

@@ -6,7 +6,6 @@ import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AdminFacade
 import com.plainbase.domain.service.ContentWriteMonitor
-import com.plainbase.domain.service.DiscussionFacade
 import com.plainbase.domain.service.LoginService
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
@@ -30,6 +29,7 @@ import com.plainbase.frameworks.ktor.buildGuardedApplication
 import com.plainbase.frameworks.ktor.securityAssembly
 import com.plainbase.frameworks.ktor.transportSettings
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.ServingRuntime
 import com.plainbase.frameworks.security.ProxyCsrf
@@ -197,7 +197,7 @@ internal fun createRestModule(
                     absence = get(),
                     proposalService = get(),
                     proposalLabeler = get(),
-                    discussionFacade = get<DiscussionFacade>(),
+                    discussionFacade = get<DiscussionTransportFacade>(),
                     agentDirectCommitGlobs = ConfigValuePolicy.agentDirectCommitGlobs(config),
                 )
                 onServingRuntimeCollected(serving)

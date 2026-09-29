@@ -125,6 +125,15 @@ object ErrorCodes {
 
     const val DISCUSSIONS_UNSUPPORTED: String = "discussions_unsupported"
 
+    // Discussions C4: transport grammar and selection refusals.
+    const val INVALID_UTF8: String = "invalid_utf8"
+    const val ANCHOR_TOO_LARGE: String = "anchor_too_large"
+    const val COMMENT_EMPTY: String = "comment_empty"
+    const val COMMENT_TOO_LARGE: String = "comment_too_large"
+    const val DISCUSSION_NOT_FOUND: String = "discussion_not_found"
+    const val COMMENT_NOT_FOUND: String = "comment_not_found"
+    const val AMBIGUOUS_DISCUSSION_ID: String = "ambiguous_discussion_id"
+
     /** 400: a request named a root that is not a legal slug, or names no configured root. */
     const val INVALID_ROOT: String = "invalid_root"
 

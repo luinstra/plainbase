@@ -41,6 +41,7 @@ import com.plainbase.frameworks.ktor.DiscussionReadProjection
 import com.plainbase.frameworks.ktor.GuardedDiscussionFacade
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.lifecycle.ServerResourcePhase
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.runtime.HistoryProviders
 import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.RootStores
@@ -119,6 +120,7 @@ internal fun createDiscussionModule(resourceOwner: ServerResourceOwner) = module
         )
     }
     single<DiscussionFacade> { get<GuardedDiscussionFacade>() }
+    single<DiscussionTransportFacade> { get<GuardedDiscussionFacade>() }
     single {
         val stores = get<RootStores>()
         DiscussionReadProjection(get(), get(), get(), get(), stores::get)

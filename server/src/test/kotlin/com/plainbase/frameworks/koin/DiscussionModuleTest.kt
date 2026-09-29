@@ -10,6 +10,7 @@ import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ContentWriteMonitor
+import com.plainbase.domain.service.DiscussionFacade
 import com.plainbase.domain.service.DiscussionFullReads
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageReindexListener
@@ -17,7 +18,9 @@ import com.plainbase.domain.service.SyncedDiscussionIndex
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.discussion.DiscussionBoot
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.ktor.GuardedDiscussionFacade
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.runtime.HistoryProviders
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.types.shouldBeSameInstanceAs
@@ -29,6 +32,19 @@ import java.nio.file.Path
 import kotlin.time.Clock
 
 class DiscussionModuleTest : FunSpec({
+    test("transport and domain aliases resolve to the same guarded singleton") {
+        val guarded = mockk<GuardedDiscussionFacade>()
+        val application = koinApplication {
+            modules(createDiscussionModule(ServerResourceOwner()), module { single { guarded } })
+        }
+        try {
+            application.koin.get<DiscussionTransportFacade>() shouldBeSameInstanceAs guarded
+            application.koin.get<DiscussionFacade>() shouldBeSameInstanceAs guarded
+        } finally {
+            application.close()
+        }
+    }
+
     test("the discussion listeners are one registered instance") {
         val application = koinApplication { modules(createDiscussionModule(ServerResourceOwner())) }
         try {

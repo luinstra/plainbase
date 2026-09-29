@@ -1,0 +1,31 @@
+{
+  "discussion": {
+    "id": "{{discussion_id}}",
+    "page": {"id": "{{page_id}}", "path": "guide/example.md", "resolution": "by_id"},
+    "status": "open",
+    "state": "page_level",
+    "reason": null,
+    "range": null,
+    "candidates": null,
+    "placement": null,
+    "quote": null,
+    "comment_count": 1,
+    "starter": {"key": "{{author_key}}", "kind": "anonymous", "label": "anonymous"},
+    "created": "2026-09-28T12:00:00.000Z",
+    "updated": "2026-09-28T12:00:00.000Z",
+    "anchor": {"kind": "page", "content_hash": "{{content_hash}}", "commit": null},
+    "reattachment": null
+  },
+  "comments": [{
+    "id": "{{comment_id}}",
+    "author": {"key": "{{author_key}}", "kind": "anonymous", "label": "anonymous"},
+    "created": "2026-09-28T12:00:00.000Z",
+    "edited_at": null,
+    "retracted": false,
+    "html": "<p>first</p>\n",
+    "markdown": "first"
+  }],
+  "next": null,
+  "discussions_available": true,
+  "reason": null
+}

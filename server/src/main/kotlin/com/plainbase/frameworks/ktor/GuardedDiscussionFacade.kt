@@ -32,7 +32,6 @@ import com.plainbase.domain.service.DiscussionAction
 import com.plainbase.domain.service.DiscussionAnchorRequest
 import com.plainbase.domain.service.DiscussionClaim
 import com.plainbase.domain.service.DiscussionCommand
-import com.plainbase.domain.service.DiscussionFacade
 import com.plainbase.domain.service.DiscussionFacts
 import com.plainbase.domain.service.DiscussionReads
 import com.plainbase.domain.service.DiscussionRefusal
@@ -49,6 +48,8 @@ import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.protocol.DiscussionDetailDto
 import com.plainbase.frameworks.protocol.DiscussionListDto
 import com.plainbase.frameworks.protocol.DiscussionPreviewDto
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
+import com.plainbase.frameworks.protocol.ErrorCodes
 
 class GuardedDiscussionFacade(
     private val policy: PolicyService,
@@ -63,8 +64,8 @@ class GuardedDiscussionFacade(
     private val labeler: ProposalAuthorLabeler,
     private val citations: CitationFactory = CitationFactory(),
     private val projection: DiscussionReadProjection? = null,
-) : DiscussionFacade {
-    fun pageList(principal: Principal, pageId: PageId, pin: RootName?, after: DiscussionId?, limit: Int): DiscussionListDto {
+) : DiscussionTransportFacade {
+    override fun pageList(principal: Principal, pageId: PageId, pin: RootName?, after: DiscussionId?, limit: Int): DiscussionListDto {
         val snapshot = indexBuilder.current
         val resolution = pin?.let { resolver.resolvePinned(it, pageId) } ?: resolver.resolve(pageId)
         val root = (resolution as? IdResolution.One)?.root
@@ -80,7 +81,7 @@ class GuardedDiscussionFacade(
         return checkNotNull(projection).pageList(owner, page, snapshot, after, limit)
     }
 
-    fun rootList(principal: Principal, root: RootName, after: DiscussionId?, limit: Int, state: String?): DiscussionListDto {
+    override fun rootList(principal: Principal, root: RootName, after: DiscussionId?, limit: Int, state: String?): DiscussionListDto {
         val snapshot = indexBuilder.current
         val topology = policy.checkDiscussionRead(principal, RootedResource(root, "discussions"))
         if (registry.byName(root) == null) throw DiscussionReadRefused(400, "invalid_root")
@@ -88,7 +89,7 @@ class GuardedDiscussionFacade(
         return checkNotNull(projection).rootList(root, snapshot, after, limit, state)
     }
 
-    fun detail(principal: Principal, id: DiscussionId, pin: RootName?, after: CommentId?, limit: Int): DiscussionDetailDto {
+    override fun detail(principal: Principal, id: DiscussionId, pin: RootName?, after: CommentId?, limit: Int): DiscussionDetailDto {
         val snapshot = indexBuilder.current
         if (pin != null && registry.byName(pin) != null) {
             val topology = policy.checkDiscussionRead(principal, RootedResource(pin, "discussion/${id.value}"))
@@ -103,7 +104,7 @@ class GuardedDiscussionFacade(
         )
     }
 
-    fun preview(
+    override fun preview(
         principal: Principal,
         pageId: PageId,
         pin: RootName?,
@@ -282,7 +283,7 @@ class GuardedDiscussionFacade(
             }
             return when (val claim = reads.claim(pin, id, commentId)) {
                 is DiscussionClaim.Present -> Target(pin, claim.facts, null)
-                DiscussionClaim.Absent -> Target(null, DiscussionFacts.Missing, DiscussionRefusal(404, "discussion_not_found"))
+                DiscussionClaim.Absent -> Target(null, DiscussionFacts.Missing, DiscussionRefusal(404, ErrorCodes.DISCUSSION_NOT_FOUND))
                 DiscussionClaim.Unknown -> Target(null, DiscussionFacts.Unknown, DiscussionRefusal(503, "content_unreadable"), listOf(pin))
             }
         }
@@ -293,22 +294,22 @@ class GuardedDiscussionFacade(
         if (unknown.isNotEmpty()) {
             return Target(null, DiscussionFacts.Unknown, DiscussionRefusal(503, "content_unreadable"), unknown)
         }
-        if (present.size > 1) return Target(null, DiscussionFacts.Unknown, DiscussionRefusal(409, "ambiguous_discussion_id"))
-        if (present.isEmpty()) return Target(null, DiscussionFacts.Missing, DiscussionRefusal(404, "discussion_not_found"))
+        if (present.size > 1) return Target(null, DiscussionFacts.Unknown, DiscussionRefusal(409, ErrorCodes.AMBIGUOUS_DISCUSSION_ID))
+        if (present.isEmpty()) return Target(null, DiscussionFacts.Missing, DiscussionRefusal(404, ErrorCodes.DISCUSSION_NOT_FOUND))
         val (root, claim) = present.single()
         return Target(root, (claim as DiscussionClaim.Present).facts, null)
     }
 
     private fun factsRefusal(operation: DiscussionAction, facts: DiscussionFacts, grant: DiscussionGrant): DiscussionWriteOutcome.Refused? =
         when (facts) {
-            DiscussionFacts.Missing -> refused(404, "discussion_not_found")
+            DiscussionFacts.Missing -> refused(404, ErrorCodes.DISCUSSION_NOT_FOUND)
             DiscussionFacts.Unknown -> refused(503, "content_unreadable")
             is DiscussionFacts.Known -> when (facts.state) {
                 "unreadable" -> refused(409, "discussion_unreadable")
-                "incomplete" -> refused(404, "discussion_not_found")
+                "incomplete" -> refused(404, ErrorCodes.DISCUSSION_NOT_FOUND)
                 "ok" -> if (grant.ownershipRequired && grant.reliedOn.author == null && grant.reliedOn.starter == null) {
                     if (operation == DiscussionAction.EDIT || operation == DiscussionAction.RETRACT) {
-                        refused(404, "comment_not_found")
+                        refused(404, ErrorCodes.COMMENT_NOT_FOUND)
                     } else {
                         refused(503, "content_unreadable")
                     }
