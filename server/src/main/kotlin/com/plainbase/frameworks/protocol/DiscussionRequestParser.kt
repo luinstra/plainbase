@@ -6,6 +6,7 @@ import com.plainbase.domain.discussion.DiscussionId
 import com.plainbase.domain.discussion.SelectionRequest
 import com.plainbase.domain.discussion.strictUtf8
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.DiscussionAnchorRequest
 import com.plainbase.domain.service.DiscussionReads
 import kotlinx.serialization.json.JsonArray
@@ -18,8 +19,17 @@ class DiscussionRequestInvalid(val status: Int, val code: String, override val m
 data class DiscussionQuery(val cursor: DiscussionId?, val limit: Int, val state: String?)
 data class DiscussionDetailQuery(val cursor: CommentId?, val limit: Int)
 data class DiscussionStartRequest(val anchor: DiscussionAnchorRequest, val body: String)
+sealed interface DiscussionListArguments {
+    data class Page(val pageId: PageId, val root: RootName?, val query: DiscussionQuery) : DiscussionListArguments
+    data class Root(val root: RootName, val query: DiscussionQuery) : DiscussionListArguments
+}
+data class DiscussionGetArguments(val id: DiscussionId, val root: RootName?, val query: DiscussionDetailQuery)
+data class DiscussionStartArguments(val pageId: PageId, val root: RootName?, val anchor: DiscussionAnchorRequest, val body: String)
+data class DiscussionCommentArguments(val id: DiscussionId, val root: RootName?, val body: String)
 
-/** The single decoded-value grammar for REST now and MCP arguments later. */
+const val DISCUSSION_JSON_ENVELOPE_CAP = 524_288L
+
+/** The shared decoded-value grammar for REST bodies and MCP arguments. */
 object DiscussionRequestParser {
     private const val MAX_JSON_ENVELOPE_DEPTH = 64
     private const val MAX_COMMENT_PAYLOAD_BYTES = 65_536
@@ -101,6 +111,69 @@ object DiscussionRequestParser {
         if (value !in 1..maximum) invalid(ErrorCodes.INVALID_QUERY, "Limit is out of range")
         return value
     }
+
+    /** Validates a decoded MCP argument tree before its UTF-8 serialization and any field grammar. */
+    fun mcpPreflight(element: JsonElement?, maxWriteBodyBytes: Long): JsonObject {
+        val value = element ?: JsonObject(emptyMap())
+        validUnicode(value)
+        val cap = minOf(maxWriteBodyBytes, DISCUSSION_JSON_ENVELOPE_CAP)
+        if (strictUtf8(RestJson.encodeToString(JsonElement.serializer(), value)).size.toLong() > cap) {
+            invalid(ErrorCodes.BODY_TOO_LARGE, "Discussion arguments exceed the $cap byte limit", 413)
+        }
+        return value as? JsonObject ?: invalid(ErrorCodes.INVALID_REQUEST_BODY, "Request must be a JSON object")
+    }
+
+    fun mcpList(element: JsonElement): DiscussionListArguments {
+        val value = fields(element, setOf("page_id", "root", "state", "cursor", "limit"), emptySet())
+        val page = value["page_id"]?.let { pageId(string(it)) }
+        val root = mcpRoot(value, required = page == null)
+        val query = listQuery(mcpQuery(value), rootList = page == null)
+        return if (page != null) {
+            DiscussionListArguments.Page(page, root, query)
+        } else {
+            DiscussionListArguments.Root(checkNotNull(root), query)
+        }
+    }
+
+    fun mcpGet(element: JsonElement): DiscussionGetArguments {
+        val value = fields(element, setOf("id", "root", "cursor", "limit"), setOf("id"))
+        return DiscussionGetArguments(
+            discussionId(string(value.getValue("id"))), mcpRoot(value), detailQuery(mcpQuery(value)),
+        )
+    }
+
+    fun mcpStart(element: JsonElement): DiscussionStartArguments {
+        val value = fields(element, setOf("page_id", "root", "anchor", "body"), setOf("page_id", "anchor", "body"))
+        val pageRaw = string(value.getValue("page_id"))
+        // MCP checks the body type before page-id shape; REST parses the path id before the body.
+        string(value.getValue("body"))
+        val page = pageId(pageRaw)
+        val root = mcpRoot(value)
+        val parsed = start(JsonObject(mapOf("anchor" to value.getValue("anchor"), "body" to value.getValue("body"))))
+        return DiscussionStartArguments(page, root, parsed.anchor, parsed.body)
+    }
+
+    fun mcpComment(element: JsonElement): DiscussionCommentArguments {
+        val value = fields(element, setOf("id", "root", "body"), setOf("id", "body"))
+        val id = discussionId(string(value.getValue("id")))
+        val root = mcpRoot(value)
+        return DiscussionCommentArguments(id, root, body(JsonObject(mapOf("body" to value.getValue("body")))))
+    }
+
+    private fun mcpRoot(fields: JsonObject, required: Boolean = false): RootName? {
+        val raw = fields["root"] ?: if (required) invalid(ErrorCodes.INVALID_ROOT, "A root pin is required") else return null
+        val name = (raw as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ?: invalid(ErrorCodes.INVALID_ROOT, "Invalid root name")
+        return RootName.of(name) ?: invalid(ErrorCodes.INVALID_ROOT, "Invalid root name")
+    }
+
+    private fun mcpQuery(fields: JsonObject): Map<String, List<String>> =
+        listOf("state", "cursor", "limit").mapNotNull { key ->
+            val raw = fields[key] ?: return@mapNotNull null
+            val value = raw as? JsonPrimitive ?: invalid(ErrorCodes.INVALID_QUERY, "Invalid $key")
+            if ((key == "limit") == value.isString) invalid(ErrorCodes.INVALID_QUERY, "Invalid $key")
+            key to listOf(value.content)
+        }.toMap()
 
     fun start(element: JsonElement): DiscussionStartRequest {
         val fields = fields(element, setOf("anchor", "body"), setOf("anchor", "body"))

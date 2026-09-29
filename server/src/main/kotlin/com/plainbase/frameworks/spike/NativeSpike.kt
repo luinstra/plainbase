@@ -100,7 +100,7 @@ import io.ktor.server.cio.CIO as ServerCIO
  *  6. argon2 hash + verify (Bouncy Castle, pure Java)
  *  7. MCP Kotlin SDK stub handshake (initialize + listTools)
  *  8. MCP SSE-on-CIO server handshake (P3): the in-binary `plainbaseMcp` mount over a real CIO server +
- *     a real SSE MCP client under ENFORCED auth — initialize + listTools (== the seven) + callTool ×2 over
+ *     a real SSE MCP client under ENFORCED auth — initialize + listTools (== the eleven) + callTool ×2 over
  *     ONE open stream (proving keep-alive/flush work natively, not a single round-trip)
  *  9. SigV4 signing vectors (storage plan C0): published AWS S3 signatures reproduced offline,
  *     proving HMAC-SHA256 / SHA-256 / the canonical-request path in-image (no network, no creds)
@@ -486,7 +486,7 @@ object NativeSpike {
      * by a REAL SSE MCP client. Wires the production Koin graph (config pointed at a temp tree, auth.mode=builtin so
      * `enforced=true`, git off) so the spike exercises the SAME guarded application assembly/`plainbaseMcp` the server uses;
      * mints a PROPOSE (-> EDITOR) agent token, opens an authed SSE stream, and asserts initialize + listTools(== the
-     * seven) + TWO callTool round-trips (list_changes + read_page) over ONE open stream — proving keep-alive / SSE
+     * eleven) + TWO callTool round-trips (list_changes + read_page) over ONE open stream — proving keep-alive / SSE
      * flush work in the native image, not just a single round-trip. The SSE/MCP-server reflection this reaches is what
      * the committed `traceMcpSseMetadata` delta covers.
      */

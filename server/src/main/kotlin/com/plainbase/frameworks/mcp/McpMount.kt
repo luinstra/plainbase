@@ -10,6 +10,7 @@ import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.extractPrincipal
 import com.plainbase.frameworks.ktor.routes.respondError
 import com.plainbase.frameworks.ktor.routes.respondTransportInsecure
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.protocol.ErrorCodes
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
@@ -53,7 +54,7 @@ internal val McpPrincipalKey: AttributeKey<Principal.Agent> = AttributeKey("plai
  * SSE GET is gated AT THE ROUTE *before* the upgrade — AGENT-ONLY (`extractPrincipal` with sessions=null +
  * builtin/proxy disabled, so no cookie/proxy human is ever admitted). `InsecureTransportRefused` → 421; Anonymous /
  * non-Agent → 401; both reject before the upgrade. On success the agent is stashed on the call's attributes and the SSE
- * handler closes it over the seven tool handlers → ONE choke point ([RouteContext.read]/[RouteContext.proposals]). The
+ * handler closes it over the eleven tool handlers and their guarded facades. The
  * gate is method-discriminated to fire on the SSE GET ONLY — the sessionId-bound POST-back (an unguessable v4 UUID
  * minted only after the SSE authenticated) carries no bearer and MUST NOT be 401'd. CSRF-exempt (bearer, no cookie).
  */
@@ -61,7 +62,7 @@ fun Route.plainbaseMcp(ctx: RouteContext) = plainbaseMcp(ctx, ::buildPlainbaseMc
 
 internal fun Route.plainbaseMcp(
     ctx: RouteContext,
-    buildServer: (Principal.Agent, ReadFacade, ProposalFacade, Set<RootName>) -> Server,
+    buildServer: (Principal.Agent, ReadFacade, ProposalFacade, Set<RootName>, DiscussionTransportFacade?, Long) -> Server,
 ) {
     // One transport per open SSE stream, keyed by the SseServerTransport's unguessable random v4 sessionId (the
     // capability the POST-back presents). CIO + the transport own the connection lifecycle; we only track the map.
@@ -113,7 +114,7 @@ internal fun Route.plainbaseMcp(
                 ?: throw IllegalStateException("MCP SSE reached without an authenticated agent (gate bypassed)")
             val transport = SseServerTransport(MCP_PATH, this)
             transports[transport.sessionId] = transport
-            val server = buildServer(principal, ctx.read, ctx.proposals, ctx.roots)
+            val server = buildServer(principal, ctx.read, ctx.proposals, ctx.roots, ctx.discussions, ctx.maxWriteBodyBytes)
             server.onClose { transports.remove(transport.sessionId) }
             try {
                 server.createSession(transport) // starts the transport (sends the endpoint event) + runs the session

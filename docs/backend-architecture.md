@@ -93,7 +93,8 @@ protocol package, but transport errors and session behavior remain intentionally
 | Ambiguity | HTTP status plus candidate URLs | Candidate root arguments and `isError` |
 | Proposal creation | Shared response structure; each insert mints a new proposal ID | Same structure; a separate insert naturally has a different ID |
 
-Direct writes remain REST-only under COMMIT-token policy; MCP writes use the proposal flow.
+Direct page writes remain REST-only under COMMIT-token policy. MCP page writes use proposals; PROPOSE and COMMIT
+tokens can start discussions and add comments directly through the same guarded discussion facades as REST.
 
 The detailed tool guide is [Connect your agent](connect-your-agent.md#parity-with-the-rest-api). The bounded current
 characterization lives in [`McpSurfaceTest`](../server/src/test/kotlin/com/plainbase/frameworks/mcp/McpSurfaceTest.kt),

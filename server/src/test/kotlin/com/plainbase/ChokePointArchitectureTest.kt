@@ -55,6 +55,7 @@ private val EXPECTED_FILES_BY_ROOT = mapOf(
         "WriteConflictReason.kt",
         "CanonicalIds.kt",
         "DiscussionDtos.kt",
+        "DiscussionReadRefused.kt",
         "DiscussionRequestParser.kt",
         "DiscussionTransportFacade.kt",
         "ProposeCommandParse.kt",

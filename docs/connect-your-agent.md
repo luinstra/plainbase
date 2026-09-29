@@ -2,9 +2,10 @@
 
 Plainbase ships an **in-binary MCP server** - the same single native binary that serves the web UI also
 speaks the [Model Context Protocol](https://modelcontextprotocol.io) over SSE. An agent (Claude Code, the MCP
-inspector, or any MCP client) connects with an app-issued `pb_` token and gets exactly **seven tools** over the same
+inspector, or any MCP client) connects with an app-issued `pb_` token and gets exactly **eleven tools** over the same
 guarded services as REST. Tests compare shared successful response bytes; authentication/session
-and error handling retain intentional transport differences. Agents *propose*; humans *approve* proposals.
+and error handling retain intentional transport differences. Agents *propose* page changes for human approval;
+authorized agents can write discussions directly.
 
 ## 1. Mint an agent token
 
@@ -12,14 +13,15 @@ Tokens are minted with the admin CLI against the target service's configured `DA
 the command needs that `DATA_DIR` lock, then restart the same service afterward; do not use a separate `DATA_DIR`, which
 would mint tokens for a different service database. Choose a mode:
 
-- `read-only` - search + read only (no proposals).
-- `propose` - read **and** open change proposals for human review (the usual agent mode).
-- `commit` - With default configuration, eligible agent writes become proposals. Per-root direct-commit globs can permit
+- `read-only` - search and read pages, proposals, and discussions; no writes.
+- `propose` - read, open page change proposals for human review, and directly start discussions or add comments.
+- `commit` - With default configuration, eligible page writes become proposals. Per-root direct-commit globs can permit
   eligible REST writes (`PUT /api/v1/pages/{id}` edit or `POST /api/v1/pages` create) to direct-commit only when the
   target root and path fall INSIDE the configured [per-root direct-commit globs](configuration.md#per-root-agent-direct-commit-globs),
   and otherwise DEGRADES to a proposal (HTTP `202`,
   `{degraded, proposal_id, status, unified_diff}`) - so a commit agent is a propose agent everywhere outside its
-  allowed globs. MCP has no write tool, so MCP is propose-only regardless of mode. The `globs` key and
+  allowed globs. MCP page mutations use proposals, while its discussion writes are direct for both `propose` and
+  `commit` tokens, with no proposal or approval fallback. The `globs` key and
   `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS` are **docs-root only**; grant an extra root only with
   `auth.agentDirectCommit.roots.<name>`. An empty docs list denies docs-root direct commits but does not deny
   independently granted extra-root globs.
@@ -60,9 +62,10 @@ auth.mcpAllowedOrigins = ["https://docs.example.com"]
 
 ## 3. A worked session
 
-Once connected, `listTools` returns exactly these seven:
+Once connected, `listTools` returns exactly these eleven:
 
-`search`, `read_page`, `get_page_metadata`, `validate_links`, `propose_change`, `list_changes`, `get_change`.
+`search`, `read_page`, `get_page_metadata`, `validate_links`, `propose_change`, `list_changes`, `get_change`,
+`list_discussions`, `get_discussion`, `start_discussion`, `add_comment`.
 
 A typical search → read → propose flow:
 
@@ -98,6 +101,23 @@ what you retry with if an edit comes back `ambiguous_page_id` (below).
 Track the review queue with `list_changes` (all proposals, newest-first) and `get_change` (one proposal's full
 detail + diff + decision state).
 
+Discussions use these argument forms (UUIDs are canonical lowercase; `anchor` is a page or quote anchor with the
+current page `content_hash`):
+
+```jsonc
+→ list_discussions { "page_id": "0197…", "root": "docs", "cursor": "0198…", "limit": 20 }
+→ list_discussions { "root": "docs", "state": "page_level", "cursor": "0198…", "limit": 20 }
+→ get_discussion   { "id": "0198…", "root": "docs", "cursor": "0199…", "limit": 20 }
+→ start_discussion { "page_id": "0197…", "root": "docs", "anchor": { "kind": "page", "content_hash": "sha256:…" }, "body": "Question" }
+→ add_comment      { "id": "0198…", "root": "docs", "body": "Reply" }
+```
+
+`root` is optional for page and discussion IDs when unambiguous; retry an ambiguity using a returned candidate root.
+Root listing requires `root`, and `state` applies only there. Cursors are exclusive IDs from `next`; pass them back
+with the same mode, root, and filter. Discussion writes take effect immediately for `propose` and `commit` tokens,
+with one write audit for each request reaching the permission check; malformed arguments are rejected before auditing.
+They never become proposals. A `read-only` token can only list and get discussions.
+
 ## 4. Roots: what a page lives under, and what its errors mean
 
 Every page lives under a named **root** - a document directory the server is configured to serve
@@ -110,7 +130,7 @@ operation, or `CreatePageRequest.root` over REST. Omitting it is a 400 `invalid_
 permission to write into `docs`.
 
 A root can be unavailable or read-only, and a page id can be held by more than one root - the server tells you
-which with a code, not a guess. Six wire shapes to recognize:
+which with a code, not a guess. Seven wire shapes to recognize:
 
 | code | status | what it means | what you must do |
 |---|---|---|---|
@@ -119,7 +139,8 @@ which with a code, not a guess. Six wire shapes to recognize:
 | `server_shutting_down` | **503** | The server is draining and this request was rejected before business work began. | Keep your citations and retry once an available server returns. There is no `Retry-After` promise; an admitted write follows the shutdown drain instead. |
 | `root_not_editable` | **403** | The root is declared `editable = false`. Page writes are refused there in **every** auth mode - this is topology, not a permission you might be granted. | Do not retry. Do not propose a write into this root; read-only means read-only for every agent, always. |
 | `invalid_root` | **400** | The named root is not a legal slug, or names no root the server has configured. | Fix the name - check the `root` a `search`/`read_page` hit actually carries, or what `GET /healthz` lists. |
-| `ambiguous_page_id` | **409** | The page id you sent is held by more than one root and you named none, so the server will not pick one for you. | Retry naming `root`, choosing from the candidates the response lists. Each candidate carries the `url` to retry - the endpoint you just called with `root` added. On `propose_change` (`POST /api/v1/changes`) the pin is the request body's own `root` field instead, so those candidates carry no `url`. |
+| `ambiguous_page_id` | **409** (REST); MCP tool error | The page id you sent is held by more than one root and you named none, so the server will not pick one for you. | Retry naming `root` from the candidates. REST page responses include each candidate's retry `url` for that endpoint; REST `POST /api/v1/changes` candidates have no `url` because the pin belongs in the request body's `root` field. MCP candidates carry `{root,id}` hints, with no URL; retry with the `root` argument. |
+| `ambiguous_discussion_id` | **409** (REST); MCP tool error | The discussion id you sent is held by more than one root and you named none. | Retry with a known root. Discussion REST refuses with its existing plain `{ "error": { "code", "message" } }` envelope and no candidate list; MCP supplies `{root,id}` candidate hints for a retry with the `root` argument. |
 
 The id-addressed **read** tools - `read_page`, `get_page_metadata` and `validate_links` - accept the same optional
 `root` pin, which is what makes the `ambiguous_page_id` remedy above actually available on a read. Omit it and the
@@ -139,13 +160,13 @@ always safe; retrying a write into either is not going to change the outcome unt
 ## Parity with the REST API
 
 Every MCP tool is a thin transport adapter over the same guarded facades the REST routes use, with policy rechecked per
-call. The six read/list/get tools have shared successful JSON contracts with their REST endpoints (`GET /api/v1/search`,
-`/pages/{id}`, `/pages/{id}/metadata`, `/pages/{id}/validate-links`, `/changes`, `/changes/{id}`), while authentication,
-session and error envelopes remain transport-specific; `propose_change` is `POST /api/v1/changes`. Separately executed
+call. The six original read/list/get tools and two discussion reads have shared successful JSON contracts with their REST
+endpoints; authentication, session and error envelopes remain transport-specific. `propose_change` is
+`POST /api/v1/changes`; `start_discussion` and `add_comment` use the discussion REST facades. Separately executed
 proposal creates mint independent IDs even though their response structure is shared. Every MCP tool has a REST equivalent you
 can drive with the same `pb_` bearer. The reverse is not total: a few write paths are REST-only (the
 `PUT /api/v1/pages/{id}` direct commit for an in-glob COMMIT token, and direct page creation), with no MCP tool -
-over MCP you propose instead.
+over MCP you propose page changes instead.
 
 For the REST document URL matrix, opt-in Markdown representation, source-byte semantics, and the JSON `ETag` write
 base-hash rule, see the [HTTP API reference](http-api.md). MCP's `read_page` remains the structured JSON read contract.

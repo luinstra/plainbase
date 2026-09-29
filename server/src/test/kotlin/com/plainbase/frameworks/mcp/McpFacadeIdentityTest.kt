@@ -8,6 +8,7 @@ import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ReadFacade
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.testRouteContext
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import io.kotest.core.spec.style.FunSpec
@@ -58,6 +59,16 @@ class McpFacadeIdentityTest : FunSpec({
             fixture.factoryInvocations shouldBe 1
             result.isErr() shouldBe false
             result.text() shouldBe "{\"proposals\":[]}"
+        }
+    }
+
+    test("should contain a missing test-only discussion facade and keep the SSE session open") {
+        McpFacadeIdentityFixture().use { fixture ->
+            val (missing, next) = fixture.missingDiscussionThenListChanges()
+            missing.isErr() shouldBe true
+            missing.text() shouldBe "{\"error\":{\"code\":\"internal\",\"message\":\"Internal error\"}}"
+            next.isErr() shouldBe false
+            next.text() shouldBe "{\"proposals\":[]}"
         }
     }
 })
@@ -114,7 +125,15 @@ private class McpFacadeIdentityFixture : AutoCloseable {
         }
     }
 
-    fun listChanges() = blocking {
+    fun listChanges() = session { client -> withTimeout(15_000) { client.call("list_changes") } }
+
+    fun missingDiscussionThenListChanges() = session { client ->
+        val missing = withTimeout(15_000) { client.call("list_discussions", mapOf("root" to "docs")) }
+        val next = withTimeout(15_000) { client.call("list_changes") }
+        missing to next
+    }
+
+    private fun <T> session(block: suspend (Client) -> T): T = blocking {
         val http = HttpClient(ClientCio) { install(ClientSse) }
         try {
             val transport = http.mcpSseTransport("http://127.0.0.1:$port$MCP_PATH") {
@@ -123,7 +142,7 @@ private class McpFacadeIdentityFixture : AutoCloseable {
             val client = Client(Implementation(name = "plainbase-identity-test", version = "0.0.1"))
             try {
                 withTimeout(15_000) { client.connect(transport) }
-                val result = withTimeout(15_000) { client.call("list_changes") }
+                val result = block(client)
                 recordingFailure.get()?.let { throw it }
                 result
             } finally {
@@ -139,6 +158,8 @@ private class McpFacadeIdentityFixture : AutoCloseable {
         read: ReadFacade,
         proposals: ProposalFacade,
         roots: Set<RootName>,
+        discussions: DiscussionTransportFacade?,
+        maxWriteBodyBytes: Long,
     ): Server {
         recordedInvocations.incrementAndGet()
         runCatching {
@@ -146,8 +167,10 @@ private class McpFacadeIdentityFixture : AutoCloseable {
             check(read === context.read) { "MCP factory replaced the guarded read facade" }
             check(proposals === context.proposals) { "MCP factory replaced the guarded proposal facade" }
             check(roots == context.roots) { "MCP factory received a different root-name set" }
+            check(discussions === context.discussions) { "MCP factory replaced the guarded discussion facade" }
+            check(maxWriteBodyBytes == context.maxWriteBodyBytes) { "MCP factory received a different body cap" }
         }.onFailure { failure -> recordingFailure.compareAndSet(null, failure) }
-        return buildPlainbaseMcpServer(principal, read, proposals, roots)
+        return buildPlainbaseMcpServer(principal, read, proposals, roots, discussions, maxWriteBodyBytes)
     }
 
     private fun <T> onThread(block: () -> T): T = executor.submit(Callable(block)).get()

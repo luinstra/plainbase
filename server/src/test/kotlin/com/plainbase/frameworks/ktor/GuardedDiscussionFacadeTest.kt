@@ -192,6 +192,7 @@ class GuardedDiscussionFacadeTest : FunSpec({
         val result = fixture.facade.comment(human, id, null, "reply")
             .shouldBeInstanceOf<DiscussionWriteOutcome.Refused>()
         result.refusal.code shouldBe "ambiguous_discussion_id"
+        result.refusal.candidateRoots shouldBe listOf(root, otherRoot)
         fixture.audits.single().resource shouldBe "discussion/${id.value}/comment"
         verify(exactly = 0) { fixture.writer.write(any(), any()) }
     }

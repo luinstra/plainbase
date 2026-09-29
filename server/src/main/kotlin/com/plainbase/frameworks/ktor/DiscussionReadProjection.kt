@@ -40,6 +40,7 @@ import com.plainbase.frameworks.protocol.DiscussionListDto
 import com.plainbase.frameworks.protocol.DiscussionPageDto
 import com.plainbase.frameworks.protocol.DiscussionPlacementDto
 import com.plainbase.frameworks.protocol.DiscussionRangeDto
+import com.plainbase.frameworks.protocol.DiscussionReadRefused
 import com.plainbase.frameworks.protocol.RestJson
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -52,8 +53,6 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import kotlin.time.Instant
 import java.time.Instant as JavaInstant
-
-class DiscussionReadRefused(val status: Int, val code: String) : RuntimeException(code)
 
 /** Projects derived rows against one caller-owned page snapshot. */
 class DiscussionReadProjection(

@@ -2,6 +2,11 @@
 
 Verified on the Plan06 working tree at base `89a28b3e3fecff615560a8898b2c577114799461`, 2026-09-18. This records the A1 inventory, B1/B2/B3's 47 declarations, C's narrowed MCP construction, and D/E's current-state documentation. Stages A–E are implemented, verified and reviewed. This records branch completion, not merge status.
 
+Current discussion extension (C4 chunk 4): MCP now also exposes `list_discussions`, `get_discussion`,
+`start_discussion`, and `add_comment`, for eleven tools total. The new reads share the REST discussion JSON;
+PROPOSE and COMMIT tokens write discussions directly through the guarded facade, while READ_ONLY cannot write.
+The historical seven-tool inventory below describes the Plan06 snapshot, not this extension.
+
 ## Current dependency checks and historical migration evidence
 
 The completed protocol migration no longer has a live ownership ledger or exact-signature guard. [`ProtocolDependencyTest`](../../server/src/test/kotlin/com/plainbase/frameworks/protocol/ProtocolDependencyTest.kt) retains two small source checks: protocol imports must use the `kotlin.`, `kotlinx.serialization.`, `com.plainbase.domain.`, or `com.plainbase.frameworks.protocol.` prefixes, and non-mount MCP sources must not import `com.plainbase.frameworks.ktor.` or `io.ktor.`. `McpMount.kt` remains outside the latter check because it intentionally owns HTTP mounting glue. `ChokePointArchitectureTest` and `DomainPurityTest` retain their existing raw-mutation and domain-boundary guards.

@@ -48,6 +48,7 @@ import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.protocol.DiscussionDetailDto
 import com.plainbase.frameworks.protocol.DiscussionListDto
 import com.plainbase.frameworks.protocol.DiscussionPreviewDto
+import com.plainbase.frameworks.protocol.DiscussionReadRefused
 import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.protocol.ErrorCodes
 
@@ -73,7 +74,7 @@ class GuardedDiscussionFacade(
         if (pin != null && registry.byName(pin) == null) throw DiscussionReadRefused(400, "invalid_root")
         val owner = when (resolution) {
             is IdResolution.One -> resolution.root
-            is IdResolution.Ambiguous -> throw DiscussionReadRefused(409, "ambiguous_page_id")
+            is IdResolution.Ambiguous -> throw DiscussionReadRefused(DiscussionRefusal(409, "ambiguous_page_id", resolution.candidates))
             IdResolution.None -> throw DiscussionReadRefused(404, "page_not_found")
         }
         if (topology != null) return DiscussionListDto(emptyList(), null, false, unavailableReason(owner))
@@ -98,7 +99,7 @@ class GuardedDiscussionFacade(
         val target = target(id, pin, null)
         policy.checkDiscussionRead(principal, RootedResource(target.root, "discussion/${id.value}"))
         target.unknownRoots.firstOrNull { !availability.current().isAvailable(it) }?.let(::requireAvailable)
-        target.refusal?.let { throw DiscussionReadRefused(it.status, it.code) }
+        target.refusal?.let { throw DiscussionReadRefused(it) }
         return checkNotNull(projection).detail(
             target.root ?: throw DiscussionReadRefused(503, "content_unreadable"), id, snapshot, after, limit,
         )
@@ -118,7 +119,7 @@ class GuardedDiscussionFacade(
         val (page, bytes) = previewPageBytes(root, pageId, snapshot)
         val answer = when (val resolved = resolveAnchor(page, bytes, request, snapshot)) {
             is AnchorResolution.Resolved -> resolved.anchor as Anchor.Quote
-            is AnchorResolution.Refused -> throw DiscussionReadRefused(resolved.refusal.status, resolved.refusal.code)
+            is AnchorResolution.Refused -> throw DiscussionReadRefused(resolved.refusal)
         }
         return DiscussionPreviewDto(
             answer.contentHash, answer.capture.byteStart, answer.capture.byteEnd,
@@ -130,7 +131,7 @@ class GuardedDiscussionFacade(
         if (pin != null && registry.byName(pin) == null) throw DiscussionReadRefused(400, "invalid_root")
         return when (resolution) {
             is IdResolution.One -> resolution.root
-            is IdResolution.Ambiguous -> throw DiscussionReadRefused(409, "ambiguous_page_id")
+            is IdResolution.Ambiguous -> throw DiscussionReadRefused(DiscussionRefusal(409, "ambiguous_page_id", resolution.candidates))
             IdResolution.None -> throw DiscussionReadRefused(404, "page_not_found")
         }
     }
@@ -165,7 +166,9 @@ class GuardedDiscussionFacade(
         if (root != null && registry.byName(root) == null) return refused(400, "invalid_root")
         val owner = when (resolution) {
             is IdResolution.One -> resolution.root
-            is IdResolution.Ambiguous -> return refused(409, "ambiguous_page_id")
+            is IdResolution.Ambiguous -> return DiscussionWriteOutcome.Refused(
+                DiscussionRefusal(409, "ambiguous_page_id", resolution.candidates),
+            )
             IdResolution.None -> return refused(404, "page_not_found")
         }
         val page = page(snapshot, owner, pageId) ?: return refused(404, "page_not_found")
@@ -294,7 +297,12 @@ class GuardedDiscussionFacade(
         if (unknown.isNotEmpty()) {
             return Target(null, DiscussionFacts.Unknown, DiscussionRefusal(503, "content_unreadable"), unknown)
         }
-        if (present.size > 1) return Target(null, DiscussionFacts.Unknown, DiscussionRefusal(409, ErrorCodes.AMBIGUOUS_DISCUSSION_ID))
+        if (present.size > 1) {
+            return Target(
+                null, DiscussionFacts.Unknown,
+                DiscussionRefusal(409, ErrorCodes.AMBIGUOUS_DISCUSSION_ID, present.map { it.first }),
+            )
+        }
         if (present.isEmpty()) return Target(null, DiscussionFacts.Missing, DiscussionRefusal(404, ErrorCodes.DISCUSSION_NOT_FOUND))
         val (root, claim) = present.single()
         return Target(root, (claim as DiscussionClaim.Present).facts, null)

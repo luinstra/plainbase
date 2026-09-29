@@ -9,6 +9,7 @@ import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.DiscussionWriteOutcome
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.bearerToken
+import com.plainbase.frameworks.protocol.DISCUSSION_JSON_ENVELOPE_CAP
 import com.plainbase.frameworks.protocol.DiscussionDetailDto
 import com.plainbase.frameworks.protocol.DiscussionListDto
 import com.plainbase.frameworks.protocol.DiscussionMutationDto
@@ -32,7 +33,6 @@ import io.ktor.server.routing.route
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonElement
 
-private const val DISCUSSION_BODY_CAP = 524_288L
 private const val DISCUSSION_CONTENT_UNREADABLE_RETRY_AFTER_SECONDS = 30
 
 fun Route.discussionRoutes(ctx: RouteContext) {
@@ -167,7 +167,7 @@ private suspend fun RoutingCall.discussionPost(
             )
             return@guarded
         }
-        val cap = minOf(ctx.maxWriteBodyBytes, DISCUSSION_BODY_CAP)
+        val cap = minOf(ctx.maxWriteBodyBytes, DISCUSSION_JSON_ENVELOPE_CAP)
         val bytes = receiveBodyCapped(cap) ?: return@guarded respondBodyTooLarge(cap)
         try {
             val body = if (bytes.isEmpty() && emptyAllowed) null else parseDiscussionBody(bytes)

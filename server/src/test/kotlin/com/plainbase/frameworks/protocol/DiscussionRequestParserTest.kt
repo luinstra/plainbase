@@ -8,6 +8,8 @@ import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class DiscussionRequestParserTest : FunSpec({
     val hash = "sha256:" + "a".repeat(64)
@@ -190,5 +192,55 @@ class DiscussionRequestParserTest : FunSpec({
         }
         DiscussionRequestParser.listQuery(mapOf("state" to listOf("incomplete"), "future" to listOf("x")), true)
             .state shouldBe "incomplete"
+    }
+
+    test("should select MCP list mode and enforce required strings and query types") {
+        val page = DiscussionRequestParser.mcpList(json("""{"page_id":"$id","limit":1}"""))
+        page shouldBe DiscussionListArguments.Page(DiscussionRequestParser.pageId(id), null, DiscussionQuery(null, 1, null))
+        val root = DiscussionRequestParser.mcpList(json("""{"root":"docs","state":"exact","limit":1}"""))
+        root shouldBe DiscussionListArguments.Root(com.plainbase.domain.root.RootName.require("docs"), DiscussionQuery(null, 1, "exact"))
+        listOf("{}", """{"page_id":null,"root":"docs"}""", """{"page_id":12,"root":"docs"}""").forEach { bad ->
+            refusal(bad, DiscussionRequestParser::mcpList).code shouldBe
+                if (bad == "{}") "invalid_root" else "invalid_request_body"
+        }
+        listOf(
+            """{"page_id":"$id","state":"exact"}""", """{"root":"docs","limit":"1"}""",
+            """{"root":"docs","limit":1e0}""", """{"root":"docs","cursor":null}""",
+        ).forEach { bad ->
+            refusal(bad, DiscussionRequestParser::mcpList).code shouldBe "invalid_query"
+        }
+        refusal("""{"root":"docs","future":1}""", DiscussionRequestParser::mcpList).code shouldBe "invalid_request_body"
+    }
+
+    test("should preflight MCP Unicode depth and serialized byte cap before field grammar") {
+        val lone = buildJsonObject { put("\uD800", "bad") }
+        shouldThrow<DiscussionRequestInvalid> { DiscussionRequestParser.mcpPreflight(lone, 524_288) }.code shouldBe "invalid_utf8"
+        val oversized = json("""{"body":"${"😀".repeat(50)}"}""")
+        shouldThrow<DiscussionRequestInvalid> { DiscussionRequestParser.mcpPreflight(oversized, 20) }.code shouldBe "body_too_large"
+        var deep: JsonElement = JsonPrimitive("safe")
+        repeat(65) { deep = JsonArray(listOf(deep)) }
+        shouldThrow<DiscussionRequestInvalid> { DiscussionRequestParser.mcpPreflight(deep, 1) }.code shouldBe
+            "invalid_request_body"
+    }
+
+    test("should accept only four closed MCP argument forms") {
+        val start = DiscussionRequestParser.mcpStart(
+            json("""{"page_id":"$id","root":"docs","anchor":{"kind":"page","content_hash":"$hash"},"body":"  hi  "}"""),
+        )
+        start.body shouldBe "  hi  "
+        start.anchor shouldBe DiscussionAnchorRequest.Page(hash)
+        DiscussionRequestParser.mcpComment(json("""{"id":"$id","body":"hello"}""")).body shouldBe "hello"
+        listOf(
+            """{"id":null,"body":"hello"}""", """{"id":"$id","body":null}""",
+            """{"id":"$id","body":3}""",
+        ).forEach { bad ->
+            refusal(bad, DiscussionRequestParser::mcpComment).code shouldBe "invalid_request_body"
+        }
+        refusal("""{"page_id":"$id","anchor":{"kind":"page","content_hash":"$hash"},"body":"x","commit":"x"}""") {
+            DiscussionRequestParser.mcpStart(it)
+        }.code shouldBe "invalid_request_body"
+        refusal("""{"page_id":"bad","anchor":{"kind":"page","content_hash":"$hash"},"body":null}""") {
+            DiscussionRequestParser.mcpStart(it)
+        }.code shouldBe "invalid_request_body"
     }
 })

@@ -8,10 +8,10 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * The frozen P3 MCP tool surface (§0.4 / §2.6) — EXACTLY seven, contract-parity with the REST routes.
+ * The frozen seven P3 tools plus four C4 discussion tools.
  * `read_page` is the sole whole-file read (read_section/read_file dropped, owner-settled): it returns the verbatim
  * on-disk markdown (frontmatter header + body), exactly as `GET /api/v1/pages/{id}` does. These names + their input
- * schemas are the single source of truth the exact-seven surface assertion (McpSurfaceTest) checks.
+ * schemas are checked against the wire inventory in McpSurfaceTest.
  */
 object McpTools {
     const val SEARCH = "search"
@@ -21,6 +21,10 @@ object McpTools {
     const val PROPOSE_CHANGE = "propose_change"
     const val LIST_CHANGES = "list_changes"
     const val GET_CHANGE = "get_change"
+    const val LIST_DISCUSSIONS = "list_discussions"
+    const val GET_DISCUSSION = "get_discussion"
+    const val START_DISCUSSION = "start_discussion"
+    const val ADD_COMMENT = "add_comment"
 
     val ALL: Set<String> = setOf(
         SEARCH,
@@ -30,10 +34,14 @@ object McpTools {
         PROPOSE_CHANGE,
         LIST_CHANGES,
         GET_CHANGE,
+        LIST_DISCUSSIONS,
+        GET_DISCUSSION,
+        START_DISCUSSION,
+        ADD_COMMENT,
     )
 }
 
-// The seven tool descriptions surfaced to MCP clients (used in addTool). Accurate + terse; they note the contract
+// Tool descriptions surfaced to MCP clients (used in addTool). The original seven note the contract
 // parity with the REST API. propose_change describes proposed_content as plain UTF-8 markdown (NEVER base64).
 internal const val SEARCH_DESCRIPTION =
     "Full-text search the docs (same contract as GET /api/v1/search). Returns ranked hits with snippets + citations."
@@ -49,6 +57,14 @@ internal const val LIST_CHANGES_DESCRIPTION =
     "List every proposal, newest-first (same contract as GET /api/v1/changes)."
 internal const val GET_CHANGE_DESCRIPTION =
     "The full detail of one proposal by id (same contract as GET /api/v1/changes/{id})."
+internal const val LIST_DISCUSSIONS_DESCRIPTION =
+    "List discussions on page_id (optional root; no state, default limit 200), or in required root (optional state, default/max limit 50)."
+internal const val GET_DISCUSSION_DESCRIPTION =
+    "Get a discussion and a bounded comment window by id; optional root disambiguates multiple candidates (default limit 50)."
+internal const val START_DISCUSSION_DESCRIPTION =
+    "Start a discussion on page_id with an anchor and body; optional root disambiguates multiple candidates."
+internal const val ADD_COMMENT_DESCRIPTION =
+    "Add a comment to a discussion by id; optional root disambiguates multiple candidates."
 
 /** A `{ "type": "string", "description": … }` JSON-schema property. */
 private fun stringProperty(description: String): JsonObject = buildJsonObject {
@@ -61,6 +77,54 @@ private fun enumProperty(values: List<String>, description: String): JsonObject 
     put("type", "string")
     put("enum", buildJsonArray { values.forEach { add(it) } })
     put("description", description)
+}
+
+private fun integerProperty(minimum: Int, maximum: Long, description: String): JsonObject = buildJsonObject {
+    put("type", "integer")
+    put("minimum", minimum)
+    put("maximum", maximum)
+    put("description", description)
+}
+
+private fun anchorAlternative(quote: Boolean, offsets: Boolean = false): JsonObject = buildJsonObject {
+    put("type", "object")
+    put(
+        "properties",
+        buildJsonObject {
+            put("kind", enumProperty(listOf(if (quote) "quote" else "page"), "Anchor kind."))
+            put("content_hash", stringProperty("sha256: followed by 64 lowercase hex digits."))
+            if (quote) put("selected_text", stringProperty("Selected text, at most 16,384 UTF-8 bytes."))
+            if (offsets) {
+                put("block_start", integerProperty(0, 9_999_999_999L, "Inclusive block start offset."))
+                put("block_end", integerProperty(0, 9_999_999_999L, "Exclusive block end offset."))
+            }
+        },
+    )
+    put(
+        "required",
+        buildJsonArray {
+            add("kind")
+            add("content_hash")
+            if (quote) add("selected_text")
+            if (offsets) {
+                add("block_start")
+                add("block_end")
+            }
+        },
+    )
+    put("additionalProperties", false)
+}
+
+private val discussionAnchorProperty = buildJsonObject {
+    put("description", "One page or quote anchor; client commit and capture fields are not accepted.")
+    put(
+        "oneOf",
+        buildJsonArray {
+            add(anchorAlternative(quote = false))
+            add(anchorAlternative(quote = true))
+            add(anchorAlternative(quote = true, offsets = true))
+        },
+    )
 }
 
 /**
@@ -144,4 +208,50 @@ internal val proposeChangeSchema = ToolSchema(
         put("rationale", stringProperty("A short human-readable reason for the change."))
     },
     required = listOf("operation", "proposed_content", "rationale"),
+)
+
+internal val listDiscussionsSchema = ToolSchema(
+    properties = buildJsonObject {
+        put("page_id", stringProperty("Optional page id; when present, selects page mode and forbids state."))
+        put("root", stringProperty("Required without page_id; optional root retry pin with page_id."))
+        put(
+            "state",
+            enumProperty(
+                listOf("page_level", "exact", "moved", "ambiguous", "changed", "orphaned", "unavailable", "unreadable", "incomplete"),
+                "Optional root-mode state filter; forbidden with page_id.",
+            ),
+        )
+        put("cursor", stringProperty("Exclusive canonical discussion id cursor."))
+        put("limit", integerProperty(1, 200, "Page default/max 200; root default/max 50."))
+    },
+    required = emptyList(),
+)
+
+internal val getDiscussionSchema = ToolSchema(
+    properties = buildJsonObject {
+        put("id", stringProperty("Canonical lowercase UUIDv7 discussion id."))
+        put("root", stringProperty("Optional root retry pin."))
+        put("cursor", stringProperty("Exclusive canonical comment id cursor."))
+        put("limit", integerProperty(1, 50, "Comment window size, default 50."))
+    },
+    required = listOf("id"),
+)
+
+internal val startDiscussionSchema = ToolSchema(
+    properties = buildJsonObject {
+        put("page_id", stringProperty("Canonical page id."))
+        put("root", stringProperty("Optional root retry pin."))
+        put("anchor", discussionAnchorProperty)
+        put("body", stringProperty("Discussion body, 1 to 65,536 UTF-8 bytes and nonblank."))
+    },
+    required = listOf("page_id", "anchor", "body"),
+)
+
+internal val addCommentSchema = ToolSchema(
+    properties = buildJsonObject {
+        put("id", stringProperty("Canonical lowercase UUIDv7 discussion id."))
+        put("root", stringProperty("Optional root retry pin."))
+        put("body", stringProperty("Comment body, 1 to 65,536 UTF-8 bytes and nonblank."))
+    },
+    required = listOf("id", "body"),
 )

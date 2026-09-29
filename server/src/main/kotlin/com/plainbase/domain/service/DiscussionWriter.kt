@@ -112,7 +112,7 @@ fun DiscussionCommand.action(): DiscussionAction = when (this) {
 
 data class ReliedOn(val author: SubjectKey? = null, val starter: SubjectKey? = null)
 
-data class DiscussionRefusal(val status: Int, val code: String)
+data class DiscussionRefusal(val status: Int, val code: String, val candidateRoots: List<RootName> = emptyList())
 
 sealed interface DiscussionWriteOutcome {
     data class Done(val id: DiscussionId, val commentId: CommentId?, val commit: String?) : DiscussionWriteOutcome

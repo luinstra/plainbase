@@ -11,7 +11,6 @@ import com.plainbase.domain.service.DenyReason
 import com.plainbase.domain.service.DiscussionReadFailed
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.frameworks.ktor.CsrfGuard
-import com.plainbase.frameworks.ktor.DiscussionReadRefused
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.Source
@@ -20,6 +19,7 @@ import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdBody
 import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdEnvelope
 import com.plainbase.frameworks.ktor.isSecureContext
 import com.plainbase.frameworks.protocol.CANONICAL_PAGE_ID
+import com.plainbase.frameworks.protocol.DiscussionReadRefused
 import com.plainbase.frameworks.protocol.ErrorBody
 import com.plainbase.frameworks.protocol.ErrorCodes
 import com.plainbase.frameworks.protocol.ErrorEnvelope

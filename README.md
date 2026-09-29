@@ -20,12 +20,14 @@ transport and release-gate behavior.
 ## Why Plainbase
 
 - **Agent-native, not agent-bolted-on.** In-binary MCP over SSE with scoped,
-  revocable tokens - seven tools over the same guarded services as REST, with
+  revocable tokens - eleven tools over the same guarded services as REST, with
   shared successful response shapes and intentional transport-specific errors. Connect
   Claude Code (or any MCP client) to your team's docs in minutes.
 - **Humans stay in charge of proposals.** Agents open change proposals with
   diffs and rationale for human review; operator-authorized COMMIT tokens can
-  direct-write only within configured REST globs, and otherwise degrade to a proposal.
+  direct-write pages only within configured REST globs, and otherwise degrade to a proposal.
+  PROPOSE and COMMIT tokens can also start discussions and add comments directly;
+  those discussion writes do not enter the proposal queue.
 - **No lock-in, structurally.** Your docs are a plain tree you can always walk
   away with. Local deploy: the
   `CONTENT_DIR` directory IS the authority - or, with a `roots {}` block, *every*
@@ -91,7 +93,8 @@ pb_a1b2c3d4e5f6a7b8_3hVZ…
 
 Point any MCP client at `https://<host>/api/v1/mcp` (SSE) with that bearer
 and it gets `search`, `read_page`, `get_page_metadata`, `validate_links`,
-`propose_change`, `list_changes`, `get_change`. Reads return the raw
+`propose_change`, `list_changes`, `get_change`, `list_discussions`,
+`get_discussion`, `start_discussion`, and `add_comment`. Page reads include raw
 Markdown, proposals come back as unified diffs in the human review queue,
 and revocation takes effect mid-session. The full worked session, token
 modes (`read-only` / `propose` / `commit`), and reverse-proxy notes:

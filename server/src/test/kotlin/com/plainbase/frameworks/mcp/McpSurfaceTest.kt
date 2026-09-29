@@ -11,17 +11,61 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.ktor.http.isSuccess
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * The MCP surface + REST↔MCP parity (WI-7). The seven tools are a THIN transport over the SAME guarded facades +
- * frozen DTOs as REST, so the six read/list/get tools are BYTE-identical to their REST endpoints for the same
+ * The MCP surface + REST↔MCP parity (WI-7, extended in C4). The original seven tools use the guarded facades +
+ * frozen DTOs as REST, so their six read/list/get tools are byte-identical to their REST endpoints for the same
  * fixture/input, and `propose_change` is structural-parity excluding the freshly minted id. A divergence here means
  * the MCP path drifted from REST (an `explicitNulls` slip, a wrong serializer, a wrong surface).
  */
 class McpSurfaceTest : FunSpec({
+    fun frozenSchema(properties: String, vararg required: String) = ToolSchema(
+        properties = Json.parseToJsonElement(properties).jsonObject,
+        required = required.toList(),
+    )
+
+    // Literal HEAD/P3 input schemas. Compare them with the decoded real listTools wire result, not McpTools constants.
+    val pageSchema = frozenSchema(
+        """{
+            "id":{"type":"string","description":"The canonical-shape page UUID."},
+            "root":{"type":"string","description":"Optional root name to disambiguate an id held by more than one root; omit unless a read returned ambiguous_page_id, which lists the candidate roots. Use the names `list` shows on the tree."}
+        }""",
+        "id",
+    )
+    val oldSchemas = mapOf(
+        "search" to frozenSchema(
+            """{
+                "q":{"type":"string","description":"The search query (the PB-SEARCH-1 §A1 grammar)."},
+                "limit":{"type":"string","description":"Maximum number of hits to return (optional; the server validates the range)."},
+                "offset":{"type":"string","description":"Result offset for pagination (optional)."}
+            }""",
+            "q",
+        ),
+        "read_page" to pageSchema,
+        "get_page_metadata" to pageSchema,
+        "validate_links" to pageSchema,
+        "propose_change" to frozenSchema(
+            """{
+                "operation":{"type":"string","enum":["edit","create"],"description":"edit an existing page or create a new one."},
+                "root":{"type":"string","description":"Which document directory a CREATE lands in - REQUIRED for a create, there is no default. Optional for an edit as a disambiguation pin: name it when the tool answers ambiguous_page_id, otherwise omit it. Use the names `list` shows on the tree."},
+                "page_id":{"type":"string","description":"The page to edit (an edit requires it; a create omits it)."},
+                "base_hash":{"type":"string","description":"The sha256:<64-hex> content hash you edited against (an edit requires it)."},
+                "target_path":{"type":"string","description":"A create's content-relative path (required for create); optional for an edit."},
+                "proposed_content":{"type":"string","description":"The full UTF-8 markdown source of the page after your edit (frontmatter header + body)."},
+                "rationale":{"type":"string","description":"A short human-readable reason for the change."}
+            }""",
+            "operation", "proposed_content", "rationale",
+        ),
+        "list_changes" to frozenSchema("{}"),
+        "get_change" to frozenSchema(
+            """{"id":{"type":"string","description":"The canonical-shape proposal UUID."}}""",
+            "id",
+        ),
+    )
 
     fun proposeRequest(pageId: String, baseHash: String, content: String = "---\ntitle: Doc\n---\n\n# Doc\n\nedited.\n") =
         ProposeChangeRequest("edit", pageId = pageId, baseHash = baseHash, proposedContent = content, rationale = "improve")
@@ -34,13 +78,24 @@ class McpSurfaceTest : FunSpec({
         "rationale" to "improve",
     )
 
-    test("the tool surface is EXACTLY the seven §2.6 names — no read_section/read_file/approve/reject/rebase") {
+    test("the tool surface has the seven existing and four discussion tools") {
         McpHarness().use { harness ->
             harness.session(harness.proposeBearer) { client ->
-                val names = client.listTools().tools.map { it.name }.toSet()
-                names shouldBe McpTools.ALL
-                for (absent in listOf("read_section", "read_file", "approve", "reject", "rebase")) {
+                val tools = client.listTools().tools.associateBy { it.name }
+                val names = tools.keys
+                names shouldBe setOf(
+                    "search", "read_page", "get_page_metadata", "validate_links", "propose_change", "list_changes", "get_change",
+                    "list_discussions", "get_discussion", "start_discussion", "add_comment",
+                )
+                for (absent in listOf(
+                    "read_section", "read_file", "approve", "reject", "rebase", "anchor_preview", "edit_comment",
+                    "retract_comment", "resolve_discussion", "reopen_discussion", "reattach_discussion", "purge_comment",
+                )) {
                     names shouldNotContain absent
+                }
+                oldSchemas.forEach { (name, expected) ->
+                    RestJson.encodeToJsonElement(ToolSchema.serializer(), tools.getValue(name).inputSchema) shouldBe
+                        RestJson.encodeToJsonElement(ToolSchema.serializer(), expected)
                 }
             }
         }

@@ -17,6 +17,7 @@ import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.ktor.AmbiguousIdMap
 import com.plainbase.frameworks.ktor.plainbaseModule
 import com.plainbase.frameworks.ktor.testRouteContext
+import com.plainbase.frameworks.ktor.withExtract
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import io.ktor.client.HttpClient
@@ -43,6 +44,8 @@ import kotlinx.coroutines.withTimeout
 import java.nio.file.Files
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
+import kotlin.time.Clock
+import kotlin.time.Duration
 import io.ktor.client.engine.cio.CIO as ClientCIO
 import io.ktor.server.cio.CIO as ServerCIO
 
@@ -73,6 +76,9 @@ class McpHarness(
      */
     retiredRoots: List<RootName> = emptyList(),
     proposalRepositoryDecorator: (ProposalRepository) -> ProposalRepository = { it },
+    enforced: Boolean = true,
+    writeBodyCap: Long? = null,
+    authClock: Clock = Clock.System,
 ) : AutoCloseable {
 
     private val root = Files.createTempDirectory("plainbase-mcp-test")
@@ -99,8 +105,10 @@ class McpHarness(
     val proposeBearer: String
     val proposeTokenId: String
     val readOnlyBearer: String
+    val commitBearer: String
     val seedPageId: String
     val seedBaseHash: String
+    internal val discussions: McpDiscussionFixture
 
     init {
         Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nSome body with a [broken](missing.md) link.\n")
@@ -114,6 +122,7 @@ class McpHarness(
         )
         index = IndexHarness(
             root,
+            tokenClock = authClock,
             contentStore = store,
             listeners = listOf(
                 IndexBuilder.PublicationListener { snap, _ ->
@@ -138,6 +147,7 @@ class McpHarness(
         proposeBearer = propose.plaintext
         proposeTokenId = propose.id
         readOnlyBearer = index.apiTokens.mint(label = "ro", mode = AgentMode.READ_ONLY).plaintext
+        commitBearer = index.apiTokens.mint(label = "commit", mode = AgentMode.COMMIT).plaintext
         val idMap = if (ambiguousRoots.isEmpty() && retiredRoots.isEmpty()) {
             index.idMap
         } else {
@@ -146,20 +156,34 @@ class McpHarness(
         val policies = index.rootRegistry.roots.associate { root ->
             root.name to if (root.name == RootName.PRIMARY) primaryPolicy else ContentPathPolicy.ALL
         }
-        val ctx = index.testRouteContext(
-            searchProvider = searchProvider,
-            enforced = true,
-            policies = policies,
-            resolver = PageRootResolver(idMap, index.rootRegistry, policies),
-            absence = AbsenceClassifier(idMap, policies),
-            proposalRepository = proposalRepositoryDecorator(index.proposalRepository),
+        val resolver = PageRootResolver(idMap, index.rootRegistry, policies)
+        val absence = AbsenceClassifier(idMap, policies)
+        discussions = McpDiscussionFixture(
+            index,
+            index.rootRegistry.roots.associate { it.name to (it.localPath ?: root) },
+            resolver,
+            absence,
+            enforced,
+            authClock,
         )
+        val base = index.testRouteContext(
+            searchProvider = searchProvider,
+            enforced = enforced,
+            policies = policies,
+            resolver = resolver,
+            absence = absence,
+            proposalRepository = proposalRepositoryDecorator(index.proposalRepository),
+            authClock = authClock,
+        )
+        val ctx = base.withExtract(base.extract, discussions.transport, writeBodyCap ?: base.maxWriteBodyBytes)
         server = onThread { embeddedServer(ServerCIO, host = "127.0.0.1", port = 0) { plainbaseModule(ctx) }.start(wait = false) }
         port = blocking { server.engine.resolvedConnectors().first().port }
     }
 
     /** Revoke the PROPOSE token mid-session (the live `modeOf` re-read → denied on the next facade call). */
     fun revokeProposeToken() = index.apiTokens.revoke(proposeTokenId)
+
+    fun mintExpiringBearer(ttl: Duration): String = index.apiTokens.mint(label = "expiring", mode = AgentMode.PROPOSE, ttl = ttl).plaintext
 
     /** The stored proposal summary rows. */
     fun proposalRows() = index.proposalRepository.all()
@@ -169,6 +193,8 @@ class McpHarness(
 
     /** Drives the sticky runtime-outage state without depending on an OS-specific unmount in an MCP contract test. */
     fun markMainUnavailable() = index.availability.markUnavailable(RootName.PRIMARY, UnavailableCause.VANISHED)
+
+    fun markUnavailable(root: RootName) = index.availability.markUnavailable(root, UnavailableCause.VANISHED)
 
     /**
      * Leaves the seeded page durably bound but absent from the next snapshot. A second live page keeps this from
@@ -235,6 +261,7 @@ class McpHarness(
     override fun close() {
         runCatching { onThread { server.stop(gracePeriodMillis = 100, timeoutMillis = 1000) } } // stop's runBlocking off the test thread
         exec.shutdownNow()
+        discussions.close()
         index.close()
         searchDb.close()
         listOf(searchDir, root, extraDir).forEach { dir ->

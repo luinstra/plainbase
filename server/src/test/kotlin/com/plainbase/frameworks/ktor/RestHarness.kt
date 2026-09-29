@@ -184,13 +184,14 @@ fun IndexHarness.testRouteContext(
      */
     absence: com.plainbase.domain.service.AbsenceClassifier = com.plainbase.domain.service.AbsenceClassifier(idMap, policies),
     proposalRepository: com.plainbase.domain.repository.ProposalRepository = this.proposalRepository,
+    authClock: Clock = Clock.System,
 ): RouteContext {
     val policy = PolicyService(
         roles = roleRepository,
         apiTokens = apiTokenRepository,
         audit = auditRepository,
         idProvider = UuidV7IdProvider(),
-        clock = Clock.System,
+        clock = authClock,
         enforced = enforced,
         editableOf = { rootRegistry.byName(it)?.editable == true },
     )
