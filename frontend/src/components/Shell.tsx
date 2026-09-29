@@ -109,6 +109,9 @@ export function Shell() {
         </a>
         <div className="flex items-center gap-3">
           <SearchTrigger />
+          <Link to="/discussions" className="rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink" data-pb-discussions-nav>
+            Discussions
+          </Link>
           {session.data?.authenticated && (
             <Link
               to="/review"

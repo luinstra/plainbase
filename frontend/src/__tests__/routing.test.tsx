@@ -181,7 +181,7 @@ function renderAt(initialPath: string, prime: (qc: QueryClient) => void) {
 }
 
 describe("routing flows", () => {
-  it.each(["/new/", "/admin/", "/review/"])("renders NotFound for the server-rejected trailing-slash spelling %s", async (path) => {
+  it.each(["/new/", "/admin/", "/review/", "/discussions/", "/discussions/docs/", "/discussions/docs/thread/"])("renders NotFound for the server-rejected trailing-slash spelling %s", async (path) => {
     const { view } = renderAt(path, () => {});
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
@@ -571,6 +571,34 @@ describe("routing flows", () => {
     expect(view.container.querySelector(".pb-prose")).toBeNull();
   });
 
+  it("rejects an encoded slash in a discussion address before a discussion fetch", async () => {
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL) => new Response("{}", { status: 500 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const { view } = renderAt("/discussions/docs%2Fextra/thread", () => {});
+      await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
+      expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("/api/v1/discussions"))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps rooted discussion escapes on a missing path and permalink", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "page_not_found", message: "Missing" } }), { status: 404 })));
+    try {
+      const path = renderAt("/docs/deleted", () => {});
+      await waitFor(() => expect(path.view.container.querySelector('a[href="/discussions/docs"]')).not.toBeNull());
+      path.view.unmount();
+      const permalink = renderAt(`/p/docs/${LOSER_ID}`, () => {});
+      await waitFor(() => expect(permalink.view.container.querySelector('a[href="/discussions/docs"]')).not.toBeNull());
+      permalink.view.unmount();
+      const bare = renderAt(`/p/${LOSER_ID}`, () => {});
+      await waitFor(() => expect(bare.view.container.querySelector('a[href="/discussions"]')).not.toBeNull());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("shows the 404 view when the API rejects the permalink id (400 invalid_page_id)", async () => {
     const envelope = { error: { code: "invalid_page_id", message: "Not a canonical-shape UUID: 'not-a-uuid'" } };
     vi.stubGlobal(
@@ -594,6 +622,9 @@ describe("routing flows", () => {
       { address: "/admin", routePath: "/admin", routeId: "/admin", params: {} },
       { address: "/review", routePath: "/review", routeId: "/review", params: {} },
       { address: "/review/123", routePath: "/review/$id", routeId: "/review/$id", params: { id: "123" } },
+      { address: "/discussions", routePath: "/discussions", routeId: "/discussions", params: {} },
+      { address: "/discussions/docs", routePath: "/discussions/$root", routeId: "/discussions/$root", params: { root: "docs" } },
+      { address: "/discussions/docs/123", routePath: "/discussions/$root/$id", routeId: "/discussions/$root/$id", params: { root: "docs", id: "123" } },
       { address: "/p/docs/abc", routePath: "/p/$", routeId: "/p/$", params: { _splat: "docs/abc" } },
       { address: "/p/abc", routePath: "/p/$", routeId: "/p/$", params: { _splat: "abc" } },
       { address: "/browse/docs/diagrams/flow.mmd", routePath: "/browse/$", routeId: "/browse/$", params: { _splat: "docs/diagrams/flow.mmd" } },

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
 import type { PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
@@ -23,6 +23,7 @@ import { QueryErrorView, RootUnavailableView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
 import { Toc } from "./Toc";
+import { DiscussionPanel } from "./DiscussionPanel";
 
 /**
  * The `/$` canonical route body: resolve the splat through `by-path` (canonical or
@@ -70,7 +71,7 @@ export function DocsPage({ path }: { path: string }) {
   if (page.isError) {
     // A by-path 404 may be a folder's URL prefix — folders aren't in by-path space (ADR-0003).
     if (page.error instanceof ApiError && page.error.isNotFound) return <FolderLanding />;
-    return <PageError error={page.error} />;
+    return <PageError error={page.error} root={rootEntryOfUrl(tree.data?.roots ?? [], pathname)?.root} />;
   }
   // A landing page renders AS its folder (the index content replaces the generated listing); the effect canonicalizes the URL.
   if (landingEntry?.folder.url) return <FolderLanding url={landingEntry.folder.url} />;
@@ -104,14 +105,14 @@ export function FolderLanding({ url }: { url?: string }) {
     // url survives, on the synthetic root folder node below). URL ownership is the one thing a down root still tells
     // us - every CONFIGURED root is listed with its url - so ask who owns the address before calling this not-found.
     const owner = rootEntryOfUrl(tree.data.roots, target);
-    if (owner && !owner.available) return <RootUnavailableView root={owner.root} label={rootLabel(owner)} />;
-    return <NotFoundView />;
+    if (owner && !owner.available) return <><RootUnavailableView root={owner.root} label={rootLabel(owner)} /><DiscussionEscape root={owner.root} /></>;
+    return <><NotFoundView /><DiscussionEscape root={owner?.root} /></>;
   }
   // A root that is not serving has an EMPTY subtree on the wire (the server must never ship its stale carried
   // listing), so rendering the folder anyway would draw an empty directory over an outage - "your docs are gone"
   // instead of "this disk is not mounted". The pages under it 503 through their own requests; the folder view has
   // no request to 503, which is exactly why the flag has to be read here.
-  if (!resolved.available) return <RootUnavailableView root={resolved.root} label={rootLabel(resolved)} />;
+  if (!resolved.available) return <><RootUnavailableView root={resolved.root} label={rootLabel(resolved)} /><DiscussionEscape root={resolved.root} /></>;
 
   // The landing renders AT the folder URL — its one canonical home (the index/README's own bare
   // page URL redirects here; see DocsPage). With an index/README the authored content renders as the
@@ -293,7 +294,7 @@ export function PermalinkPage({ splat }: { splat: string }) {
   }, [canonicalUrl, stillHere, router]);
 
   if (page.isPending) return <PagePending />;
-  if (page.isError) return <PermalinkError error={page.error} id={id} />;
+  if (page.isError) return <PermalinkError error={page.error} id={id} root={root} />;
   // The permalink response is the page's PageResponse — hand it to the Rail, no redundant fetch. Still the
   // PARSED root, never the response's: the client acts on the address the reader used. Re-pin the html leg
   // to the root the metadata read NAMED and this view silently resolves an ambiguity the server refuses to -
@@ -310,10 +311,10 @@ export function PermalinkPage({ splat }: { splat: string }) {
  * links are built here, from `permalinkOf` (the same emitter mirror `pageHref` uses - no new URL semantics).
  * NOT the candidates' own `url`s: those are the API retry targets, and would send a reader to JSON.
  */
-function PermalinkError({ error, id }: { error: Error; id: string }) {
+function PermalinkError({ error, id, root }: { error: Error; id: string; root: string | null }) {
   const tree = useQuery(treeQuery);
   const candidates = error instanceof ApiError ? error.candidates : [];
-  if (candidates.length === 0) return <PageError error={error} />;
+  if (candidates.length === 0) return <PageError error={error} root={root} />;
   return (
     <QueryErrorView error={error}>
       <ul className="mt-4 space-y-1" data-pb-candidates>
@@ -325,6 +326,7 @@ function PermalinkError({ error, id }: { error: Error; id: string }) {
           </li>
         ))}
       </ul>
+      <DiscussionEscape root={root} />
     </QueryErrorView>
   );
 }
@@ -347,6 +349,8 @@ function PermalinkError({ error, id }: { error: Error; id: string }) {
  * server would refuse to serve on reload.
  */
 function PageContent({ id, root, page: seeded }: { id: string; root: string | null; page?: PageResponse }) {
+  const [discussionOpen, setDiscussionOpen] = useState(false);
+  const discussionTrigger = useRef<HTMLButtonElement>(null);
   const html = useQuery(pageHtmlQuery(id, root));
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
   const fetched = useQuery({ ...pageQuery(id, root), enabled: seeded === undefined });
@@ -363,17 +367,21 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   }, [title]);
 
   if (html.isPending) return <PagePending />;
-  if (html.isError) return <PageError error={html.error} />;
+  if (html.isError) return <PageError error={html.error} root={root} />;
 
   const frontmatter = page?.frontmatter;
   return (
-    <div className="flex gap-12">
+    <div className="flex flex-col gap-8 xl:flex-row xl:gap-12">
       {/* The reading column takes the middle and centers at a readable width; the side columns
           (sidebar + this rail) grow/shrink with the window up to their clamp caps. */}
       <div className="min-w-0 flex-1">
         <div className="mx-auto max-w-[72ch]">
           <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
-          <Prose html={html.data.html} />
+          <button ref={discussionTrigger} type="button" className="pb-discussion-action my-4" aria-expanded={discussionOpen}
+            aria-controls="pb-page-discussions" onClick={() => setDiscussionOpen((open) => !open)} data-pb-discussions-toggle>
+            {discussionOpen ? "Hide discussions" : "Show discussions"}
+          </button>
+          <div data-pb-page-article><Prose html={html.data.html} /></div>
           <DocFooter
             frontmatter={frontmatter}
             url={page?.url ?? null}
@@ -382,13 +390,15 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
           />
         </div>
       </div>
-      <aside
-        className="pb-rail sticky top-20 hidden max-h-[calc(100vh-6rem)] w-[clamp(14rem,18vw,20rem)] shrink-0 overflow-y-auto xl:block"
-        data-pb-rail
-      >
-        <DocRail frontmatter={frontmatter} path={html.data.path} />
-        <Toc headings={html.data.headings} />
-      </aside>
+      {discussionOpen ? <aside id="pb-page-discussions" className="w-full min-w-0 xl:w-[clamp(18rem,28vw,28rem)] xl:shrink-0">
+        <DiscussionPanel key={`${html.data.root}/${id}`} root={html.data.root} pageId={id} onClose={() => { setDiscussionOpen(false); discussionTrigger.current?.focus(); }} />
+      </aside> : <aside
+          className="pb-rail sticky top-20 hidden max-h-[calc(100vh-6rem)] w-[clamp(14rem,18vw,20rem)] shrink-0 overflow-y-auto xl:block"
+          data-pb-rail
+        >
+          <DocRail frontmatter={frontmatter} path={html.data.path} />
+          <Toc headings={html.data.headings} />
+        </aside>}
     </div>
   );
 }
@@ -565,9 +575,15 @@ function PagePending() {
   );
 }
 
-function PageError({ error }: { error: Error }) {
-  if (error instanceof ApiError && (error.isNotFound || error.status === 400)) return <NotFoundView />;
+function PageError({ error, root }: { error: Error; root?: string | null }) {
+  if (error instanceof ApiError && (error.isNotFound || error.status === 400)) return <><NotFoundView /><DiscussionEscape root={root} /></>;
   // Everything else - including the outage arriving the other way (a 503 on the page request rather than the tree's
   // flag) - is the shared query-error surface's call, not this one's.
-  return <QueryErrorView error={error} />;
+  return <><QueryErrorView error={error} /><DiscussionEscape root={root} /></>;
+}
+
+function DiscussionEscape({ root }: { root?: string | null }) {
+  return <p className="mt-4 text-center text-sm">{root ?
+    <Link to="/discussions/$root" params={{ root }} className="text-link hover:underline">Discussions in {root}</Link> :
+    <Link to="/discussions" className="text-link hover:underline">Browse discussions</Link>}</p>;
 }

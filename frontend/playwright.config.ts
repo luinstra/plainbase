@@ -14,10 +14,10 @@ export default defineConfig({
   projects: [
     {
       name: "open",
-      testIgnore: [/review\.spec\.ts/, /multi-root\.spec\.ts/, /multi-root-unavailable\.spec\.ts/],
+      testIgnore: [/review\.spec\.ts/, /multi-root\.spec\.ts/, /multi-root-unavailable\.spec\.ts/, /discussions\.spec\.ts/],
     },
     { name: "auth", testMatch: /review\.spec\.ts/ },
-    { name: "multi-root", testMatch: /multi-root\.spec\.ts/ },
+    { name: "multi-root", testMatch: /(?:multi-root|discussions)\.spec\.ts/ },
     { name: "multi-root-unavailable", testMatch: /multi-root-unavailable\.spec\.ts/ },
   ],
 });

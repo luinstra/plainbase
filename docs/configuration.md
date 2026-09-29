@@ -113,7 +113,7 @@ being ambiguous with the bare `/p/{id}` permalink.
 **The reserved segments.** No root may be named:
 
 - one of Plainbase's own top-level URLs, live or foreseeable - `api`, `assets`, `browse`, `healthz`,
-  `p`, `fonts`, the SPA's `admin`, `new` and `review`, and the auth/ops/discovery vocabulary
+  `p`, `fonts`, the SPA's `admin`, `discussions`, `new` and `review`, and the auth/ops/discovery vocabulary
   (`login`, `search`, `session`, `settings`, `static`, `metrics`, `well-known` and the rest);
   `ReservedSegments.kt` holds the list in full and it is deliberately generous, because growing it later
   would boot-refuse an install that had already taken the new word;
@@ -353,7 +353,7 @@ preserves its durable bindings, while duplicate declarations make startup refuse
 `root add` refuses outright (an error message, not a silent skip) on:
 
 - **a reserved segment** - Plainbase owns a set of top-level URLs for its own surfaces (`api`,
-  `assets`, `browse`, `healthz`, `p`, `admin`, `new`, `review` and the like), plus the `pb-` and
+  `assets`, `browse`, `healthz`, `p`, `admin`, `discussions`, `new`, `review` and the like), plus the `pb-` and
   `plainbase-` prefixes and any `v` followed only by digits. No root may take one. The refusal names
   the word, and it is exit 2 - a bad argument, refused before anything is locked or read.
 - **nesting** - the new path may not sit inside another configured root or inside `DATA_DIR`, and may

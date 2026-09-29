@@ -49,6 +49,10 @@ class ReservedSegmentsTest : FunSpec({
         reserved("main") shouldBe true
     }
 
+    test("the discussions inbox cannot be registered as a content root") {
+        reserved("discussions") shouldBe true
+    }
+
     test("corpus vocabulary a docs tree plausibly owns stays legal") {
         listOf("guides", "notes", "changelog", "team", "handbook", "memoria").forEach { reserved(it) shouldBe false }
     }

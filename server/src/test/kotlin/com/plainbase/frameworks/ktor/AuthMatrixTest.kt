@@ -13,6 +13,7 @@ import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsBytes
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -58,6 +59,26 @@ class AuthMatrixTest : FunSpec({
             }
         } finally {
             root.toFile().deleteRecursively()
+        }
+    }
+
+    test("discussion deep links use the normal shell under enforced auth") {
+        val links = listOf("/discussions", "/discussions/docs", "/discussions/docs/0197c4d5-1234-7abc-8def-0123456789ab")
+        withApp(role = null) { app ->
+            val shell = app.client.get("/docs").bodyAsBytes()
+            links.forEach { path ->
+                val response = app.client.get(path)
+                response.status shouldBe HttpStatusCode.OK
+                response.bodyAsBytes() shouldBe shell
+            }
+        }
+        withApp(role = Role.VIEWER) { app ->
+            val shell = app.client.get("/docs").bodyAsBytes()
+            links.forEach { path ->
+                val response = app.client.get(path)
+                response.status shouldBe HttpStatusCode.OK
+                response.bodyAsBytes() shouldBe shell
+            }
         }
     }
 
