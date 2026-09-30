@@ -227,30 +227,95 @@ The app DB is not WAL; the derived `search.db` and `discussions.db` use WAL and 
 `DATA_DIR/search.db` is rebuildable from the content tree at any time and **deletable with zero data
 loss** - there are no migrations, ever. Delete it and reindex (or just restart, or let the next
 content change trigger a rebuild): the engine-truth diff self-heals from an empty index back to the
-full corpus. `DATA_DIR/discussions.db` is also derived and deletable with zero data loss. Boot rebuilds
-it from `.plainbase/discussions/` in each editable local root. Those discussion files are the source of
-truth, alongside the rest of each content root. Object-mode, read-only and non-local roots do not
-support discussions. In local mode the configured content roots are authoritative; in object mode the
-bucket is authoritative. `DATA_DIR/plainbase.db` carries the other durable state.
-
-### Discussion index unsynced state
-
-When an error prevents the discussion index from staying current, the server logs an ERROR line such
-as `discussion index for root 'docs' became unsynced: ...`. Discussion reads continue from the
-authoritative files while the index recovers. Recovery retries automatically with backoff capped at
-300 seconds. Creating a new discussion is refused until the index recovers; the caller must retry. To reset
-manually, stop Plainbase and delete
-`DATA_DIR/discussions.db`; boot rebuilds it from the discussion files.
-
-If cleanup after a committed comment purge fails, a `.pbpurge.*` file may retain the removed bytes.
-Boot preserves unresolved purge files. Stop the service and inspect the file's content and history
-before removing a residual confirmed to be unneeded.
+full corpus. `DATA_DIR/discussions.db` is also derived; [Discussions](#discussions) below covers its
+file authority and rebuild procedure. In local mode the configured content roots are authoritative;
+in object mode the bucket is authoritative. `DATA_DIR/plainbase.db` carries the other durable state.
 
 One clarification on the delete-and-rebuild path: **stop the server before deleting either derived
-database** (or restart afterwards - a fresh boot recreates and rebuilds them). Deleting a database under
+database**, including its SQLite `-wal` and `-shm` sidecars when resetting it. Deleting a database under
 a running server unlinks it while the server's open connections keep reading and writing the unlinked
 copy, so the on-disk file only reappears on restart. On a *running* server, use
 `POST /api/v1/admin/reindex` to rebuild search in place instead of deleting `search.db`.
+
+## Discussions
+
+Discussions support editable local roots. Read-only and object-mode roots report them unavailable;
+see the [support and authorship rules](configuration.md#discussions-support-and-authorship).
+Each root owns this hidden collection (discussion and comment IDs are canonical lowercase UUIDv7):
+
+```text
+<root>/.plainbase/discussions/
+  <discussion-id>/
+    discussion.md
+    <comment-id>.md
+```
+
+These are authoritative user files, excluded from ordinary page content. Back up the full root,
+including `.plainbase` and Git history; `DATA_DIR` alone cannot recover comments. External editing
+is possible, but known records parse strictly: malformed or partial files appear unreadable or
+incomplete. Unknown frontmatter is preserved on rewrites. Keep real files and directories, not
+symlinks. [Request and file limits](http-agent-workflow.md#discussion-limits) are fixed bounds.
+
+The original anchor is immutable evidence. Current matches and list quote previews use the latest
+intentional reattachment when present; detail keeps the original and latest anchors separately.
+To reattach an open quote discussion in the UI, select fresh source, preview it and explicitly confirm
+the new passage. Page-level discussions cannot be reattached. Retracted comments cannot be edited
+or restored in this UI. Root history mode controls attributed `discussion: <action> <id>` commits;
+it does not change file authority. Edit, retract and purge affect current files, and earlier bodies
+may remain in Git and backups. Purge removes a comment, not the marker or its history.
+
+### Watching and rebuilding
+
+The discussion watcher covers editable local roots available at boot, with at most two directory watches
+per root: `.plainbase` and `.plainbase/discussions`, not one per discussion. Full reparses scheduled every
+60 seconds handle edits inside existing discussion directories; this interval is not a freshness
+deadline. Added roots require restart for watcher coverage; roots missing at boot require restoration
+and restart. Overflow, invalidated watches or recovery can require full reparses.
+
+### Discussion index unsynced state
+
+An index failure logs an ERROR such as `discussion index for root 'docs' became unsynced: ...`.
+Unsynced reads fall back to authoritative files and may do more work; unreadable files or unavailable
+storage can still refuse reads. New discussion creation fails closed with `503 content_unreadable`
+until the page-count index recovers. Recovery uses exponential backoff capped at five minutes;
+a successful full reparse for the current recovery generation restores indexed reads.
+
+`DATA_DIR/discussions.db` is derived JDBC/SQLite state, rebuilt from root files at boot. Schema
+mismatch rebuilds it rather than migrating it. For a manual reset, stop Plainbase, remove this
+derived database and its `-wal`/`-shm` sidecars, then restart. Keep the root collection intact.
+
+### Uncertain writes and residual recovery
+
+A failed response does not always mean no discussion files changed. Known Git commit failures
+attempt rollback, which can itself fail; unknown commit outcomes leave files in place. Inspect the
+current discussion, files and Git before deciding on another action after network loss, any `5xx`
+on a discussion write or late `root_unavailable`. This includes `503 content_unreadable`, which can
+leave residual files after a store failure. Do not automatically replay writes. Neither `discussion_commit_failed` nor
+`discussion_commit_uncertain` supplies `Retry-After`. Other recovery headers are hints, not safe
+write-replay instructions; see [discussion errors](http-agent-workflow.md#discussion-errors).
+
+The UI retains failed drafts. A confirmed write remains successful if the following view refresh
+fails, and saved edits/retractions/purges suppress stale bodies. Use the discussion's **Refresh** and
+inspect the fresh detail, loading further comment windows as needed. **Reload page** only refreshes
+reattachment source and invalidates preview/confirmation; it does not clear an uncertain write outcome.
+
+Boot reparses files and, with history enabled, can best-effort reconcile readable entries within
+their file caps to Git. This is not syntax validation: malformed records may enter history before
+strict reparse reports them. With history enabled, recognized `.pbpurge.<comment-id>.md.<16 lowercase hex>`
+tombstones can be restored when HEAD proves the target; unproven tombstones remain with warnings.
+History-off leaves purge tombstones untouched. The separate age sweep
+removes only recognized regular `.pbtmp.<16 hex>.tmp` files at least 24 hours old; it may clean empty
+directories, but does not delete arbitrary hidden entries, incomplete markers or every purge residual.
+
+Ordinary mutations refuse unreadable/incomplete records. Authorized comment purge is a narrow
+exception: safe readable marker and target entries can permit removal even when marker syntax is
+malformed, without decoding or repairing that marker. A missing marker remains
+`404 discussion_not_found`. Purge does not erase history or backups.
+
+For residual or malformed content, stop the server and back up the full affected root, including
+`.plainbase` and Git. Inspect logs, marker/comment files and Git state; restore valid intended files
+or deliberately remove confirmed unwanted residuals. Restart and inspect rebuilt views. Do not
+synthesize a marker for unknown comments or delete `.plainbase` wholesale.
 
 ## Multiple roots: what happens when one is not there
 
@@ -278,10 +343,11 @@ A configured root that is missing at boot, or whose directory vanishes while the
 | answer | what it means to an agent |
 |---|---|
 | `404 page_not_found` | the page is unavailable in the requested visible scope. A root pin narrows that scope; this does not prove physical deletion. Keep citations/provenance until the source state is verified. |
-| `503 root_unavailable` (+ `Retry-After: 300`) | the root's availability is unresolved. **KEEP citations and provenance**, honor the delay, and retry after the operator restores the root and restarts the server. |
-| `503 absence_unverified` (+ `Retry-After: 30`) | the root is healthy but the page's absence is not yet proven. **KEEP citations and provenance**, honor the delay, and retry as observations converge; do not restart the root. |
+| `503 root_unavailable` (+ `Retry-After: 300`) | the root's availability is unresolved. **KEEP citations and provenance**; retry reads after operator restoration/restart, honoring the delay. Inspect uncertain discussion writes before another action. |
+| `503 absence_unverified` (`Retry-After: 30` when supplied) | the root is healthy but the page's absence is not yet proven. **KEEP citations and provenance**; retry reads as observations converge, honoring any header, without restarting the root. Discussion source admission can omit the header; inspect uncertain writes before another action. |
 
-Nothing is ever written when root rejection happens before the operation is entered, so retrying that response is safe.
+A root rejection before entry into an operation leaves no write. A late discussion failure can follow
+persistence; [inspect its outcome](#uncertain-writes-and-residual-recovery) before submitting again.
 Shutdown admission is a separate 503, `server_shutting_down`; see the [agent error table](connect-your-agent.md#4-roots-what-a-page-lives-under-and-what-its-errors-mean).
 It carries no `Retry-After` promise. A root that is not serving also never reports
 its pages as deleted, never reports a conflict against them, and never quietly succeeds a write into
@@ -389,6 +455,7 @@ removed by an accepted retirement proof is not recreated by the search failure.
 (see [Configuration: the CLI and the two files](configuration.md#the-cli-and-the-two-files)) writes
 `DATA_DIR/roots.conf`; nothing changes for a running server until you restart it - the CLI has no
 runtime API to talk to a live process, and the server does not hot-reload topology.
+Restart also brings an added editable local root into discussion watcher/index coverage.
 
 `root remove <name>` does not touch the root's content or its database rows. Its pages keep their
 `id_map`, `url_alias` and `page_checkpoint` rows exactly as they were; the rows just become

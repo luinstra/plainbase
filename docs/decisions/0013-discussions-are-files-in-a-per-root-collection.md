@@ -1,13 +1,10 @@
 # 13. Discussions are Markdown files in a per-root collection, anchored by quote
 
-- **Status:** Accepted; the one item marked *proposed* is finalized during implementation
+- **Status:** Accepted
 - **Date:** 2026-09-23
-- **Deciders:** luinstra (rulings in the 2026-09-23 design session); the passage-anchor choice was
-  debated by a seven-seat panel (six substantive takes, all for the quote anchor), record in
-  `.crew/reviews/0cfed0b8-36ec-4dd7-a930-d126406040b5/run-94870ffe1a4b/`
-- **Context:** The first slice of the portable-knowledge-workspace direction
-  (`docs/design/portable-knowledge-workspace.md`): page and passage comments, modeled from day one as
-  Discussions so the later proposal and decision linkage extends them instead of migrating them.
+- **Deciders:** luinstra (rulings in the 2026-09-23 design session)
+- **Context:** This first slice of the portable knowledge workspace direction models page and passage
+  comments as Discussions, so later proposal and decision linkage extends them instead of migrating them.
 
 ## Context
 
@@ -25,31 +22,39 @@ and reference contract before any code exists. Four forces shaped it:
 ## Decision
 
 **Location.** A root's discussions live in one collection at `<root>/.plainbase/discussions/`, not beside
-each folder. Discussions exist only on editable roots in this slice; the UI and API say so explicitly for
-the others. `.plainbase/` is never content: an include glob that would expose it is a boot refusal.
+each folder. Discussions exist only on editable local roots; the UI and API say so explicitly for
+the others. Top-level `.plainbase/` is never page content, with NFC-normalized, case-insensitive
+reservation. Includes with that first literal-prefix segment are refused at boot; runtime hiding
+also prevents wildcard includes from exposing it.
 On git-history roots, earlier commits keep the purged text; purge does not rewrite history.
 
 **Layout.** One directory per discussion, `<discussion-id>/`, holding `discussion.md` (frontmatter: page
 reference, anchor, status) and one `<comment-uuidv7>.md` per comment (frontmatter: author, time; body: the
 comment). Comment files are created create-only, edited and retracted by compare-and-swap, and an admin purge
 deletes the file. Readers ignore frontmatter keys and directory entries they do not know, and a rewrite keeps
-unknown key lines verbatim. Concurrent comments from different clones or branches merge without conflict, and every
-file stays readable with ordinary tools.
+unknown key lines verbatim. Separate comment files reduce cross-comment merge conflicts without
+guaranteeing conflict-free merges. Files remain readable with ordinary tools, but known records parse
+strictly; malformed or partial records can need manual intervention.
 
 **Page reference.** The page uuid plus the root-relative path at creation. The root is implicit from the
-collection's location, so renaming a root in config breaks nothing. The uuid links; the path is the
+collection's location, so renaming a root does not require rewriting these stored references;
+rooted URLs still change with the name. The uuid links; the path is the
 fallback when the uuid no longer resolves; when both miss, the discussion is Orphaned and keeps showing
 its original target. Commenting never writes `id:` (or anything else) into the page.
 
 **Anchor.** The exact selected bytes of the raw source, prefix and suffix context, the page content hash
-at creation, the commit id when the root has git history, the initial line, and the source range as byte
-offsets over the raw UTF-8 file (frontmatter included). When the selection is not verbatim in its block's
-raw source, the anchor covers the whole block rather than a guessed range. The form of the enclosing
-heading anchor is *proposed* and is finalized once rendered selections are proven to map back to raw
-source. The anchor is permanent. Re-anchoring is a pure, deterministic function
+at creation, a commit id when the source hash can be tied to a revision, the initial line, and the source range as byte
+offsets over the raw UTF-8 file (frontmatter included). Only selected text occurring exactly once within
+the block span narrows the capture; empty selected text, text absent from the span, or repeated text
+snaps to the whole block span. Quotes without block offsets instead require a nonempty unique verbatim
+match in the Markdown body. The stored heading identity is the full
+enclosing heading path, with each level and text, not a generated slug. The original anchor is permanent.
+Re-anchoring is a pure, deterministic function
 that reports `exact`, `moved`, `ambiguous` or `changed` as an inferred current match and is never written
 back as the target. Ambiguity is reported, never resolved to the first match; the line never breaks a
-tie. A person may Reattach a discussion to revised text; the original anchor is kept. No page snapshots
+tie. A person may Reattach an open quote discussion after fresh preview and explicit confirmation;
+the original anchor is kept alongside the latest reattachment. Current matching and clipped list
+quotes use that effective anchor; detail returns both full anchors separately. No page snapshots
 are stored: the quote and its context are the retained evidence.
 
 **History.** On local roots with git history, discussion files are committed like page edits: one
@@ -57,18 +62,28 @@ attributed commit per discussion action, with a filterable `discussion: ` messag
 ship in a later slice; until then object-mode roots report Discussions unavailable.
 
 **Authority.** Files are the authority. The server keeps a derived, deletable discussion index, rebuilt
-from the files and kept current by a separate watcher over `.plainbase` and `.plainbase/discussions/`.
-A 60-second collection rescan detects edits inside existing discussion folders.
+from the files and kept current by a separate watcher over `.plainbase` and `.plainbase/discussions/`
+on editable local roots available at boot. Added roots require restart for watcher coverage; roots
+missing at boot require restoration and restart.
+Full reparses scheduled every 60 seconds detect edits inside existing discussion folders; this is
+not a freshness deadline. Unsynced reads consult files, while new creates fail closed until indexed
+page-count admission recovers. See [operating and recovery guidance](../operating-plainbase.md#discussions).
+
+**Recovery.** With history enabled, boot can best-effort reconcile readable, within-cap entries to Git
+before strict record reparse; this does not certify their syntax. In that mode it can restore recognized
+purge tombstones when HEAD proves the target, retaining unproven ones with warnings. History-off leaves
+purge tombstones untouched. Independently, only recognized regular aged temporary
+files are swept, not every crash residual. Uncertain write outcomes require inspection before another
+action. Authorized comment purge can remove a safe readable target even with malformed present marker
+syntax; a missing marker still refuses. Purge never repairs a marker or erases Git/backups.
 
 ## Consequences
 
 - A reworded passage shows as changed until someone reattaches it. This is deliberate: silently moving a
-  comment onto new text is the failure the design forbids, and every substantive panel seat named it as
-  the quote anchor's cost.
+  comment onto new text is the failure the design forbids.
 - In-page markers were rejected for this slice: they change the page hash (conflicting in-flight agent
-  proposals), commit into user repos per comment, would likely render as visible text under the escaping
-  renderer (the escape setting is confirmed; rendered output is not yet probed), and fail silently when
-  stripped or copied. The anchor record is typed so an opt-in block id can be added
+  proposals), commit into user repos per comment, couple conversation storage to renderer behavior,
+  and fail silently when stripped or copied. The anchor record is typed so an opt-in block id can be added
   later without a migration.
 - Inline comment blocks (`> [!COMMENT]`) were rejected: they make conversation part of the document's
   authority and of every raw agent read.
