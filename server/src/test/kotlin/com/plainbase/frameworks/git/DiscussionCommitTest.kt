@@ -70,6 +70,7 @@ class DiscussionCommitTest : FunSpec({
             val provider = providerOver(exec, root, home)
             val page = TreePath.require("docs/page.md")
             provider.commit(page, "base\n".toByteArray())
+            exec.run(listOf("config", "user.useConfigOnly", "true")).ok shouldBe true
             val oldHead = exec.run(listOf("rev-parse", "HEAD")).stdoutText.trim()
             val mergeBaseTally = home.resolve("merge-base-tally")
             val shim =
@@ -80,7 +81,10 @@ class DiscussionCommitTest : FunSpec({
                     old_head=${'$'}(git -C "${'$'}repo" rev-parse HEAD) || exit ${'$'}?
                     old_tree=${'$'}(git -C "${'$'}repo" rev-parse HEAD^{tree}) || exit ${'$'}?
                     branch=${'$'}(git -C "${'$'}repo" symbolic-ref HEAD) || exit ${'$'}?
-                    external=${'$'}(printf "external commit\\n" | git -C "${'$'}repo" commit-tree "${'$'}old_tree" -p "${'$'}old_head") || exit ${'$'}?
+                    external=${'$'}(printf "external commit\\n" |
+                        GIT_AUTHOR_NAME=External GIT_AUTHOR_EMAIL=external@example.test \
+                        GIT_COMMITTER_NAME=External GIT_COMMITTER_EMAIL=external@example.test \
+                        git -C "${'$'}repo" commit-tree "${'$'}old_tree" -p "${'$'}old_head") || exit ${'$'}?
                     git -C "${'$'}repo" update-ref "${'$'}branch" "${'$'}external" "${'$'}old_head" || exit ${'$'}?
                     moved=${'$'}(git -C "${'$'}repo" rev-parse HEAD) || exit ${'$'}?
                     [ "${'$'}moved" = "${'$'}external" ] || exit 1
@@ -174,6 +178,7 @@ class DiscussionCommitTest : FunSpec({
         withGitRepoHome { root, exec, home ->
             val page = TreePath.require("docs/page.md")
             providerOver(exec, root, home).commit(page, "base\n".toByteArray())
+            exec.run(listOf("config", "user.useConfigOnly", "true")).ok shouldBe true
             val shim = installShim(
                 home,
                 """
@@ -182,7 +187,10 @@ class DiscussionCommitTest : FunSpec({
                     landed=${'$'}(git -C "${'$'}repo" rev-parse HEAD) || exit ${'$'}?
                     tree=${'$'}(git -C "${'$'}repo" rev-parse "${'$'}landed^{tree}") || exit ${'$'}?
                     branch=${'$'}(git -C "${'$'}repo" symbolic-ref HEAD) || exit ${'$'}?
-                    external=${'$'}(printf "external descendant\\n" | git -C "${'$'}repo" commit-tree "${'$'}tree" -p "${'$'}landed") || exit ${'$'}?
+                    external=${'$'}(printf "external descendant\\n" |
+                        GIT_AUTHOR_NAME=External GIT_AUTHOR_EMAIL=external@example.test \
+                        GIT_COMMITTER_NAME=External GIT_COMMITTER_EMAIL=external@example.test \
+                        git -C "${'$'}repo" commit-tree "${'$'}tree" -p "${'$'}landed") || exit ${'$'}?
                     git -C "${'$'}repo" update-ref "${'$'}branch" "${'$'}external" "${'$'}landed" || exit ${'$'}?
                     exit 1
                 fi
@@ -191,13 +199,17 @@ class DiscussionCommitTest : FunSpec({
                 mapOf("repo" to root.toString()),
             )
             try {
-                providerOver(GitExecutor(root, home, gitBinary = shim.toString()), root, home)
+                val result = providerOver(GitExecutor(root, home, gitBinary = shim.toString()), root, home)
                     .commitChanges(
                         listOf(HistoryChange.Put(page, "next\n".toByteArray())),
                         "discussion: edit id",
                         testIdentity(),
                         testIdentity(),
                     ).shouldBeInstanceOf<CommitOutcome.Committed>()
+                val head = exec.run(listOf("rev-parse", "HEAD")).stdoutText.trim()
+                val committedSha = requireNotNull(result.sha)
+                head shouldNotBe committedSha
+                exec.run(listOf("merge-base", "--is-ancestor", committedSha, head)).ok shouldBe true
             } finally {
                 Files.deleteIfExists(shim)
             }

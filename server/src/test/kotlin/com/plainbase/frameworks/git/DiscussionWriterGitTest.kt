@@ -638,6 +638,7 @@ class DiscussionWriterGitTest : FunSpec({
 
     test("writer accepts an external descendant after update-ref without undoing files") {
         withGitWriterHarness(pageCount = 1) { env ->
+            env.exec.run(listOf("config", "user.useConfigOnly", "true")).ok shouldBe true
             val shim = installWriterGitShim(
                 env.home,
                 env.root,
@@ -647,7 +648,10 @@ class DiscussionWriterGitTest : FunSpec({
                     landed=${'$'}(git -C "${'$'}repo" rev-parse HEAD) || exit ${'$'}?
                     tree=${'$'}(git -C "${'$'}repo" rev-parse "${'$'}landed^{tree}") || exit ${'$'}?
                     branch=${'$'}(git -C "${'$'}repo" symbolic-ref HEAD) || exit ${'$'}?
-                    external=${'$'}(printf "external descendant\\n" | git -C "${'$'}repo" commit-tree "${'$'}tree" -p "${'$'}landed") || exit ${'$'}?
+                    external=${'$'}(printf "external descendant\\n" |
+                        GIT_AUTHOR_NAME=External GIT_AUTHOR_EMAIL=external@example.test \
+                        GIT_COMMITTER_NAME=External GIT_COMMITTER_EMAIL=external@example.test \
+                        git -C "${'$'}repo" commit-tree "${'$'}tree" -p "${'$'}landed") || exit ${'$'}?
                     git -C "${'$'}repo" update-ref "${'$'}branch" "${'$'}external" "${'$'}landed" || exit ${'$'}?
                     exit 1
                 fi
