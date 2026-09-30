@@ -181,3 +181,103 @@ test("selection preview, rooted creation, reply and stale-source recovery use re
   await expect(page.getByRole("status", { name: "Discussion created" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });
+
+test("extra-root lifecycle reattaches twice, recovers a stale preview and retains actions after source deletion", async ({ page, request, smokeServer }) => {
+  test.setTimeout(90_000);
+  if (!smokeServer.extraDir) throw new Error("lifecycle smoke needs the extra root");
+  const pageId = "01970000-0000-7000-8000-00000000f008";
+  const file = path.join(smokeServer.extraDir, "c5-lifecycle.md");
+  const originalQuote = `Original lifecycle passage. ${"long-quotation-".repeat(40)}`;
+  const initial = `---\ntitle: Lifecycle probe\nid: ${pageId}\n---\n\n# Lifecycle probe\n\n${originalQuote}\n`;
+  writeFileSync(file, initial);
+  await expect.poll(async () => (await request.get(`/api/v1/pages/${pageId}/html?root=extra`)).status()).toBe(200);
+  const metadata = await (await request.get(`/api/v1/pages/${pageId}/html?root=extra`)).json();
+  const created = await request.post(`/api/v1/pages/${pageId}/discussions?root=extra`, {
+    data: { anchor: { kind: "quote", content_hash: metadata.content_hash, selected_text: originalQuote },
+      body: `Lifecycle comment 😀 ${"long-comment-".repeat(30)}` },
+  });
+  expect(created.status()).toBe(201);
+  const id = (await created.json()).id as string;
+  const detailUrl = `/api/v1/discussions/${id}?root=extra`;
+  const original = (await (await request.get(detailUrl)).json()).discussion.anchor;
+  await gotoExpectStatus(page, `/discussions/extra/${id}`);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.getByRole("button", { name: "Resolve discussion" }).click();
+  await expect(page.getByRole("status", { name: "Discussion resolved" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reattach", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Reopen discussion" }).click();
+  await expect(page.getByRole("status", { name: "Discussion reopened" })).toBeVisible();
+
+  const changed = initial.replace(originalQuote, "banana\n\nOther location 😀");
+  writeFileSync(file, changed);
+  await expect.poll(async () => (await (await request.get(detailUrl)).json()).discussion.state).toBe("changed");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByText("Was around here", { exact: true })).toBeVisible();
+
+  async function selectPassage(text: string, start = 0, end = text.length) {
+    await page.locator("[data-pb-reattach-source] p").filter({ hasText: text }).scrollIntoViewIfNeeded();
+    await page.locator("[data-pb-reattach-source]").evaluate((area, selection) => {
+      const paragraph = [...area.querySelectorAll("p")].find((p) => p.textContent === selection.text);
+      if (!paragraph?.firstChild) throw new Error("source passage absent");
+      const range = document.createRange(); range.setStart(paragraph.firstChild, selection.start); range.setEnd(paragraph.firstChild, selection.end);
+      const selected = window.getSelection()!; selected.removeAllRanges(); selected.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    }, { text, start, end });
+  }
+  async function preview(text: string, start = 0, end = text.length) {
+    await selectPassage(text, start, end);
+    await page.getByRole("button", { name: "Preview selected passage" }).click();
+    await expect(page.getByRole("button", { name: "Confirm passage" })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Reattach discussion", exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: "Confirm passage" }).click();
+    await expect(page.getByRole("button", { name: "Reattach discussion", exact: true })).toBeFocused();
+  }
+  await page.getByRole("button", { name: "Reattach", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Select a new passage", exact: true })).toBeFocused();
+  await preview("banana", 1, 4);
+  await expect(page.getByText("Whole block selected")).toBeVisible();
+  await page.getByRole("button", { name: "Reattach discussion", exact: true }).click();
+  await expect(page.getByRole("status", { name: "Discussion reattached" })).toBeVisible();
+  await expect.poll(async () => (await (await request.get(detailUrl)).json()).discussion.state).toBe("exact");
+  expect((await (await request.get(detailUrl)).json()).discussion.anchor).toEqual(original);
+  await page.getByRole("button", { name: "Reattach", exact: true }).click();
+  await preview("Other location 😀");
+  await page.getByRole("button", { name: "Reattach discussion", exact: true }).click();
+  await expect(page.getByRole("status", { name: "Discussion reattached" })).toBeVisible();
+  const repeated = (await (await request.get(detailUrl)).json()).discussion;
+  expect(repeated.anchor).toEqual(original);
+  expect(repeated.reattachment.anchor.quote).toContain("Other location 😀");
+
+  await page.getByRole("button", { name: "Reattach", exact: true }).click();
+  await preview("banana");
+  const priorHash = (await (await request.get(`/api/v1/pages/${pageId}/html?root=extra`)).json()).content_hash;
+  writeFileSync(file, `${changed}\nSource changed after preview.\n`);
+  await expect.poll(async () => (await (await request.get(`/api/v1/pages/${pageId}/html?root=extra`)).json()).content_hash).not.toBe(priorHash);
+  const refused = page.waitForResponse((response) => response.url().includes(`/discussions/${id}/reattach?root=extra`) && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Reattach discussion", exact: true }).click();
+  expect((await refused).status()).toBe(409);
+  await expect(page.getByRole("alert").filter({ hasText: "page changed" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Confirm passage" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Reload page" }).click();
+  await expect(page.getByText("Source changed after preview.")).toBeVisible();
+  await preview("banana");
+  await page.getByRole("button", { name: "Reattach discussion", exact: true }).click();
+  await expect(page.getByRole("status", { name: "Discussion reattached" })).toBeVisible();
+  expect((await (await request.get(detailUrl)).json()).discussion.anchor).toEqual(original);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+
+  rmSync(file);
+  await expect.poll(async () => (await (await request.get(detailUrl)).json()).discussion.state).toBe("orphaned");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByText("Page no longer found", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Reattach", exact: true }).click();
+  await page.getByRole("button", { name: "Reload page" }).click();
+  await expect(page.getByText(/stored source page could not be found/)).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Edit comment" }).click();
+  await page.getByRole("textbox", { name: "Comment" }).fill("Edited after source deletion 😀");
+  await page.getByRole("button", { name: "Save comment" }).click();
+  await expect(page.getByRole("status", { name: "Comment saved" })).toBeVisible();
+  await page.getByRole("button", { name: "Resolve discussion" }).click();
+  await expect(page.getByRole("status", { name: "Discussion resolved" })).toBeVisible();
+});

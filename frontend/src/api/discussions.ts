@@ -59,6 +59,30 @@ export function addDiscussionComment(root: string, id: string, body: string): Pr
   return postJson(`/api/v1/discussions/${encodeURIComponent(id)}/comments?${rootPin(root)}`, { body }, isMutation, 201);
 }
 
+export function editDiscussionComment(root: string, id: string, commentId: string, body: string): Promise<DiscussionMutationResponse> {
+  return postJson(`/api/v1/discussions/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}/edit?${rootPin(root)}`, { body }, isMutation, 200);
+}
+
+export function retractDiscussionComment(root: string, id: string, commentId: string): Promise<DiscussionMutationResponse> {
+  return postJson(`/api/v1/discussions/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}/retract?${rootPin(root)}`, {}, isMutation, 200);
+}
+
+export function purgeDiscussionComment(root: string, id: string, commentId: string): Promise<DiscussionMutationResponse> {
+  return postJson(`/api/v1/discussions/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}/purge?${rootPin(root)}`, {}, isMutation, 200);
+}
+
+export function resolveDiscussion(root: string, id: string): Promise<DiscussionMutationResponse> {
+  return postJson(`/api/v1/discussions/${encodeURIComponent(id)}/resolve?${rootPin(root)}`, {}, isMutation, 200);
+}
+
+export function reopenDiscussion(root: string, id: string): Promise<DiscussionMutationResponse> {
+  return postJson(`/api/v1/discussions/${encodeURIComponent(id)}/reopen?${rootPin(root)}`, {}, isMutation, 200);
+}
+
+export function reattachDiscussion(root: string, id: string, anchor: DiscussionQuoteRequestAnchor): Promise<DiscussionMutationResponse> {
+  return postJson(`/api/v1/discussions/${encodeURIComponent(id)}/reattach?${rootPin(root)}`, { anchor }, isMutation, 200);
+}
+
 async function postJson<T>(url: string, body: unknown, valid: (value: unknown) => value is T, successStatus: number): Promise<T> {
   const response = await withCsrf((headers) => fetch(url, {
     method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),

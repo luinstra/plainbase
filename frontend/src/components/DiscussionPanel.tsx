@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { pageDiscussionsQuery, previewDiscussionAnchor, refreshDiscussionViews, startDiscussion } from "../api/discussions";
 import { sessionQuery } from "../api/queries";
@@ -8,15 +8,35 @@ import type { DiscussionPreviewResponse, DiscussionQuoteRequestAnchor, Discussio
 import { DiscussionComposer, commentValidation, discussionPreviewError, discussionWriteError } from "./DiscussionComposer";
 import { DiscussionAvailability, DiscussionListRows, DiscussionReadError, uniqueDiscussionItems } from "./DiscussionRead";
 import { DiscussionThread } from "./DiscussionThread";
+import type { DiscussionSourceConnection } from "./DiscussionReattach";
 
 export interface PassageRequest { nonce: number; root: string; pageId: string; anchor: DiscussionQuoteRequestAnchor }
 
 export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceBusy, request, pageRequestNonce,
-  onReselect, onReload, onClose, onPostingChange }: {
+  onReselect, onReload, onClose, onPostingChange, source, onActionChange }: {
   root: string; pageId: string; sourceHash: string | null; sourceReady: boolean; sourceBusy: boolean;
   request: PassageRequest | null; pageRequestNonce: number; onReselect: () => void; onReload: () => Promise<boolean>; onClose: () => void;
-  onPostingChange: (busy: boolean) => void;
+  onPostingChange: (busy: boolean, owner: string) => void;
+  source?: DiscussionSourceConnection; onActionChange?: (active: boolean, owner: string) => void;
 }) {
+  const owner = useId();
+  const [threadActive, setThreadActive] = useState(false);
+  const [threadWriting, setThreadWriting] = useState(false);
+  const threadAction = useRef(false);
+  const threadBusy = useRef(false);
+  const activityCallback = useRef(onActionChange);
+  const postingCallback = useRef(onPostingChange);
+  activityCallback.current = onActionChange; postingCallback.current = onPostingChange;
+  const publishActivity = useCallback(() => {
+    if (!alive.current) return;
+    const busy = posting.current || threadBusy.current;
+    activityCallback.current?.(threadAction.current || busy, owner); postingCallback.current(busy, owner);
+  }, [owner]);
+  const threadActivity = useCallback((active: boolean, busy: boolean) => {
+    if (!alive.current) return;
+    setThreadActive(active); setThreadWriting(busy); threadAction.current = active; threadBusy.current = busy;
+    publishActivity();
+  }, [publishActivity]);
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<"page" | "quote" | null>(null);
   const [body, setBody] = useState("");
@@ -52,8 +72,12 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
 
   useEffect(() => {
     alive.current = true;
-    return () => { alive.current = false; };
-  }, []);
+    publishActivity();
+    return () => {
+      alive.current = false;
+      activityCallback.current?.(false, owner); postingCallback.current(false, owner);
+    };
+  }, [owner, publishActivity]);
   useEffect(() => {
     if (posting.current) return;
     if (sourceHash === null || lastHash.current === sourceHash) return;
@@ -69,7 +93,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
   }, [preview]);
 
   async function prepare(anchor: DiscussionQuoteRequestAnchor) {
-    if (posting.current) return;
+    if (posting.current || threadBusy.current || threadActive) return;
     if (pageChanged) { setError("The page changed. Reload it before selecting a passage."); return; }
     const current = ++generation.current;
     setSelected(null);
@@ -115,7 +139,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
   }, [pageRequestNonce]);
 
   function pageMode() {
-    if (posting.current) return;
+    if (posting.current || threadBusy.current || threadActive) return;
     generation.current++;
     setMode("page"); setCapture(null); setPreview(null); setConfirmed(false); setError(null); setStatus(null); setPassageFallback(false);
     setFocusKey((key) => key + 1);
@@ -154,7 +178,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
     if (mode !== "page" && mode !== "quote") return;
     const anchor: DiscussionRequestAnchor = mode === "quote" ? capture! : { kind: "page", content_hash: sourceHash };
     const submitted = { root, pageId, anchor, body };
-    posting.current = true; setWriting(true); onPostingChange(true);
+    posting.current = true; setWriting(true); publishActivity();
     setError(null); setStatus("Posting…"); setRefreshFailed(false);
     try {
       const result = await startMutation.mutateAsync({ anchor: submitted.anchor, body: submitted.body });
@@ -178,8 +202,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
       }
     } finally {
       posting.current = false;
-      if (alive.current) setWriting(false);
-      onPostingChange(false);
+      if (alive.current) { setWriting(false); publishActivity(); }
     }
   }
 
@@ -238,13 +261,15 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
     {status === "Discussion created" && selected && <p role="status" aria-label="Discussion created">Discussion created. <Link to="/discussions/$root/$id" params={{ root, id: selected }} className="text-link">Open full discussion</Link></p>}
     {refreshFailed && <p role="alert">Posted, but the view could not refresh. <button type="button" className="pb-discussion-action" onClick={retryViewRefresh}>Refresh</button></p>}
     {selected ? <>
-      <button type="button" className="pb-discussion-action" onClick={() => {
+      <button type="button" className="pb-discussion-action" disabled={writing || threadActive || threadWriting} onClick={() => {
+        if (posting.current || threadBusy.current || threadAction.current) return;
         const id = selected;
         setSelected(null);
         requestAnimationFrame(() => Array.from(panel.current?.querySelectorAll<HTMLButtonElement>("[data-pb-discussion-id]") ?? [])
           .find((button) => button.dataset.pbDiscussionId === id)?.focus());
       }}>Back to page discussions</button>
-      <DiscussionThread key={`${root}/${selected}`} root={root} id={selected} inPanel />
+      {threadActive && <p>Finish this discussion action before starting another. If you are unsure whether it completed, refresh and inspect it.</p>}
+      <DiscussionThread key={`${root}/${selected}`} root={root} id={selected} inPanel source={source} creationPending={writing} onActionChange={threadActivity} />
     </> : <>
       <Link to="/discussions/$root" params={{ root }} className="text-sm text-link">All discussions in {root}</Link>
       <button type="button" className="pb-discussion-action" disabled={query.isRefetching} onClick={() => void query.refetch()}>Refresh</button>
