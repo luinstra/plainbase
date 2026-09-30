@@ -1,10 +1,12 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
-import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
-import type { PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
+import { pageDiscussionsQuery } from "../api/discussions";
+import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlKey, pageHtmlQuery, pageKey, pageQuery, treeQuery } from "../api/queries";
+import type { DiscussionQuoteRequestAnchor, PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
+import { captureSelectionAnchor, type SelectionCapture } from "../lib/selectionAnchor";
 import { parsePermalink, permalinkOf } from "../lib/permalink";
 import {
   folderByUrl,
@@ -23,7 +25,7 @@ import { QueryErrorView, RootUnavailableView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
 import { Toc } from "./Toc";
-import { DiscussionPanel } from "./DiscussionPanel";
+import { DiscussionPanel, type PassageRequest } from "./DiscussionPanel";
 
 /**
  * The `/$` canonical route body: resolve the splat through `by-path` (canonical or
@@ -350,8 +352,22 @@ function PermalinkError({ error, id, root }: { error: Error; id: string; root: s
  */
 function PageContent({ id, root, page: seeded }: { id: string; root: string | null; page?: PageResponse }) {
   const [discussionOpen, setDiscussionOpen] = useState(false);
+  const [discussionOpened, setDiscussionOpened] = useState(false);
+  const [passageRequest, setPassageRequest] = useState<PassageRequest | null>(null);
+  const [pageRequest, setPageRequest] = useState<{ nonce: number; id: string; root: string | null } | null>(null);
+  const [selectionHelp, setSelectionHelp] = useState<string | null>(null);
+  const [postingFor, setPostingFor] = useState<string | null>(null);
   const discussionTrigger = useRef<HTMLButtonElement>(null);
+  const articleWrapper = useRef<HTMLDivElement>(null);
+  const candidate = useRef<SelectionCapture | null>(null);
+  const requestNumber = useRef(0);
+  const reloading = useRef<string | null>(null);
   const html = useQuery(pageHtmlQuery(id, root));
+  const displayedRoot = html.data?.root ?? root;
+  const lastSource = useRef<{ id: string; root: string | null; hash: string } | null>(null);
+  if (html.isSuccess) lastSource.current = { id, root, hash: html.data.content_hash };
+  const sourceHash = lastSource.current?.id === id && lastSource.current.root === root ? lastSource.current.hash : null;
+  const queryClient = useQueryClient();
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
   const fetched = useQuery({ ...pageQuery(id, root), enabled: seeded === undefined });
   const page = seeded ?? fetched.data;
@@ -360,14 +376,108 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   // reason: the alternative is an editor session that can only end in a 403 (or a 503) at save.
   const tree = useQuery(treeQuery);
   const editable = rootAcceptsWrites(tree.data?.roots, html.data?.root ?? null);
+  const rootEntry = tree.data?.roots.find((entry) => entry.root === displayedRoot);
+  const knownUnsupported = !!rootEntry && (!rootEntry.available || !rootEntry.editable);
+  // Observe an existing page-list answer without fetching solely to decide whether to offer creation.
+  const discussions = useInfiniteQuery({ ...pageDiscussionsQuery(displayedRoot ?? "", id), enabled: false });
+  const canStartDiscussion = !knownUnsupported && discussions.data?.pages[0]?.discussions_available !== false;
 
   const title = html.data?.title;
   useEffect(() => {
     if (title) document.title = `${title} · Plainbase`;
   }, [title]);
 
-  if (html.isPending) return <PagePending />;
-  if (html.isError) return <PageError error={html.error} root={root} />;
+  useEffect(() => {
+    setSelectionHelp(null);
+  }, [id, root]);
+
+  useEffect(() => {
+    candidate.current = null;
+    setPassageRequest(null);
+  }, [html.data?.content_hash]);
+
+  useEffect(() => {
+    const onSelection = () => {
+      const article = articleWrapper.current?.querySelector<HTMLElement>(".pb-prose");
+      const selection = window.getSelection();
+      if (!article || !selection || selection.rangeCount !== 1) return;
+      const range = selection.getRangeAt(0);
+      if (!article.contains(range.startContainer) || !article.contains(range.endContainer)) return;
+      candidate.current = captureSelectionAnchor(article, selection, html.data?.content_hash ?? "");
+    };
+    document.addEventListener("selectionchange", onSelection);
+    return () => document.removeEventListener("selectionchange", onSelection);
+  }, [html.data?.content_hash]);
+
+  function commentOnSelection() {
+    if (posting || !html.isSuccess || !canStartDiscussion) return;
+    const article = articleWrapper.current?.querySelector<HTMLElement>(".pb-prose");
+    const selection = window.getSelection();
+    if (article && selection?.rangeCount === 1) {
+      const range = selection.getRangeAt(0);
+      if (article.contains(range.startContainer) && article.contains(range.endContainer)) {
+        candidate.current = captureSelectionAnchor(article, selection, html.data?.content_hash ?? "");
+      }
+    }
+    const captured = candidate.current;
+    if (!captured || "reason" in captured) {
+      setSelectionHelp(captured?.reason ?? "Select text in the page and try again, or discuss the whole page.");
+      setDiscussionOpened(true); setDiscussionOpen(true);
+      return;
+    }
+    if (new TextEncoder().encode(captured.selected_text).length > 16_384) {
+      setSelectionHelp("That passage is too long. Select less text or discuss the whole page.");
+      setDiscussionOpened(true); setDiscussionOpen(true);
+      return;
+    }
+    setSelectionHelp(null);
+    setPassageRequest({ nonce: ++requestNumber.current, root: html.data!.root, pageId: id, anchor: captured as DiscussionQuoteRequestAnchor });
+    setDiscussionOpened(true); setDiscussionOpen(true);
+  }
+
+  async function reloadPage(): Promise<boolean> {
+    if (posting || reloading.current === workspaceId) return false;
+    reloading.current = workspaceId;
+    const jobs = [
+      queryClient.invalidateQueries({ queryKey: pageHtmlKey(id), predicate: (query) => query.queryKey[3] === root }),
+      queryClient.invalidateQueries({ queryKey: pageKey(id), predicate: (query) => query.queryKey[3] === root }),
+      queryClient.invalidateQueries({ queryKey: ["page", "by-path"], predicate: (query) => {
+        const cached = query.state.data as PageResponse | undefined;
+        return cached?.id === id && (root === null || cached.root === root);
+      } }),
+    ];
+    try {
+      await Promise.allSettled(jobs);
+      return queryClient.getQueryState(pageHtmlQuery(id, root).queryKey)?.status === "success";
+    } finally {
+      if (reloading.current === workspaceId) reloading.current = null;
+    }
+  }
+
+  const workspaceId = JSON.stringify([displayedRoot, id]);
+  const posting = postingFor === workspaceId;
+  const retainedPanel = discussionOpened && displayedRoot !== null;
+  const panel = retainedPanel && <aside id="pb-page-discussions" hidden={!discussionOpen}
+    className="w-full min-w-0 xl:w-[clamp(18rem,28vw,28rem)] xl:shrink-0">
+    <DiscussionPanel key={`${displayedRoot}/${id}`} root={displayedRoot} pageId={id}
+      sourceHash={sourceHash} sourceReady={html.isSuccess} sourceBusy={html.isFetching}
+      pageRequestNonce={pageRequest?.id === id && pageRequest.root === displayedRoot ? pageRequest.nonce : 0}
+      request={passageRequest?.root === displayedRoot && passageRequest.pageId === id && passageRequest.anchor.content_hash === html.data?.content_hash ? passageRequest : null}
+      onReselect={commentOnSelection} onReload={reloadPage}
+      onPostingChange={(busy) => setPostingFor((current) => busy ? workspaceId : current === workspaceId ? null : current)}
+      onClose={() => { setDiscussionOpen(false); discussionTrigger.current?.focus(); }} />
+  </aside>;
+
+  if (html.isPending && !retainedPanel) return <PagePending />;
+  if (html.isError || html.isPending) return <div className="flex flex-col gap-8 xl:flex-row xl:gap-12">
+    <div className="min-w-0 flex-1">{html.isPending ? <PagePending /> : <PageError error={html.error} root={root} />}
+      {retainedPanel && <button ref={discussionTrigger} type="button" className="pb-discussion-action" data-pb-discussions-toggle
+        aria-expanded={discussionOpen} aria-controls="pb-page-discussions"
+        onClick={() => {
+          setDiscussionOpen((open) => !open);
+          if (!discussionOpen) requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>("#pb-page-discussions textarea")?.focus());
+        }}>{discussionOpen ? "Hide discussions" : "Show discussions"}</button>}
+    </div>{panel}</div>;
 
   const frontmatter = page?.frontmatter;
   return (
@@ -378,10 +488,22 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
         <div className="mx-auto max-w-[72ch]">
           <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
           <button ref={discussionTrigger} type="button" className="pb-discussion-action my-4" aria-expanded={discussionOpen}
-            aria-controls="pb-page-discussions" onClick={() => setDiscussionOpen((open) => !open)} data-pb-discussions-toggle>
+            aria-controls="pb-page-discussions" onClick={() => {
+              setDiscussionOpened(true); setDiscussionOpen((open) => !open);
+              if (!discussionOpen) requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>("#pb-page-discussions textarea")?.focus());
+            }} data-pb-discussions-toggle>
             {discussionOpen ? "Hide discussions" : "Show discussions"}
           </button>
-          <div data-pb-page-article><Prose html={html.data.html} /></div>
+          {canStartDiscussion && <button type="button" className="pb-discussion-action my-4 ml-2" disabled={posting} onClick={commentOnSelection}>Comment on selection</button>}
+          {selectionHelp && canStartDiscussion && <p role="alert" className="pb-discussion-notice">{selectionHelp}
+            <button type="button" className="pb-discussion-action ml-2" disabled={posting} onClick={() => {
+              if (posting) return;
+              setSelectionHelp(null); setPassageRequest(null);
+              setPageRequest({ nonce: ++requestNumber.current, id, root: displayedRoot });
+              setDiscussionOpened(true); setDiscussionOpen(true);
+            }}>Discuss the whole page instead</button>
+          </p>}
+          <div ref={articleWrapper} data-pb-page-article><Prose html={html.data.html} /></div>
           <DocFooter
             frontmatter={frontmatter}
             url={page?.url ?? null}
@@ -390,9 +512,8 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
           />
         </div>
       </div>
-      {discussionOpen ? <aside id="pb-page-discussions" className="w-full min-w-0 xl:w-[clamp(18rem,28vw,28rem)] xl:shrink-0">
-        <DiscussionPanel key={`${html.data.root}/${id}`} root={html.data.root} pageId={id} onClose={() => { setDiscussionOpen(false); discussionTrigger.current?.focus(); }} />
-      </aside> : <aside
+      {panel}
+      {!discussionOpen && <aside
           className="pb-rail sticky top-20 hidden max-h-[calc(100vh-6rem)] w-[clamp(14rem,18vw,20rem)] shrink-0 overflow-y-auto xl:block"
           data-pb-rail
         >

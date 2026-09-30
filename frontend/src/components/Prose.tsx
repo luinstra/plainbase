@@ -56,7 +56,7 @@ export function injectHeadingAnchors(container: HTMLElement): void {
     const anchor = heading.ownerDocument.createElement("a");
     anchor.className = "pb-heading-anchor";
     anchor.href = `#${heading.id}`;
-    anchor.textContent = "#";
+    anchor.textContent = "#"; // selectionAnchor's chrome check counts this literal when a range crosses the link.
     anchor.setAttribute("aria-label", `Link to ${heading.textContent ?? heading.id}`);
     heading.appendChild(anchor);
   });

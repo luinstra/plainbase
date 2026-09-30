@@ -28,19 +28,19 @@ export function DiscussionListRows({ root, items, onSelect }: { root: string; it
         <Link to="/discussions/$root/$id" params={{ root, id: item.id }} className="pb-discussion-title">
           {item.page.path ?? item.page.id ?? item.id}
         </Link>}
-      <DiscussionSummary item={item} root={root} />
+      <DiscussionSummary item={item} root={root} showPreview />
     </li>,
   )}</ul>;
 }
 
-export function DiscussionSummary({ item, root }: { item: DiscussionItem; root: string }) {
+export function DiscussionSummary({ item, root, showPreview = false }: { item: DiscussionItem; root: string; showPreview?: boolean }) {
   const state = item.state;
   return <div className="min-w-0 space-y-2 text-sm text-muted">
     <p><strong className="text-ink">{stateLabel(state)}</strong>
       {item.status ? ` · ${item.status === "resolved" ? "Resolved" : "Open"}` : ""}
       {` · ${item.comment_count} ${item.comment_count === 1 ? "comment" : "comments"}`}
     </p>
-    {item.quote && <blockquote className="pb-discussion-quote pb-discussion-preview">{item.quote}</blockquote>}
+    {showPreview && item.quote && <blockquote className="pb-discussion-quote pb-discussion-preview">{item.quote}</blockquote>}
     {item.starter && <p>Started by {item.starter.label}{item.starter.kind === "agent" ? " · Agent" : ""}</p>}
     {item.created && <p>Created <time dateTime={item.created} title={item.created}>{formatTime(item.created)}</time>
       {item.updated && item.updated !== item.created && <> · Updated <time dateTime={item.updated} title={item.updated}>{formatTime(item.updated)}</time></>}</p>}

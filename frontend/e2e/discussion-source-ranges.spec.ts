@@ -252,9 +252,10 @@ test("maps rendered selections to source block byte ranges", async ({ page }) =>
 
   expect(measurements.heading.source).toBe("# Mapping probe");
   expect(measurements.heading.selected).toBe("Mapping probe");
-  expect(measurements.heading.selectedWithAnchor).toBe("Mapping probe#");
+  expect(measurements.heading.selectedWithAnchor).toBe("Mapping probe");
+  expect(measurements.selectionTextPairs.find(({ name }) => name === "heading-with-anchor")?.rangeText).toBe("Mapping probe#");
   measurements.selectionTextPairs
-    .filter(({ name }) => name !== "cross-block")
+    .filter(({ name }) => name !== "cross-block" && name !== "heading-with-anchor")
     .forEach(({ text, rangeText }) => {
       expect(text).toBe(rangeText);
     });
@@ -295,4 +296,61 @@ test("maps rendered selections to source block byte ranges", async ({ page }) =>
     ["task-item", "narrowed"],
     ["table-cell", "narrowed"],
   ]);
+
+  const paragraph = prose.locator("p").filter({ hasText: "banana" });
+  await paragraph.click({ clickCount: 3 });
+  const tripleClick = await page.evaluate(() => {
+    const selection = window.getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    return { text: selection?.toString(),
+      start: range && { type: range.startContainer.nodeType, offset: range.startOffset, name: range.startContainer.nodeName },
+      end: range && { type: range.endContainer.nodeType, offset: range.endOffset, name: range.endContainer.nodeName } };
+  });
+  expect(tripleClick.text).toContain("banana");
+  expect(tripleClick.end).toEqual({ type: 1, offset: 0, name: "P" });
+  await page.getByRole("button", { name: "Comment on selection" }).click();
+  await expect(page.getByRole("button", { name: "Confirm passage" })).toBeVisible();
+});
+
+test("keeps a real hash in a heading selection while excluding its link", async ({ page }) => {
+  await gotoExpectStatus(page, `${PAGE}?mode=edit`);
+  const content = page.locator("[data-pb-codemirror] .cm-content");
+  await content.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.insertText("# C# setup\n\nThe heading is source text.\n");
+  await page.locator("[data-pb-save]").click();
+  await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
+  await gotoExpectStatus(page, PAGE);
+  const heading = page.locator("[data-pb-page-article] h1").filter({ hasText: "C# setup" });
+  const anchor = heading.locator(".pb-heading-anchor");
+  await expect(anchor).toHaveCount(1);
+  const start = await heading.evaluate((node) => {
+    const text = node.firstChild;
+    if (!(text instanceof Text)) throw new Error("heading text missing");
+    const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 1);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.left, y: rect.top + rect.height / 2 };
+  });
+  const end = await page.locator("[data-pb-page-article] p").filter({ hasText: "The heading is source text." }).evaluate((node) => {
+    const text = node.firstChild;
+    if (!(text instanceof Text)) throw new Error("following paragraph text missing");
+    const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 3);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.right, y: rect.top + rect.height / 2 };
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 12 });
+  await page.mouse.up();
+  const selected = await page.evaluate(() => {
+    const selection = window.getSelection();
+    const anchor = document.querySelector("[data-pb-page-article] h1 .pb-heading-anchor");
+    return { text: selection?.toString(), crossesLink: !!anchor && !!selection?.rangeCount && selection.getRangeAt(0).intersectsNode(anchor) };
+  });
+  expect(selected.text).toContain("C# setup");
+  expect(selected.text).toContain("The");
+  expect(selected.crossesLink).toBe(true);
+  await page.getByRole("button", { name: "Comment on selection" }).click();
+  await expect(page.getByRole("button", { name: "Confirm passage" })).toBeVisible();
+  await expect(page.locator(".pb-discussion-quote")).toContainText("C# setup");
 });

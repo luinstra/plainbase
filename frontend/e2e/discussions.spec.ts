@@ -32,7 +32,8 @@ test("rooted discussion reads survive a page deletion and a duplicate id in anot
   cpSync(path.join(smokeServer.contentDir, collection), extraCollection, { recursive: true });
   await expect.poll(async () => {
     const response = await request.get("/api/v1/discussions?root=extra");
-    return ((await response.json()) as { discussions: { id: string }[] }).discussions.some((item) => item.id === discussionId);
+    return ((await response.json()) as { discussions: { id: string; state: string; quote: string | null }[] }).discussions
+      .some((item) => item.id === discussionId && item.state === "exact" && item.quote === QUOTE);
   }).toBe(true);
 
   await gotoExpectStatus(page, "/discussions/docs");
@@ -78,4 +79,105 @@ test("rooted discussion reads survive a page deletion and a duplicate id in anot
   await expect(page.getByText("Page no longer found")).toBeVisible();
   await expect(page.getByText(QUOTE).first()).toBeVisible();
   await expect(page.getByText(PAGE_ID)).toBeVisible();
+});
+
+test("selection preview, rooted creation, reply and stale-source recovery use real writes", async ({ page, request, smokeServer }) => {
+  const extraDir = smokeServer.extraDir;
+  if (!extraDir) throw new Error("discussion writes need the multi-root fixture");
+  const pageId = "01970000-0000-7000-8000-00000000f006";
+  const file = path.join(extraDir, "c5-write.md");
+  const source = `---\ntitle: C5 write probe\nid: ${pageId}\n---\n\n# Write probe\n\nbanana\n`;
+  writeFileSync(file, source);
+  await expect.poll(async () => (await request.get("/api/v1/pages/by-path/extra/c5-write")).status()).toBe(200);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await gotoExpectStatus(page, "/extra/c5-write");
+
+  async function selectAna() {
+    await page.locator("[data-pb-page-article] p").filter({ hasText: "banana" }).scrollIntoViewIfNeeded();
+    const points = await page.evaluate(() => {
+      const paragraph = [...document.querySelectorAll<HTMLElement>("[data-pb-page-article] p")]
+        .find((candidate) => candidate.textContent?.trim() === "banana");
+      const text = paragraph?.firstChild;
+      if (!(text instanceof Text)) throw new Error("banana text is absent");
+      const at = (offset: number, end: boolean) => {
+        const range = document.createRange(); range.setStart(text, offset); range.setEnd(text, offset + 1);
+        const rect = range.getBoundingClientRect(); return { x: end ? rect.right - 1 : rect.left + 1, y: rect.y + rect.height / 2 };
+      };
+      return { start: at(1, false), end: at(3, true) };
+    });
+    await page.mouse.move(points.start.x, points.start.y);
+    await page.mouse.down();
+    await page.mouse.move(points.end.x, points.end.y, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe("ana");
+  }
+
+  await selectAna();
+  await page.getByRole("button", { name: "Comment on selection" }).click();
+  await expect(page.getByText("Whole block selected")).toBeVisible();
+  await expect(page.locator(".pb-discussion-panel .pb-discussion-quote")).toContainText("banana");
+  await page.getByRole("button", { name: "Confirm passage" }).click();
+  const quoteBody = page.getByRole("textbox", { name: "Comment" });
+  await expect(quoteBody).toBeFocused();
+  await quoteBody.fill("A selected passage comment 😀");
+  const quotePost = page.waitForResponse((response) => response.url().includes(`/api/v1/pages/${pageId}/discussions?root=extra`) && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Create discussion" }).click();
+  const quoteResponse = await quotePost;
+  expect(quoteResponse.status()).toBe(201);
+  const quoteId = ((await quoteResponse.json()) as { id: string }).id;
+  await expect(page.getByRole("status", { name: "Discussion created" })).toBeVisible();
+  await expect(page.locator("[data-pb-discussion-panel] h3")).toBeFocused();
+  await expect.poll(async () => {
+    const response = await request.get(`/api/v1/discussions/${quoteId}?root=extra`);
+    const detail = (await response.json()) as { discussion: { anchor: { kind: string; selection: string; quote: string } } };
+    return [detail.discussion.anchor.kind, detail.discussion.anchor.selection, detail.discussion.anchor.quote];
+  }).toEqual(["quote", "snapped", "banana\n"]);
+
+  await page.getByRole("button", { name: "Reply" }).click();
+  await page.getByRole("textbox", { name: "Comment" }).fill("A real reply");
+  const replyPost = page.waitForResponse((response) => response.url().includes(`/api/v1/discussions/${quoteId}/comments?root=extra`) && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Post reply" }).click();
+  expect((await replyPost).status()).toBe(201);
+  await expect(page.getByRole("status", { name: /Reply posted/ })).toBeVisible();
+  await expect.poll(async () => {
+    const response = await request.get(`/api/v1/discussions/${quoteId}?root=extra`);
+    return ((await response.json()) as { comments: { markdown: string }[] }).comments.some((comment) => comment.markdown === "A real reply");
+  }).toBe(true);
+
+  await page.getByRole("button", { name: "Back to page discussions" }).click();
+  await page.getByRole("button", { name: "New page discussion" }).click();
+  await page.getByRole("textbox", { name: "Comment" }).fill("Whole page discussion");
+  const pagePost = page.waitForResponse((response) => response.url().includes(`/api/v1/pages/${pageId}/discussions?root=extra`) && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Create discussion" }).click();
+  const pageResponse = await pagePost;
+  expect(pageResponse.status()).toBe(201);
+  const pageDiscussionId = ((await pageResponse.json()) as { id: string }).id;
+  await expect.poll(async () => {
+    const response = await request.get(`/api/v1/discussions/${pageDiscussionId}?root=extra`);
+    return ((await response.json()) as { discussion: { anchor: { kind: string } } }).discussion.anchor.kind;
+  }).toBe("page");
+
+  await selectAna();
+  await page.getByRole("button", { name: "Comment on selection" }).click();
+  await expect(page.getByRole("button", { name: "Confirm passage" })).toBeVisible();
+  await page.getByRole("button", { name: "Confirm passage" }).click();
+  await page.getByRole("textbox", { name: "Comment" }).fill("Keep this draft on source change");
+  const before = (await (await request.get(`/api/v1/pages/${pageId}/html?root=extra`)).json()) as { content_hash: string };
+  writeFileSync(file, `${source}\nA newer source line.\n`);
+  await expect.poll(async () => {
+    const response = await request.get(`/api/v1/pages/${pageId}/html?root=extra`);
+    return ((await response.json()) as { content_hash: string }).content_hash;
+  }).not.toBe(before.content_hash);
+  await page.getByRole("button", { name: "Create discussion" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "page changed" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Comment" })).toHaveValue("Keep this draft on source change");
+  await page.getByRole("button", { name: "Reload page" }).click();
+  await expect(page.getByText("A newer source line.")).toBeVisible();
+  await selectAna();
+  await page.getByRole("button", { name: "Comment on selection" }).click();
+  await page.getByRole("button", { name: "Confirm passage" }).click();
+  await expect(page.getByRole("textbox", { name: "Comment" })).toHaveValue("Keep this draft on source change");
+  await page.getByRole("button", { name: "Create discussion" }).click();
+  await expect(page.getByRole("status", { name: "Discussion created" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });

@@ -325,7 +325,8 @@ jobs:
         run: npx --yes playwright@1.63.0 install --with-deps chromium
 
       - name: Playwright smoke (fixture owns a fresh server for every attempt)
-        run: ./gradlew :frontend:smokeTest --console=plain
+        # The auth-caret project uses Chromium caret browsing in headed mode; review auth stays headless.
+        run: xvfb-run -a ./gradlew :frontend:smokeTest --console=plain
 
       - name: Upload Playwright failure artifacts
         if: failure()

@@ -26,6 +26,7 @@ function RootDiscussions({ root }: { root: string }) {
   const [state, setState] = useState<string | null>(null);
   const query = useInfiniteQuery(rootDiscussionsQuery(root, state));
   const first = query.data?.pages[0];
+  const latest = query.data?.pages.at(-1);
   const items = uniqueDiscussionItems(query.data?.pages ?? []);
   return <ReadWindow>
     <Link to="/discussions" className="text-sm text-link">All roots</Link>
@@ -42,7 +43,8 @@ function RootDiscussions({ root }: { root: string }) {
     {first && !first.discussions_available && <DiscussionAvailability reason={first.reason} />}
     {first?.discussions_available && <>
       {query.isRefetchError && <p role="alert">Refresh failed. Showing earlier results; retry before relying on them.</p>}
-      {items.length === 0 && (query.hasNextPage ? <p>No matches in this window. Load more to continue the scan.</p> : <p>No discussions in this view.</p>)}
+      {items.length === 0 && !query.hasNextPage && <p>No discussions in this view.</p>}
+      {latest?.discussions.length === 0 && query.hasNextPage && <p>No matches in this window. Load more to continue the scan.</p>}
       <DiscussionListRows root={root} items={items} />
       {query.isFetchNextPageError && <p role="alert">Could not load the next page. Earlier discussions remain available.</p>}
       {query.hasNextPage && <button type="button" className="pb-discussion-action" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>

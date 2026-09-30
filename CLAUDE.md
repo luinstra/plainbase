@@ -58,7 +58,12 @@ command string. Use these stable `./gradlew :*` invocations instead:
 - `./gradlew :frontend:build` — adds `tsc --noEmit` + `vite build`; run this to catch type errors
   `npmTest` alone misses.
 - `./gradlew :frontend:smokeTest` — Playwright against the real server (downloads Chromium first run;
-  not part of `build`).
+  not part of `build`). The full suite includes headed caret tests; on headless Linux use
+  `xvfb-run -a ./gradlew :frontend:smokeTest`.
+- The discussion auth caret smoke runs headed in `auth-caret`. Run
+  `./gradlew :frontend:smokeTest -PsmokeArgs='discussions-auth.spec.ts --project=auth-caret' --console=plain`. It needs a display;
+  on Linux prefix the command with `xvfb-run -a`. The original review auth smoke stays headless:
+  `./gradlew :frontend:smokeTest -PsmokeArgs='review.spec.ts --project=auth' --console=plain`.
 
 ## Build workflow (how chunks get built)
 

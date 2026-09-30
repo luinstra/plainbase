@@ -192,7 +192,7 @@ const discussionDetailRoute = createRoute({
 
 function DiscussionDetailSplat() {
   const { root, id } = discussionDetailRoute.useParams();
-  return <DiscussionThread root={root} id={id} />;
+  return <DiscussionThread key={`${root}/${id}`} root={root} id={id} />;
 }
 
 function rejectDiscussionAddress(pathname: string): void {

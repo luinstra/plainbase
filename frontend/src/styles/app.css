@@ -152,6 +152,7 @@ body {
 .pb-discussion-action:hover:not(:disabled) { background: var(--pb-surface-hover); }
 .pb-discussion-action:disabled { opacity: 0.6; cursor: not-allowed; }
 .pb-discussion-quote { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid var(--pb-blockquote-border); padding-left: 0.75rem; }
+.pb-discussion-textarea { display: block; width: 100%; max-width: 100%; min-height: 8rem; resize: vertical; border: 1px solid var(--pb-border); border-radius: 0.375rem; background: var(--pb-surface); color: var(--pb-text); padding: 0.75rem; }
 .pb-discussion-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .pb-discussion-body { line-height: 1.7; overflow-wrap: anywhere; }
 .pb-discussion-body > * + * { margin-top: 0.75rem; }
@@ -420,6 +421,8 @@ body {
 
 /* heading anchor links (injected client-side) */
 .pb-heading-anchor {
+  user-select: none;
+  -webkit-user-select: none;
   margin-left: 0.4em;
   color: var(--pb-text-faint);
   font-weight: 400;

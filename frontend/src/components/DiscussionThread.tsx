@@ -1,15 +1,32 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
-import { discussionDetailQuery } from "../api/discussions";
+import { addDiscussionComment, discussionDetailQuery, refreshDiscussionViews } from "../api/discussions";
+import { sessionQuery } from "../api/queries";
+import type { DiscussionDetailResponse } from "../api/types";
 import { formatTime } from "../lib/datetime";
+import { DiscussionComposer, commentValidation, discussionWriteError } from "./DiscussionComposer";
 import { DiscussionAnchor, DiscussionAvailability, DiscussionReadError, DiscussionSummary, ReadWindow } from "./DiscussionRead";
 
 export function DiscussionThread({ root, id, inPanel = false }: { root: string; id: string; inPanel?: boolean }) {
   const heading = useRef<HTMLHeadingElement>(null);
+  const posting = useRef(false);
+  const alive = useRef(true);
+  const [body, setBody] = useState("");
+  const [composing, setComposing] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const client = useQueryClient();
+  const session = useQuery(sessionQuery);
   useEffect(() => { if (inPanel) heading.current?.focus(); }, [inPanel, id]);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
   const query = useInfiniteQuery(discussionDetailQuery(root, id));
+  const replyMutation = useMutation({ mutationFn: (submitted: string) => addDiscussionComment(root, id, submitted), retry: false });
   const first = query.data?.pages[0];
   const detail = first?.discussion;
   const title = detail?.page.path ? `Discussion on ${detail.page.path}` : "Discussion";
@@ -19,6 +36,40 @@ export function DiscussionThread({ root, id, inPanel = false }: { root: string; 
     seen.add(comment.id);
     return true;
   })) ?? [];
+  const disabled = query.isPending || query.isError || query.isRefetchError ? "Refresh this discussion before replying." :
+    first?.discussions_available === false ? "Replies are unavailable here." :
+    !detail || detail.status !== "open" || detail.state === "incomplete" || detail.state === "unreadable" ? "This discussion cannot accept replies." :
+    session.data?.auth_mode !== "off" && session.data?.authenticated === false ? "Sign in before replying. Your draft will stay here." : null;
+
+  async function reply() {
+    if (posting.current || disabled) return;
+    const validation = commentValidation(body);
+    if (validation) { setError(validation); return; }
+    const submitted = { root, id, body };
+    posting.current = true; setStatus("Posting…"); setError(null); setRefreshFailed(false);
+    try {
+      const result = await replyMutation.mutateAsync(submitted.body);
+      if (alive.current) {
+        setBody((current) => current === submitted.body ? "" : current);
+        setComposing(false);
+        setStatus("Reply posted");
+      }
+      try {
+        await refreshDiscussionViews(client, submitted.root, submitted.id);
+        if (!alive.current || !result.comment_id) return;
+        const refreshed = client.getQueryData<InfiniteData<DiscussionDetailResponse>>(discussionDetailQuery(submitted.root, submitted.id).queryKey);
+        const visible = refreshed?.pages.some((page) => page.comments.some((comment) => comment.id === result.comment_id));
+        if (!visible && refreshed?.pages.at(-1)?.next) setStatus("Reply posted. Continue loading comments to see it.");
+      } catch { if (alive.current) setRefreshFailed(true); }
+    } catch (failure) {
+      if (alive.current) {
+        setStatus(null); setError(discussionWriteError(failure));
+        if (failure instanceof ApiError && ["discussion_changed", "stale_discussion", "discussion_resolved", "comment_retracted"].includes(failure.code)) {
+          void query.refetch();
+        }
+      }
+    } finally { posting.current = false; }
+  }
   return <ReadWindow>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <Link to="/discussions/$root" params={{ root }} className="text-sm text-link">Discussions in {root}</Link>
@@ -57,5 +108,15 @@ export function DiscussionThread({ root, id, inPanel = false }: { root: string; 
         </button>}
       </section>}
     </>}
+    {first?.discussions_available && detail?.status === "open" && detail.state !== "incomplete" && detail.state !== "unreadable" && !composing &&
+      <button type="button" className="pb-discussion-action" onClick={() => { setComposing(true); setError(null); setStatus(null); }}>Reply</button>}
+    {composing && <DiscussionComposer body={body} setBody={setBody} submit={() => void reply()}
+      cancel={() => { setComposing(false); setBody(""); setError(null); }} busy={replyMutation.isPending}
+      disabled={disabled} error={error} status={status} submitLabel="Post reply" onEscape={() => setError(null)} />}
+    {!composing && status && <p role="status" aria-label={status}>{status}</p>}
+    {!composing && error && <p role="alert">{error}</p>}
+    {refreshFailed && <p role="alert">Posted, but the view could not refresh. <button type="button" className="pb-discussion-action"
+      onClick={() => void refreshDiscussionViews(client, root, id).then(() => { if (alive.current) setRefreshFailed(false); })
+        .catch(() => { if (alive.current) setRefreshFailed(true); })}>Refresh</button></p>}
   </ReadWindow>;
 }

@@ -148,6 +148,23 @@ export interface DiscussionDetailResponse {
   discussions_available: boolean;
   reason: string | null;
 }
+export interface DiscussionPageRequestAnchor { kind: "page"; content_hash: string }
+export interface DiscussionQuoteRequestAnchor {
+  kind: "quote";
+  content_hash: string;
+  block_start: number;
+  block_end: number;
+  selected_text: string;
+}
+export type DiscussionRequestAnchor = DiscussionPageRequestAnchor | DiscussionQuoteRequestAnchor;
+export interface DiscussionPreviewResponse {
+  content_hash: string;
+  byte_start: number;
+  byte_end: number;
+  selection: "narrowed" | "snapped";
+  quote_text: string;
+}
+export interface DiscussionMutationResponse { id: string; comment_id: string | null; commit: string | null }
 export interface CitationDto {
   page_id: string;
   heading_id: string | null;

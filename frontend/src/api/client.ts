@@ -82,25 +82,27 @@ async function parseJson<T>(response: Response): Promise<T | null> {
 }
 
 /** Parses a non-2xx body as the frozen `ErrorEnvelope`, falling back to a status-derived message. */
-async function apiError(response: Response): Promise<ApiError> {
+export async function apiError(response: Response): Promise<ApiError> {
   let code = "unknown_error";
   let message = `Request failed with status ${response.status}`;
   let candidates: AmbiguousCandidate[] = [];
   try {
     const envelope = (await response.json()) as ErrorEnvelope;
-    code = envelope.error.code;
-    message = envelope.error.message;
-    candidates = asCandidates(envelope.error.candidates);
+    if (typeof envelope?.error?.code === "string") code = envelope.error.code;
+    if (typeof envelope?.error?.message === "string") message = envelope.error.message;
+    candidates = asCandidates(envelope?.error?.candidates);
   } catch {
     // non-envelope body (proxy error page etc.) — keep the status-derived message
   }
   return new ApiError(response.status, code, message, candidates);
 }
 
-/** Coerces the optional `candidates` array, dropping anything without a root name (a proxy's mangled body). */
+/** Coerces the optional `candidates` array, dropping malformed root and URL entries. */
 function asCandidates(value: unknown): AmbiguousCandidate[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is AmbiguousCandidate => typeof (entry as AmbiguousCandidate)?.root === "string");
+  return value.filter((entry): entry is AmbiguousCandidate => typeof entry === "object" && entry !== null &&
+    typeof (entry as AmbiguousCandidate).root === "string" &&
+    ((entry as AmbiguousCandidate).url === null || typeof (entry as AmbiguousCandidate).url === "string"));
 }
 
 /**
