@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, type FormEvent } from "react";
+import { useEffect, useId, useRef, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "../api/client";
+import { focusDiscussionElement } from "../lib/discussionFocus";
 
 export function commentValidation(body: string, purpose: "posting" | "saving" = "posting"): string | null {
   if (!body.trim()) return `Enter a comment before ${purpose}.`;
@@ -85,6 +86,17 @@ export function discussionWriteError(error: unknown): string {
   return "This comment could not be posted. Review it and try again.";
 }
 
+/** Recovery follows the failed operation, never the wording of its visible notice. */
+export function discussionWriteRecovery(error: unknown, operation: "post" | "edit" = "post"): "inspect" | "refresh" | null {
+  if (!(error instanceof ApiError) || error.status >= 500) return "inspect";
+  if (error.status === 403 || ["root_unavailable", "absence_unverified", "content_unreadable", "discussion_unreadable",
+    "discussion_changed", "stale_discussion", "discussion_resolved", "comment_retracted"].includes(error.code)) return "refresh";
+  // Other edit failures still need the current thread/access/target inspected, except input validation.
+  if (operation === "edit" && error.status !== 413 &&
+    !["comment_empty", "invalid_utf8", "comment_too_large", "discussion_too_large"].includes(error.code)) return "refresh";
+  return null;
+}
+
 export function discussionPreviewError(error: unknown): string {
   if (error instanceof ApiError) {
     switch (error.code) {
@@ -98,7 +110,7 @@ export function discussionPreviewError(error: unknown): string {
   return "The passage could not be previewed. Refresh the page and try again.";
 }
 
-export function DiscussionComposer({ body, setBody, submit, cancel, busy, disabled, status, error, submitLabel, focusKey, onEscape }: {
+export function DiscussionComposer({ body, setBody, submit, cancel, busy, disabled, status, error, submitLabel, focusKey, onEscape, recoveryAction }: {
   body: string;
   setBody: (body: string) => void;
   submit: () => void;
@@ -110,26 +122,28 @@ export function DiscussionComposer({ body, setBody, submit, cancel, busy, disabl
   submitLabel: string;
   focusKey?: number;
   onEscape?: () => void;
+  recoveryAction?: ReactNode;
 }) {
   const fieldId = useId();
   const disabledId = useId();
   const textarea = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { textarea.current?.focus(); }, [focusKey]);
+  useEffect(() => { focusDiscussionElement(textarea.current); }, [focusKey]);
   const onSubmit = (event: FormEvent) => { event.preventDefault(); if (!busy && !disabled) submit(); };
-  return <form className="pb-discussion-card space-y-3" aria-busy={busy} onSubmit={onSubmit}>
+  return <form className="pb-discussion-composer space-y-3" aria-busy={busy} onSubmit={onSubmit}>
     <label className="block text-sm font-semibold" htmlFor={fieldId}>Comment</label>
-    <textarea ref={textarea} id={fieldId} className="pb-discussion-textarea" rows={5} value={body}
+    <textarea ref={textarea} id={fieldId} className="pb-discussion-textarea" rows={5} value={body} placeholder="Write a comment…"
       onChange={(event) => { if (!busy) setBody(event.target.value); }} readOnly={busy}
       aria-describedby={disabled ? disabledId : undefined}
       onKeyDown={(event) => { if (event.key === "Escape" && onEscape && !busy) {
-        event.preventDefault(); onEscape(); textarea.current?.focus();
+        event.preventDefault(); onEscape(); focusDiscussionElement(textarea.current);
       } }} />
     {disabled && <p id={disabledId}>{disabled}</p>}
     {status && <p role="status" aria-label={status}>{status}</p>}
-    {error && <p role="alert">{error}</p>}
-    <div className="flex flex-wrap gap-2">
-      <button type="submit" className="pb-discussion-action" disabled={busy || !!disabled}>{submitLabel}</button>
-      <button type="button" className="pb-discussion-action" disabled={busy} onClick={cancel}>Cancel</button>
+    {error && <p role="alert">{error} {recoveryAction}</p>}
+    <p className="pb-discussion-hint">Markdown supported</p>
+    <div className="pb-discussion-composer-footer">
+      <button type="button" className="pb-discussion-action pb-discussion-quiet" disabled={busy} onClick={cancel}>Cancel</button>
+      <button type="submit" className="pb-discussion-action pb-discussion-primary" disabled={busy || !!disabled}>{submitLabel}</button>
     </div>
   </form>;
 }

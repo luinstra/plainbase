@@ -109,9 +109,6 @@ export function Shell() {
         </a>
         <div className="flex items-center gap-3">
           <SearchTrigger />
-          <Link to="/discussions" className="rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink" data-pb-discussions-nav>
-            Discussions
-          </Link>
           {session.data?.authenticated && (
             <Link
               to="/review"
@@ -149,7 +146,7 @@ export function Shell() {
       </header>
       <div className="flex w-full">
         <Sidebar />
-        <main className="pb-main min-w-0 flex-1 px-6 py-8 lg:px-12" data-pb-main>
+        <main className="pb-main min-w-0 flex-1 px-4 py-8 lg:pl-12 lg:pr-8" data-pb-main>
           <Outlet />
         </main>
       </div>

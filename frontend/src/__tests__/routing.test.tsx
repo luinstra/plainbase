@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, pageQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
+import { primePageDiscussionLists, emptyDiscussionList } from "./pageDiscussionFixture";
 
 /**
  * Router-level flows that the fixture-backed smoke suite cannot reach:
@@ -170,6 +171,7 @@ function renderAt(initialPath: string, prime: (qc: QueryClient) => void) {
   queryClient.setQueryData(treeQuery.queryKey, emptyTree);
   queryClient.setQueryData(sessionQuery.queryKey, ANON_SESSION);
   prime(queryClient);
+  primePageDiscussionLists(queryClient);
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createAppRouter(queryClient, history);
   const view = render(
@@ -313,6 +315,7 @@ describe("routing flows", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         calls.push(typeof input === "string" ? input : input.toString());
+        if (new URL(String(input), "http://x").pathname === `/api/v1/pages/${LOSER_ID}/discussions`) return Response.json(emptyDiscussionList);
         return new Response(JSON.stringify(htmlResponse(LOSER_ID, null, "Shadowed Page", "extra")), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -341,6 +344,7 @@ describe("routing flows", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         calls.push(typeof input === "string" ? input : input.toString());
+        if (new URL(String(input), "http://x").pathname === `/api/v1/pages/${LOSER_ID}/discussions`) return Response.json(emptyDiscussionList);
         return new Response(JSON.stringify(htmlResponse(LOSER_ID, null, "Shadowed Page", "extra")), {
           status: 200,
           headers: { "content-type": "application/json" },

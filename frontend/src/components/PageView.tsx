@@ -1,11 +1,12 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { pageDiscussionsQuery } from "../api/discussions";
 import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlKey, pageHtmlQuery, pageKey, pageQuery, treeQuery } from "../api/queries";
-import type { DiscussionQuoteRequestAnchor, PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
+import type { DiscussionQuoteRequestAnchor, PageHtmlResponse, PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
+import { focusDiscussionElement } from "../lib/discussionFocus";
 import { useDiscussionSelection } from "../lib/useDiscussionSelection";
 import { parsePermalink, permalinkOf } from "../lib/permalink";
 import {
@@ -79,7 +80,7 @@ export function DocsPage({ path }: { path: string }) {
   if (landingEntry?.folder.url) return <FolderLanding url={landingEntry.folder.url} />;
   // The by-path response IS the page's PageResponse (frontmatter included) — hand it to the Rail
   // directly so it reads already-loaded metadata with no redundant /api/v1/pages/:id fetch.
-  return <PageContent id={page.data.id} root={page.data.root} page={page.data} />;
+  return <PageContent key={JSON.stringify([page.data.root, page.data.id])} id={page.data.id} root={page.data.root} page={page.data} />;
 }
 
 /**
@@ -122,14 +123,15 @@ export function FolderLanding({ url }: { url?: string }) {
   // through the sidebar tree. With no index, it's a purely-generated listing — no rail, but the rail
   // column stays reserved so the content width matches a page (see FolderListing).
   const landing = landingPage(resolved.folder);
-  return landing ? <PageContent id={landing.id} root={resolved.root} /> : <FolderListing root={resolved.root} folder={resolved.folder} />;
+  return landing ? <PageContent key={JSON.stringify([resolved.root, landing.id])} id={landing.id} root={resolved.root} /> :
+    <FolderListing root={resolved.root} folder={resolved.folder} />;
 }
 
 /**
  * The purely-generated directory view (no index/README): `_folder.yaml` title (else name) as
  * heading, then the generated listing. `data-pb-folder` marks this rail-less generated view.
  *
- * It has no rail or TOC, but mirrors PageContent's column shell — reading column centered at 72ch,
+ * It has no rail or TOC, but mirrors PageContent's column shell — reading column left aligned at at most 72ch,
  * an (empty) rail column held open beside it — so the content lands at the same width as a page.
  * Without that spacer the listing would bleed full-bleed and jar against every page view.
  */
@@ -142,16 +144,16 @@ function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
   }, [title]);
 
   return (
-    <div className="pb-folder flex gap-12" data-pb-folder>
-      <div className="min-w-0 flex-1">
-        <div className="mx-auto max-w-[72ch]">
+    <div className="pb-folder pb-reading-layout" data-pb-folder>
+      <div className="min-w-0">
+        <div className="pb-reading-column">
           <Breadcrumbs root={root} path={folder.path} title={title} />
           <h1 className="text-3xl font-bold text-ink">{title}</h1>
           <FolderListingGroups root={root} folder={folder} />
         </div>
       </div>
       {/* Rail column reserved (empty) — no rail/TOC here, but the reading column keeps a page's width. */}
-      <div className="hidden w-[clamp(14rem,18vw,20rem)] shrink-0 xl:block" aria-hidden="true" />
+      <div className="hidden xl:block" aria-hidden="true" />
     </div>
   );
 }
@@ -302,7 +304,7 @@ export function PermalinkPage({ splat }: { splat: string }) {
   // to the root the metadata read NAMED and this view silently resolves an ambiguity the server refuses to -
   // once the id is duplicated, a fresh load of the same bare `/p/{id}` answers 300 while the pinned render
   // shows a page, which is the click-vs-reload split the structural gate exists to close.
-  return <PageContent id={page.data.id} root={root} page={page.data} />;
+  return <PageContent key={JSON.stringify([root, page.data.id])} id={page.data.id} root={root} page={page.data} />;
 }
 
 /**
@@ -335,8 +337,8 @@ function PermalinkError({ error, id, root }: { error: Error; id: string; root: s
 
 /**
  * Breadcrumbs + server HTML + doc footer in the main column, with a metadata Rail + TOC in
- * the right rail. HTML is the primary content and gates the view (pending/error → the whole
- * page); the Rail/footer read the page's frontmatter. Callers that already hold the page's
+ * the right rail. HTML gates the reading column; after success the rail and discussion workspace
+ * survive same-page source failures. The Rail/footer read the page's frontmatter. Callers that already hold the page's
  * `PageResponse` (the root-qualified by-path route, the permalink route) pass it in via [seeded], so
  * the Rail reads already-loaded metadata with NO extra `/api/v1/pages/:id` fetch. Only a
  * folder-landing child — which arrives with just a tree-node id — fetches `pageQuery` here, and a
@@ -351,8 +353,8 @@ function PermalinkError({ error, id, root }: { error: Error; id: string; root: s
  * server would refuse to serve on reload.
  */
 function PageContent({ id, root, page: seeded }: { id: string; root: string | null; page?: PageResponse }) {
-  const [discussionOpen, setDiscussionOpen] = useState(false);
-  const [discussionOpened, setDiscussionOpened] = useState(false);
+  const [discussionOpen, setDiscussionOpen] = useState(true);
+  const discussionBodyId = `pb-page-discussions-${useId()}`;
   const [passageRequest, setPassageRequest] = useState<PassageRequest | null>(null);
   const [pageRequest, setPageRequest] = useState<{ nonce: number; id: string; root: string | null } | null>(null);
   const [selectionHelp, setSelectionHelp] = useState<string | null>(null);
@@ -363,11 +365,23 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   const requestNumber = useRef(0);
   const reloading = useRef<string | null>(null);
   const html = useQuery(pageHtmlQuery(id, root));
-  const displayedRoot = html.data?.root ?? root;
-  const lastSource = useRef<{ id: string; root: string | null; hash: string } | null>(null);
-  if (html.isSuccess) lastSource.current = { id, root, hash: html.data.content_hash };
+  const lastSource = useRef<{ id: string; root: string | null; hash: string; data: PageHtmlResponse } | null>(null);
+  if (html.isSuccess) lastSource.current = { id, root, hash: html.data.content_hash, data: html.data };
   const sourceHash = lastSource.current?.id === id && lastSource.current.root === root ? lastSource.current.hash : null;
-  const { capture, reset: resetSelection } = useDiscussionSelection(articleWrapper, JSON.stringify([root, id]), html.data?.content_hash ?? null, html.isSuccess);
+  const railSource = sourceHash !== null ? lastSource.current!.data : null;
+  const displayedRoot = railSource?.root ?? root;
+  const workspaceId = JSON.stringify([displayedRoot, id]);
+  const [presentationWorkspace, setPresentationWorkspace] = useState(workspaceId);
+  // A bare permalink keeps its unqualified query keys even when fresh HTML resolves another root.
+  // Reset before rendering the new keyed panel so old requests cannot activate it or steal focus.
+  if (presentationWorkspace !== workspaceId) {
+    setPresentationWorkspace(workspaceId);
+    setDiscussionOpen(true); setSelectionHelp(null); setPassageRequest(null); setPageRequest(null);
+    setPostingFor(null); setActionFor(null);
+  }
+  const { capture, captureIfSelected, reset: resetSelection } = useDiscussionSelection(
+    articleWrapper, workspaceId, html.data?.content_hash ?? null, html.isSuccess,
+  );
   const queryClient = useQueryClient();
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
   const fetched = useQuery({ ...pageQuery(id, root), enabled: seeded === undefined });
@@ -389,29 +403,34 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   }, [title]);
 
   useEffect(() => {
-    setSelectionHelp(null);
-  }, [id, root]);
-
-  useEffect(() => {
     setPassageRequest(null);
   }, [html.data?.content_hash]);
 
-  function commentOnSelection() {
-    if (posting || activeAction || !html.isSuccess || !canStartDiscussion) return;
-    const captured = capture();
+  function startDiscussion(requireSelection = false) {
+    if (posting || activeAction || !html.isSuccess || html.isFetching || !canStartDiscussion) return;
+    const captured = requireSelection ? capture() : captureIfSelected(true);
+    if (captured === null) {
+      discussWholePage();
+      return;
+    }
     if ("reason" in captured) {
       setSelectionHelp(captured.reason);
-      setDiscussionOpened(true); setDiscussionOpen(true);
       return;
     }
     if (new TextEncoder().encode(captured.selected_text).length > 16_384) {
       setSelectionHelp("That passage is too long. Select less text or discuss the whole page.");
-      setDiscussionOpened(true); setDiscussionOpen(true);
       return;
     }
     setSelectionHelp(null);
     setPassageRequest({ nonce: ++requestNumber.current, root: html.data!.root, pageId: id, anchor: captured as DiscussionQuoteRequestAnchor });
-    setDiscussionOpened(true); setDiscussionOpen(true);
+    resetSelection();
+  }
+
+  function discussWholePage() {
+    if (posting || activeAction || !html.isSuccess || html.isFetching || !canStartDiscussion) return;
+    resetSelection();
+    setSelectionHelp(null); setPassageRequest(null);
+    setPageRequest({ nonce: ++requestNumber.current, id, root: displayedRoot });
   }
 
   async function reloadPage(): Promise<boolean> {
@@ -433,86 +452,71 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
     }
   }
 
-  const workspaceId = JSON.stringify([displayedRoot, id]);
   const posting = postingFor?.workspace === workspaceId;
   const activeAction = actionFor?.workspace === workspaceId;
   function focusDiscussionAction() {
+    const panel = document.getElementById(discussionBodyId);
     requestAnimationFrame(() => {
-      const panel = document.getElementById("pb-page-discussions");
-      (panel?.querySelector<HTMLElement>("[data-pb-active-action] textarea") ??
-        panel?.querySelector<HTMLElement>("[data-pb-action-focus]") ?? panel?.querySelector<HTMLElement>("textarea"))?.focus();
+      focusDiscussionElement(panel?.querySelector<HTMLElement>("[data-pb-active-action] textarea") ??
+        panel?.querySelector<HTMLElement>("[data-pb-action-focus]") ?? panel?.querySelector<HTMLElement>("textarea"));
     });
   }
-  const retainedPanel = discussionOpened && displayedRoot !== null;
-  const panel = retainedPanel && <aside id="pb-page-discussions" hidden={!discussionOpen}
-    className="w-full min-w-0 xl:w-[clamp(18rem,28vw,28rem)] xl:shrink-0">
-    <DiscussionPanel key={`${displayedRoot}/${id}`} root={displayedRoot} pageId={id}
-      sourceHash={sourceHash} sourceReady={html.isSuccess} sourceBusy={html.isFetching}
-      pageRequestNonce={pageRequest?.id === id && pageRequest.root === displayedRoot ? pageRequest.nonce : 0}
-      request={passageRequest?.root === displayedRoot && passageRequest.pageId === id && passageRequest.anchor.content_hash === html.data?.content_hash ? passageRequest : null}
-      onReselect={commentOnSelection} onReload={reloadPage}
-      onPostingChange={(busy, owner) => setPostingFor((current) => busy ? { workspace: workspaceId, owner } : current?.owner === owner ? null : current)}
-      onActionChange={(active, owner) => setActionFor((current) => active ? { workspace: workspaceId, owner } : current?.owner === owner ? null : current)}
-      source={{ root: displayedRoot, pageId: id, hash: html.data?.content_hash ?? null,
-        ready: html.isSuccess && html.data?.id === id && html.data?.root === displayedRoot, busy: html.isFetching,
-        capture: () => html.isFetching ? { reason: "Wait for the page to finish loading before selecting a passage." } : capture(true),
-        resetSelection, reload: reloadPage }}
-      onClose={() => { setDiscussionOpen(false); discussionTrigger.current?.focus(); }} />
+  const retainedPanel = sourceHash !== null && displayedRoot !== null;
+  const frontmatter = page?.frontmatter;
+  const rail = <aside className="pb-rail pb-reading-rail" data-pb-rail>
+    {railSource && <DocRail frontmatter={frontmatter} path={railSource.path} />}
+    {retainedPanel && <section className="pb-margin-discussions" aria-label="Discussions">
+      <div className="pb-discussion-margin-header">
+        <h2 className="pb-rail-head">Discussions</h2>
+        <button ref={discussionTrigger} type="button" className="pb-discussion-action pb-discussion-quiet" data-pb-discussions-toggle
+          aria-label={discussionOpen ? "Hide discussions" : "Show discussions"}
+          aria-expanded={discussionOpen} aria-controls={discussionBodyId} onClick={() => {
+            setDiscussionOpen((open) => !open);
+            if (discussionOpen) discussionTrigger.current?.focus(); else focusDiscussionAction();
+          }}>{discussionOpen ? "Hide" : "Show"}</button>
+      </div>
+      <div id={discussionBodyId} hidden={!discussionOpen}>
+        {selectionHelp && canStartDiscussion && <p role="alert" className="pb-discussion-notice mb-4">{selectionHelp}
+          <button type="button" className="pb-discussion-action ml-2"
+            disabled={posting || activeAction || !html.isSuccess || html.isFetching}
+            onClick={discussWholePage}>Discuss the whole page instead</button>
+        </p>}
+        <DiscussionPanel key={workspaceId} root={displayedRoot} pageId={id}
+          onStart={() => startDiscussion()}
+          startDisabled={posting || activeAction || !html.isSuccess || html.isFetching || !canStartDiscussion}
+          sourceHash={sourceHash} sourceReady={html.isSuccess} sourceBusy={html.isFetching}
+          pageRequestNonce={pageRequest?.id === id && pageRequest.root === displayedRoot ? pageRequest.nonce : 0}
+          request={passageRequest?.root === displayedRoot && passageRequest.pageId === id && passageRequest.anchor.content_hash === html.data?.content_hash ? passageRequest : null}
+          onReselect={() => startDiscussion(true)} onReload={reloadPage}
+          onPostingChange={(busy, owner) => setPostingFor((current) => busy ? { workspace: workspaceId, owner } : current?.owner === owner ? null : current)}
+          onActionChange={(active, owner) => setActionFor((current) => active ? { workspace: workspaceId, owner } : current?.owner === owner ? null : current)}
+          source={{ root: displayedRoot, pageId: id, hash: html.data?.content_hash ?? null,
+            ready: html.isSuccess && html.data?.id === id && html.data?.root === displayedRoot, busy: html.isFetching,
+            capture: () => html.isFetching ? { reason: "Wait for the page to finish loading before selecting a passage." } : capture(true),
+            resetSelection, reload: reloadPage }}
+        />
+      </div>
+    </section>}
+    {railSource && <div className="hidden xl:block"><Toc headings={railSource.headings} /></div>}
   </aside>;
 
-  if (html.isPending && !retainedPanel) return <PagePending />;
-  if (html.isError || html.isPending) return <div className="flex flex-col gap-8 xl:flex-row xl:gap-12">
-    <div className="min-w-0 flex-1">{html.isPending ? <PagePending /> : <PageError error={html.error} root={root} />}
-      {retainedPanel && <button ref={discussionTrigger} type="button" className="pb-discussion-action" data-pb-discussions-toggle
-        aria-expanded={discussionOpen} aria-controls="pb-page-discussions"
-        onClick={() => {
-          setDiscussionOpen((open) => !open);
-          if (!discussionOpen) focusDiscussionAction();
-        }}>{discussionOpen ? "Hide discussions" : "Show discussions"}</button>}
-    </div>{panel}</div>;
-
-  const frontmatter = page?.frontmatter;
   return (
-    <div className="flex flex-col gap-8 xl:flex-row xl:gap-12">
-      {/* The reading column takes the middle and centers at a readable width; the side columns
-          (sidebar + this rail) grow/shrink with the window up to their clamp caps. */}
-      <div className="min-w-0 flex-1">
-        <div className="mx-auto max-w-[72ch]">
-          <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
-          <button ref={discussionTrigger} type="button" className="pb-discussion-action my-4" aria-expanded={discussionOpen}
-            aria-controls="pb-page-discussions" onClick={() => {
-              setDiscussionOpened(true); setDiscussionOpen((open) => !open);
-              if (!discussionOpen) focusDiscussionAction();
-            }} data-pb-discussions-toggle>
-            {discussionOpen ? "Hide discussions" : "Show discussions"}
-          </button>
-          {canStartDiscussion && <button type="button" className="pb-discussion-action my-4 ml-2" disabled={posting || activeAction} onClick={commentOnSelection}>Comment on selection</button>}
-          {activeAction && <p>Finish this discussion action before starting another. If you are unsure whether it completed, refresh and inspect it.</p>}
-          {selectionHelp && canStartDiscussion && <p role="alert" className="pb-discussion-notice">{selectionHelp}
-            <button type="button" className="pb-discussion-action ml-2" disabled={posting || activeAction} onClick={() => {
-              if (posting || activeAction) return;
-              setSelectionHelp(null); setPassageRequest(null);
-              setPageRequest({ nonce: ++requestNumber.current, id, root: displayedRoot });
-              setDiscussionOpened(true); setDiscussionOpen(true);
-            }}>Discuss the whole page instead</button>
-          </p>}
-          <div ref={articleWrapper} data-pb-page-article><Prose html={html.data.html} /></div>
-          <DocFooter
-            frontmatter={frontmatter}
-            url={page?.url ?? null}
-            editable={editable}
-            hasHistory={(page?.commit ?? null) !== null}
-          />
+    <div className="pb-reading-layout">
+      <div className="min-w-0">
+        <div className="pb-reading-column">
+          {html.isPending ? <PagePending /> : html.isError ? <PageError error={html.error} root={root} /> : <>
+            <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
+            <div ref={articleWrapper} data-pb-page-article><Prose html={html.data.html} /></div>
+            <DocFooter
+              frontmatter={frontmatter}
+              url={page?.url ?? null}
+              editable={editable}
+              hasHistory={(page?.commit ?? null) !== null}
+            />
+          </>}
         </div>
       </div>
-      {panel}
-      {!discussionOpen && <aside
-          className="pb-rail sticky top-20 hidden max-h-[calc(100vh-6rem)] w-[clamp(14rem,18vw,20rem)] shrink-0 overflow-y-auto xl:block"
-          data-pb-rail
-        >
-          <DocRail frontmatter={frontmatter} path={html.data.path} />
-          <Toc headings={html.data.headings} />
-        </aside>}
+      {rail}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, pageQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeFolder, TreePage, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
+import { primePageDiscussionLists, emptyDiscussionList } from "./pageDiscussionFixture";
 
 /**
  * Folder landing views (ADR-0003): the by-path 404 fallthrough resolves the location
@@ -90,7 +91,11 @@ function pageResponse(id: string, url: string | null, title: string, root = "doc
 /** Stubs fetch so any by-path lookup 404s — the server's answer for a folder URL. */
 function stubNotFound() {
   const envelope = { error: { code: "page_not_found", message: "No page at that path" } };
-  const spy = vi.fn(async () => new Response(JSON.stringify(envelope), { status: 404, headers: { "content-type": "application/json" } }));
+  const spy = vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://x");
+    if (url.pathname.endsWith("/discussions") && url.pathname.startsWith("/api/v1/pages/") && url.searchParams.has("root")) return Response.json(emptyDiscussionList);
+    return new Response(JSON.stringify(envelope), { status: 404, headers: { "content-type": "application/json" } });
+  });
   vi.stubGlobal("fetch", spy);
   return spy;
 }
@@ -101,6 +106,7 @@ function renderAt(initialPath: string, treeData: TreeResponse, prime: (qc: Query
   // Prime the Shell's session read (unauthenticated) so it serves from cache and the no-fetch assertions hold.
   queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
   prime(queryClient);
+  primePageDiscussionLists(queryClient);
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createAppRouter(queryClient, history);
   const view = render(

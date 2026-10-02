@@ -1,3 +1,4 @@
+import { openDiscussionActions } from "./discussion-actions";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Locator } from "@playwright/test";
@@ -35,8 +36,7 @@ test("builtin cookie and CSRF allow page, passage and reply writes; expiry keeps
   await expect.poll(async () => (await page.request.get("/api/v1/pages/by-path/docs/c5-auth-write")).status()).toBe(200);
   await gotoExpectStatus(page, "/docs/c5-auth-write");
 
-  await page.getByRole("button", { name: "Show discussions" }).click();
-  await page.getByRole("button", { name: "New page discussion" }).click();
+  await page.getByRole("button", { name: "New discussion" }).click();
   await expect(page.getByRole("textbox", { name: "Comment" })).toBeFocused();
   await page.getByRole("textbox", { name: "Comment" }).fill("Cookie page start");
   const pagePost = page.waitForResponse((response) => response.url().includes(`/api/v1/pages/${pageId}/discussions?root=docs`) && response.request().method() === "POST");
@@ -52,7 +52,7 @@ test("builtin cookie and CSRF allow page, passage and reply writes; expiry keeps
   expect((await replyPost).status()).toBe(201);
   await expect(page.getByRole("status", { name: /Reply posted/ })).toBeVisible();
 
-  await page.getByRole("button", { name: "Back to page", exact: true }).click();
+  await page.getByRole("button", { name: "Close discussion", exact: true }).click();
   const paragraph = page.getByText("Cookie selection text.", { exact: true });
   await expect(paragraph).toBeVisible();
   await clickFirstCharacter(paragraph);
@@ -62,10 +62,10 @@ test("builtin cookie and CSRF allow page, passage and reply writes; expiry keeps
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe("Coo");
   expect(await paragraph.evaluate((node) => node.closest("[contenteditable]"))).toBeNull();
   for (let index = 0; index < 20; index++) {
-    if (await page.getByRole("button", { name: "Comment on selection" }).evaluate((button) => button === document.activeElement)) break;
-    await page.keyboard.press("Shift+Tab");
+    if (await page.getByRole("button", { name: "New discussion" }).evaluate((button) => button === document.activeElement)) break;
+    await page.keyboard.press("Tab");
   }
-  await expect(page.getByRole("button", { name: "Comment on selection" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "New discussion" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: "Confirm passage" })).toBeFocused();
   await page.getByRole("button", { name: "Confirm passage" }).click();
@@ -129,7 +129,8 @@ test("builtin lifecycle enforces authorship, starter and admin rights and preser
     const commentId = (await added.json()).comment_id as string;
     const url = `/discussions/docs/${id}`;
     await gotoExpectStatus(viewer, url);
-    await viewer.locator("article.pb-discussion-card").filter({ hasText: "Viewer original comment" }).getByRole("button", { name: "Edit comment" }).click();
+    await openDiscussionActions(viewer.locator("article.pb-discussion-comment").filter({ hasText: "Viewer original comment" }), "Edit comment");
+    await viewer.locator("article.pb-discussion-comment").filter({ hasText: "Viewer original comment" }).getByRole("button", { name: "Edit comment" }).click();
     await expect(viewer.getByRole("textbox", { name: "Comment" })).toHaveValue("**Viewer original comment** 😀");
     await viewer.getByRole("textbox", { name: "Comment" }).fill("Viewer edited comment 😀");
     const saved = viewer.waitForResponse((response) => response.url().includes(`/comments/${commentId}/edit?root=docs`));
@@ -139,10 +140,12 @@ test("builtin lifecycle enforces authorship, starter and admin rights and preser
     await expect(viewer.locator(".pb-discussion-body").filter({ hasText: "Viewer edited comment" })).toBeVisible();
 
     const deniedResolve = viewer.waitForResponse((response) => response.url().includes(`/discussions/${id}/resolve?root=docs`));
+    await openDiscussionActions(viewer, "Resolve discussion");
     await viewer.getByRole("button", { name: "Resolve discussion" }).click();
     expect((await deniedResolve).status()).toBe(403);
     await expect(viewer.getByRole("alert").filter({ hasText: "cannot resolve" })).toBeVisible();
-    await viewer.locator("article.pb-discussion-card").filter({ hasText: "Viewer edited comment" }).getByRole("button", { name: "Purge comment (admin)" }).click();
+    await openDiscussionActions(viewer.locator("article.pb-discussion-comment").filter({ hasText: "Viewer edited comment" }), "Purge comment (admin)");
+    await viewer.locator("article.pb-discussion-comment").filter({ hasText: "Viewer edited comment" }).getByRole("button", { name: "Purge comment (admin)" }).click();
     const purgeConfirm = viewer.getByRole("region", { name: "Confirm purge" });
     await expect(purgeConfirm.getByRole("button", { name: "Cancel" })).toBeFocused();
     const deniedPurge = viewer.waitForResponse((response) => response.url().includes(`/comments/${commentId}/purge?root=docs`));
@@ -151,6 +154,7 @@ test("builtin lifecycle enforces authorship, starter and admin rights and preser
     await expect(viewer.getByRole("alert").filter({ hasText: "cannot purge" })).toBeVisible();
     await purgeConfirm.getByRole("button", { name: "Cancel" }).click();
 
+    await openDiscussionActions(viewer, "Reattach");
     await viewer.getByRole("button", { name: "Reattach", exact: true }).click();
     await viewer.locator("[data-pb-reattach-source] p").evaluate((paragraph) => {
       const selection = window.getSelection()!; selection.selectAllChildren(paragraph); document.dispatchEvent(new Event("selectionchange"));
@@ -165,7 +169,8 @@ test("builtin lifecycle enforces authorship, starter and admin rights and preser
     await viewer.getByRole("button", { name: "Cancel", exact: true }).click();
 
     await gotoExpectStatus(page, url);
-    await page.locator("article.pb-discussion-card").filter({ hasText: "Viewer edited comment" }).getByRole("button", { name: "Edit comment" }).click();
+    await openDiscussionActions(page.locator("article.pb-discussion-comment").filter({ hasText: "Viewer edited comment" }), "Edit comment");
+    await page.locator("article.pb-discussion-comment").filter({ hasText: "Viewer edited comment" }).getByRole("button", { name: "Edit comment" }).click();
     await page.getByRole("textbox", { name: "Comment" }).fill("Admin cannot replace viewer text");
     const deniedEdit = page.waitForResponse((response) => response.url().includes(`/comments/${commentId}/edit?root=docs`));
     await page.getByRole("button", { name: "Save comment" }).click();
@@ -173,15 +178,18 @@ test("builtin lifecycle enforces authorship, starter and admin rights and preser
     await expect(page.getByRole("textbox", { name: "Comment" })).toHaveValue("Admin cannot replace viewer text");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
-    await viewer.locator("article.pb-discussion-card").filter({ hasText: "Viewer edited comment" }).getByRole("button", { name: "Retract comment" }).click();
+    await openDiscussionActions(viewer.locator("article.pb-discussion-comment").filter({ hasText: "Viewer edited comment" }), "Retract comment");
+    await viewer.locator("article.pb-discussion-comment").filter({ hasText: "Viewer edited comment" }).getByRole("button", { name: "Retract comment" }).click();
     const retracted = viewer.waitForResponse((response) => response.url().includes(`/comments/${commentId}/retract?root=docs`));
     await viewer.getByRole("region", { name: "Confirm retraction" }).getByRole("button", { name: "Retract comment" }).click();
     expect((await retracted).status()).toBe(200);
     await expect(viewer.getByRole("status", { name: "Comment retracted" })).toBeVisible();
+    await openDiscussionActions(page, "Refresh");
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
-    const tombstone = page.locator("article.pb-discussion-card").filter({ hasText: "retracted by Lifecycle viewer" });
+    const tombstone = page.locator("article.pb-discussion-comment").filter({ hasText: "retracted by Lifecycle viewer" });
     await expect(tombstone).toBeVisible();
     await expect(tombstone.getByRole("button", { name: "Edit comment" })).toHaveCount(0);
+    await openDiscussionActions(tombstone, "Purge comment (admin)");
     await tombstone.getByRole("button", { name: "Purge comment (admin)" }).click();
     await expect(page.getByText("Remove this comment file. Earlier Git history may still contain it.")).toBeVisible();
     const purged = page.waitForResponse((response) => response.url().includes(`/comments/${commentId}/purge?root=docs`));
@@ -189,22 +197,25 @@ test("builtin lifecycle enforces authorship, starter and admin rights and preser
     expect((await purged).status()).toBe(200);
     await expect(page.getByRole("status", { name: "Comment removed" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Discussion on c5-auth-lifecycle.md" })).toBeFocused();
+    await openDiscussionActions(page, "Resolve discussion");
     await page.getByRole("button", { name: "Resolve discussion" }).click();
     await expect(page.getByRole("status", { name: "Discussion resolved" })).toBeVisible();
+    await openDiscussionActions(page, "Reopen discussion");
     await page.getByRole("button", { name: "Reopen discussion" }).click();
     await expect(page.getByRole("status", { name: "Discussion reopened" })).toBeVisible();
 
     await page.setViewportSize({ width: 375, height: 812 });
     await gotoExpectStatus(page, "/docs/c5-auth-lifecycle");
-    await page.getByRole("button", { name: "Show discussions" }).click();
-    await page.getByRole("button", { name: "c5-auth-lifecycle.md", exact: true }).click();
+    await page.locator("[data-pb-discussion-panel]").getByRole("button", { name: /Cookie lifecycle selection/ }).click();
+    await openDiscussionActions(page, "Reattach");
     await page.getByRole("button", { name: "Reattach", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Comment on selection" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "New discussion" })).toBeDisabled();
     await page.getByRole("button", { name: "Hide discussions" }).click();
     await page.getByRole("button", { name: "Show discussions" }).click();
     await expect(page.getByRole("heading", { name: "Select a new passage in the displayed page" })).toBeFocused();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Reattach", exact: true })).toBeFocused();
+    await expect(page.getByLabel("Discussion actions")).toBeFocused();
+    await openDiscussionActions(page, "Reattach");
     await page.getByRole("button", { name: "Reattach", exact: true }).click();
     const paragraph = page.locator("[data-pb-page-article] p").filter({ hasText: "Cookie lifecycle selection." });
     await clickFirstCharacter(paragraph);
@@ -225,6 +236,7 @@ test("builtin lifecycle enforces authorship, starter and admin rights and preser
     await expect(page.getByRole("status", { name: "Discussion reattached" })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 
+    await openDiscussionActions(page, "Edit comment");
     await page.getByRole("button", { name: "Edit comment" }).click();
     await page.getByRole("textbox", { name: "Comment" }).fill("Keep lifecycle edit after expiry");
     await page.getByRole("button", { name: "Hide discussions" }).click();

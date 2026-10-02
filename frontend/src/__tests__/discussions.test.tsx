@@ -129,6 +129,9 @@ describe("discussion reads", () => {
     ], next: null, discussions_available: true, reason: null }))));
     mount("/discussions/docs/thread");
     expect(await screen.findByText("Original <text>")).toBeTruthy();
+    expect(screen.getByText("Discussion details", { selector: "summary" }).parentElement).toHaveProperty("open", false);
+    fireEvent.click(screen.getByText("Discussion details", { selector: "summary" }));
+    expect(screen.getByRole("heading", { name: "Latest reattachment" })).toBeTruthy();
     expect(screen.getByText("New quote")).toBeTruthy();
     expect(screen.getByText("Server heading")).toBeTruthy();
     expect(screen.queryByText("RAW MARKDOWN")).toBeNull();
@@ -136,7 +139,7 @@ describe("discussion reads", () => {
     expect(document.querySelector(".pb-discussion-body.pb-prose")).toBeNull();
     expect(screen.getByText(/Edited/)).toBeTruthy();
     expect(screen.getByText("Retracted by Alice")).toBeTruthy();
-    expect(screen.getByText(/ · Retracted$/)).toBeTruthy();
+    expect(screen.getByText("Retracted", { exact: true })).toBeTruthy();
     expect(screen.getAllByText(/Agent/).length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { level: 1, name: "Discussion on notes/test.md" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "Original anchor" })).toBeTruthy();

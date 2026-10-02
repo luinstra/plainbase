@@ -73,6 +73,7 @@ describe("the chrome New action", () => {
       return el!;
     });
     expect(action.getAttribute("href")).toBe("/new");
+    expect(view.container.querySelector("[data-pb-discussions-nav]")).toBeNull();
   });
 
   it("pins New to an extra-root discussion and disables it for an unknown named root", async () => {

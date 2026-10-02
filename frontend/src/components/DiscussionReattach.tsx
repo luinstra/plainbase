@@ -6,6 +6,7 @@ import { pageHtmlQuery, pageQuery } from "../api/queries";
 import type { DiscussionPreviewResponse, DiscussionQuoteRequestAnchor, PageResponse } from "../api/types";
 import type { SelectionCapture } from "../lib/selectionAnchor";
 import { useDiscussionSelection } from "../lib/useDiscussionSelection";
+import { focusDiscussionElement } from "../lib/discussionFocus";
 import { discussionActionError } from "./DiscussionComposer";
 import { Prose } from "./Prose";
 
@@ -55,7 +56,7 @@ export function DiscussionReattach({ root, pageId, source, originalQuote, busy, 
   useEffect(() => {
     alive.current = true;
     resetSelection();
-    heading.current?.focus();
+    focusDiscussionElement(heading.current);
     return () => { alive.current = false; generation.current++; };
   }, []);
   function resetSelection() { if (source) source.resetSelection(); else resetStandalone(); }
@@ -67,8 +68,8 @@ export function DiscussionReattach({ root, pageId, source, originalQuote, busy, 
     }
     priorSource.current = { root, pageId, ready, hash, open };
   }, [root, pageId, hash, ready, open]);
-  useEffect(() => { if (preview) confirmButton.current?.focus(); }, [preview]);
-  useEffect(() => { if (confirmed) submitButton.current?.focus(); }, [confirmed]);
+  useEffect(() => { if (preview) focusDiscussionElement(confirmButton.current); }, [preview]);
+  useEffect(() => { if (confirmed) focusDiscussionElement(submitButton.current); }, [confirmed]);
 
   async function prepare() {
     if (busy || reloading || !ready || sourceBusy || pageChanged || !open) return;
@@ -148,24 +149,24 @@ export function DiscussionReattach({ root, pageId, source, originalQuote, busy, 
     !source && html.isPending ? "Loading the stored source page…" :
     !ready ? html.error instanceof ApiError && html.error.code === "page_not_found" ? "The stored source page could not be found. The discussion remains available." :
       "The stored source page could not be read. Retry its source lookup." : null;
-  return <section className="pb-discussion-card min-w-0 space-y-3" aria-label="Reattach discussion" data-pb-active-action
+  return <section className="pb-discussion-reattach min-w-0 space-y-3" aria-label="Reattach discussion" data-pb-active-action
     onKeyDown={(event) => {
       if (event.key === "Escape" && !busy) {
         event.preventDefault(); invalidate(); setStatus(null);
         if (!pageChanged) setError(null);
         const target = !previewButton.current?.disabled ? previewButton.current :
           !reloadButton.current?.disabled ? reloadButton.current : heading.current;
-        target?.focus();
+        focusDiscussionElement(target);
       }
     }}>
-    <h3 ref={heading} className="text-lg font-semibold" tabIndex={-1} data-pb-action-focus>
+    <h3 ref={heading} className="pb-discussion-heading" tabIndex={-1} data-pb-action-focus>
       {source ? "Select a new passage in the displayed page" : "Select a new passage"}</h3>
-    <p>Select page text, preview it, then confirm the passage before reattaching.</p>
+    <p className="pb-discussion-hint">Select page text, preview it, then confirm the passage before reattaching.</p>
     {sourceReason && <p role={!source && html.isPending ? "status" : "alert"}>{sourceReason}</p>}
     {!source && ready && html.data && <div ref={wrapper} className="min-w-0" data-pb-reattach-source><Prose html={html.data.html} /></div>}
     {disabled && <p>{disabled}</p>}
     {!open && <p>Cancel this action, then reopen the discussion before reattaching.</p>}
-    <button ref={previewButton} type="button" className="pb-discussion-action" disabled={busy || reloading || !ready || sourceBusy || pageChanged || !open || !!disabled}
+    <button ref={previewButton} type="button" className={`pb-discussion-action ${preview ? "pb-discussion-quiet" : "pb-discussion-primary"}`} disabled={busy || reloading || !ready || sourceBusy || pageChanged || !open || !!disabled}
       onClick={() => void prepare()}>{preview || preparing ? "Reselect" : "Preview selected passage"}</button>
     {preparing && <p role="status">Preparing passage preview…</p>}
     {preview && <div className="pb-discussion-evidence space-y-2">
@@ -173,17 +174,17 @@ export function DiscussionReattach({ root, pageId, source, originalQuote, busy, 
       <p className="font-semibold">New passage preview</p>
       {preview.selection === "snapped" && <p role="status" className="font-semibold">Whole block selected</p>}
       <blockquote className="pb-discussion-quote">{preview.quote_text}</blockquote>
-      <button ref={confirmButton} type="button" className="pb-discussion-action" disabled={busy || reloading || confirmed || !ready || sourceBusy || !open || !!disabled}
+      <button ref={confirmButton} type="button" className={`pb-discussion-action ${confirmed ? "pb-discussion-quiet" : "pb-discussion-primary"}`} disabled={busy || reloading || confirmed || !ready || sourceBusy || !open || !!disabled}
         onClick={() => setConfirmed(true)}>{confirmed ? "Passage confirmed" : "Confirm passage"}</button>
     </div>}
     {error && <p role="alert">{error}</p>}
     {status && <p role="status">{status}</p>}
-    <button ref={reloadButton} type="button" className="pb-discussion-action" disabled={busy || sourceBusy || reloading} onClick={() => void reload()}>
+    <button ref={reloadButton} type="button" className="pb-discussion-action pb-discussion-quiet" disabled={busy || sourceBusy || reloading} onClick={() => void reload()}>
       {sourceBusy || reloading ? "Reloading page…" : "Reload page"}</button>
-    <div className="flex flex-wrap gap-2">
-      <button ref={submitButton} type="button" className="pb-discussion-action" disabled={busy || reloading || preparing || !ready || sourceBusy || pageChanged || !open || !!disabled || !confirmed || !preview || !capture || capture.content_hash !== hash}
+    <div className="pb-discussion-composer-footer">
+      <button type="button" className="pb-discussion-action pb-discussion-quiet" disabled={busy} onClick={cancel}>Cancel</button>
+      <button ref={submitButton} type="button" className={`pb-discussion-action ${confirmed ? "pb-discussion-primary" : "pb-discussion-quiet"}`} disabled={busy || reloading || preparing || !ready || sourceBusy || pageChanged || !open || !!disabled || !confirmed || !preview || !capture || capture.content_hash !== hash}
         onClick={() => void reattach()}>Reattach discussion</button>
-      <button type="button" className="pb-discussion-action" disabled={busy} onClick={cancel}>Cancel</button>
     </div>
   </section>;
 }

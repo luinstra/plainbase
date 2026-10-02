@@ -308,7 +308,7 @@ test("maps rendered selections to source block byte ranges", async ({ page }) =>
   });
   expect(tripleClick.text).toContain("banana");
   expect(tripleClick.end).toEqual({ type: 1, offset: 0, name: "P" });
-  await page.getByRole("button", { name: "Comment on selection" }).click();
+  await page.getByRole("button", { name: "New discussion" }).click();
   await expect(page.getByRole("button", { name: "Confirm passage" })).toBeVisible();
 });
 
@@ -350,7 +350,7 @@ test("keeps a real hash in a heading selection while excluding its link", async 
   expect(selected.text).toContain("C# setup");
   expect(selected.text).toContain("The");
   expect(selected.crossesLink).toBe(true);
-  await page.getByRole("button", { name: "Comment on selection" }).click();
+  await page.getByRole("button", { name: "New discussion" }).click();
   await expect(page.getByRole("button", { name: "Confirm passage" })).toBeVisible();
   await expect(page.locator(".pb-discussion-quote")).toContainText("C# setup");
 });

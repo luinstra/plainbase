@@ -20,26 +20,60 @@ export function DiscussionReadError({ error, retry }: { error: Error; retry: () 
   return <div className="pb-discussion-notice" role="alert"><p>{error.message}</p><button type="button" className="pb-discussion-action" onClick={retry}>Retry</button></div>;
 }
 
-export function DiscussionListRows({ root, items, onSelect }: { root: string; items: DiscussionItem[]; onSelect?: (id: string) => void }) {
+export function DiscussionListRows({ root, items, onSelect, pageLocal = false }: {
+  root: string; items: DiscussionItem[]; onSelect?: (id: string) => void; pageLocal?: boolean;
+}) {
   return <ul className="pb-discussion-list">{items.map((item) =>
-    <li key={item.id} className="pb-discussion-card">
+    <li key={item.id} className={pageLocal ? "pb-discussion-list-card" : "pb-discussion-card"}>
       {onSelect ?
-        <button type="button" className="pb-discussion-title" data-pb-discussion-id={item.id} onClick={() => onSelect(item.id)}>{item.page.path ?? item.page.id ?? item.id}</button> :
+        <button type="button" className="pb-discussion-card-link" data-pb-discussion-id={item.id}
+          aria-label={pageLocal && !item.quote && item.state !== "page_level" ? `Discussion ${item.id}: ${stateLabel(item.state)}` : undefined}
+          onClick={() => onSelect(item.id)}>
+          <DiscussionCardContent item={item} pageLocal={pageLocal} />
+        </button> :
         <Link to="/discussions/$root/$id" params={{ root, id: item.id }} className="pb-discussion-title">
           {item.page.path ?? item.page.id ?? item.id}
         </Link>}
-      <DiscussionSummary item={item} root={root} showPreview />
+      {!pageLocal && <DiscussionSummary item={item} root={root} showPreview={!onSelect} />}
     </li>,
   )}</ul>;
 }
 
-export function DiscussionSummary({ item, root, showPreview = false }: { item: DiscussionItem; root: string; showPreview?: boolean }) {
+function DiscussionCardContent({ item, pageLocal }: { item: DiscussionItem; pageLocal: boolean }) {
+  const timestamp = item.updated ?? item.created;
+  return <>
+    {!pageLocal && <span className="pb-discussion-title">{item.page.path ?? item.page.id ?? item.id}</span>}
+    <span className="pb-discussion-card-quote pb-discussion-preview">{item.state === "page_level" ? "About this page" :
+      item.quote || "Discussion details unavailable"}</span>
+    <span className="pb-discussion-meta">
+      {item.starter && <span className="pb-discussion-author">{item.starter.label}{item.starter.kind === "agent" ? " · Agent" : ""}</span>}
+      <span>{item.comment_count} {item.comment_count === 1 ? "comment" : "comments"}</span>
+      {timestamp && <time dateTime={timestamp} title={timestamp}>{formatDiscussionTime(timestamp)}</time>}
+    </span>
+    <DiscussionState item={item} />
+  </>;
+}
+
+export function formatDiscussionTime(iso: string): string {
+  return Number.isNaN(Date.parse(iso)) ? iso : new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+export function DiscussionState({ item }: { item: DiscussionItem }) {
+  return <span className="pb-discussion-state">
+    {item.status === "resolved" && <span>Resolved</span>}
+    {item.state !== "exact" && item.state !== "page_level" && <span>{stateLabel(item.state)}</span>}
+  </span>;
+}
+
+export function DiscussionSummary({ item, root, showPreview = false, showState = true }: {
+  item: DiscussionItem; root: string; showPreview?: boolean; showState?: boolean;
+}) {
   const state = item.state;
   return <div className="min-w-0 space-y-2 text-sm text-muted">
-    <p><strong className="text-ink">{stateLabel(state)}</strong>
+    {showState && <p><strong className="text-ink">{stateLabel(state)}</strong>
       {item.status ? ` · ${item.status === "resolved" ? "Resolved" : "Open"}` : ""}
       {` · ${item.comment_count} ${item.comment_count === 1 ? "comment" : "comments"}`}
-    </p>
+    </p>}
     {showPreview && item.quote && <blockquote className="pb-discussion-quote pb-discussion-preview">{item.quote}</blockquote>}
     {item.starter && <p>Started by {item.starter.label}{item.starter.kind === "agent" ? " · Agent" : ""}</p>}
     {item.created && <p>Created <time dateTime={item.created} title={item.created}>{formatTime(item.created)}</time>
@@ -78,12 +112,14 @@ export function stateLabel(state: DiscussionItem["state"]): string {
   }
 }
 
-export function DiscussionAnchor({ label, anchor, inPanel = false }: { label: string; anchor: DiscussionReadAnchor | null; inPanel?: boolean }) {
+export function DiscussionAnchor({ label, anchor, inPanel = false, showQuote = true }: {
+  label: string; anchor: DiscussionReadAnchor | null; inPanel?: boolean; showQuote?: boolean;
+}) {
   if (!anchor) return null;
   return <section className="pb-discussion-evidence">
     {inPanel ? <h4 className="font-semibold text-ink">{label}</h4> : <h2 className="font-semibold text-ink">{label}</h2>}
     {anchor.kind === "page" ? <p>Page discussion</p> : <>
-      <blockquote className="pb-discussion-quote">{anchor.quote}</blockquote>
+      {showQuote && <blockquote className="pb-discussion-quote">{anchor.quote}</blockquote>}
       {anchor.heading_path.length > 0 && <p>Near {anchor.heading_path.map((part) => part.text).join(" › ")}</p>}
     </>}
     <details><summary>Source evidence</summary>

@@ -6,6 +6,7 @@ import { pageByPathQuery, pageHtmlQuery, sessionQuery, treeQuery } from "../api/
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
 import { PAGE_TEMPLATES } from "../lib/pageTemplates";
 import { createAppRouter } from "../router";
+import { emptyDiscussionList } from "./pageDiscussionFixture";
 
 const MEETING_BODY = PAGE_TEMPLATES.find((t) => t.id === "meeting")!.body;
 
@@ -66,6 +67,7 @@ function renderNew(createResponse: Response, prime: (qc: QueryClient) => void = 
   const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "POST") return createResponse.clone();
     const url = typeof input === "string" ? input : input.toString();
+    if (url === `/api/v1/pages/${NEW_ID}/discussions?root=docs&limit=200`) return jsonResponse(emptyDiscussionList);
     if (url.includes("/pages/by-path/")) return jsonResponse(pageResponse());
     if (new URL(url, "http://x").pathname.endsWith("/html")) return jsonResponse(htmlResponse());
     if (url.includes(`/pages/${NEW_ID}`)) return jsonResponse(pageResponse());
@@ -244,6 +246,7 @@ describe("W6 new-page creation", () => {
       if (init?.method === "POST") return jsonResponse({ id: NEW_ID, url: "/extra/notes/fresh", content_hash: HASH, commit: null }, 201);
       const url = typeof input === "string" ? input : input.toString();
       if (url.endsWith("/api/v1/tree")) return jsonResponse(twoRoots);
+      if (url === `/api/v1/pages/${EXTRA_ID}/discussions?root=extra&limit=200`) return jsonResponse(emptyDiscussionList);
       if (url.includes("/pages/by-path/")) return jsonResponse(extraPage);
       if (new URL(url, "http://x").pathname.endsWith("/html")) return jsonResponse(extraHtml);
       return jsonResponse({ html: "", headings: [] });

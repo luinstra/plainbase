@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
+import { emptyDiscussionList } from "./pageDiscussionFixture";
 
 /**
  * "Edit this page" is gated on the ROOT's `editable` bit, which the tree carries (multi-root C5).
@@ -67,7 +68,12 @@ function renderPage(root: string) {
   queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
   queryClient.setQueryData(pageByPathQuery(`${root}/guides/onboarding`).queryKey, pageResponse(root, url));
   queryClient.setQueryData(pageHtmlQuery(ID, root).queryKey, htmlResponse(root, url));
-  vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })));
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const requested = new URL(String(input), "http://x");
+    if (requested.pathname === `/api/v1/pages/${ID}/discussions` && requested.searchParams.get("root") === root)
+      return Response.json({ ...emptyDiscussionList, discussions_available: root === "docs", reason: root === "docs" ? null : "read_only_root" });
+    throw new Error(`unexpected fetch: ${input}`);
+  }));
   const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: [url] }));
   return render(
     <QueryClientProvider client={queryClient}>

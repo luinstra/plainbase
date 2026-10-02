@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
+import { primePageDiscussionLists } from "./pageDiscussionFixture";
 
 /**
  * `useDeepLinkHighlight` via `Prose`/`PageView` (criteria 6, 9, 10). jsdom has no real
@@ -61,6 +62,7 @@ function renderAt(initialPath: string) {
   const canonical = "/docs/guides/deploy-guide";
   queryClient.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(canonical));
   queryClient.setQueryData(pageHtmlQuery(ID, "docs").queryKey, htmlResponse(canonical));
+  primePageDiscussionLists(queryClient);
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createAppRouter(queryClient, history);
   const view = render(
