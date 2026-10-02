@@ -69,6 +69,11 @@ class AbsenceClassifier(
             ContentRead.ConfirmedAbsent
         }
 
+    fun absenceOfId(root: RootName, id: PageId): ContentRead {
+        val binding = idMap.bindingInRoot(root, id) ?: return ContentRead.ConfirmedAbsent
+        return if (policies.allowsFile(binding.path)) ContentRead.AbsenceUnknown else ContentRead.ConfirmedAbsent
+    }
+
     /**
      * **The gate every id-addressed surface owes, and the shape the 404 lie actually took.** A page MISSING FROM THE
      * SNAPSHOT while the durable index still BINDS it is not a page that does not exist - it is a page the last pass

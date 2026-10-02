@@ -186,7 +186,7 @@ class WireTypeGoldenTest : FunSpec({
                 slug = "shadowed",
                 url = null,
                 title = "Shadowed",
-                html = "<h1 id=\"shadowed\">Shadowed</h1>",
+                html = "<h1 id=\"shadowed\" data-pb-src=\"0-10\">Shadowed</h1>",
                 contentHash = HASH_B,
                 // Top-level commit null (off Git); the citation keeps the non-null CitationDto.commit pin.
                 commit = null,
@@ -315,7 +315,7 @@ class WireTypeGoldenTest : FunSpec({
         "previewResponse" to encoded(
             PreviewResponse.serializer(),
             PreviewResponse(
-                html = "<h1 id=\"deploy-guide\">Deploy Guide</h1>",
+                html = "<h1 id=\"deploy-guide\" data-pb-src=\"0-14\">Deploy Guide</h1>",
                 headings = listOf(HeadingDto(id = "deploy-guide", level = 1, text = "Deploy Guide")),
             ),
         ),

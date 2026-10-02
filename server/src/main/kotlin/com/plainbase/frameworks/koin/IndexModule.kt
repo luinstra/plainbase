@@ -8,6 +8,7 @@ import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
+import com.plainbase.domain.service.PageReindexListener
 import com.plainbase.domain.service.ProposalIdProvider
 import com.plainbase.domain.service.UuidV7ProposalIdProvider
 import com.plainbase.frameworks.runtime.HistoryProviders
@@ -61,6 +62,7 @@ val indexModule = module {
             epochs = get(),
             bindings = get(),
             listeners = getAll(),
+            pageListeners = getAll<PageReindexListener>(),
             searchIndexer = getOrNull(),
         )
     }

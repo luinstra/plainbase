@@ -3,7 +3,9 @@ package com.plainbase.frameworks.git
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.CommitIdentity
+import com.plainbase.domain.history.CommitOutcome
 import com.plainbase.domain.history.FileDiff
+import com.plainbase.domain.history.HistoryChange
 import com.plainbase.domain.history.HistoryProvider
 
 /**
@@ -16,6 +18,13 @@ object NoOpHistoryProvider : HistoryProvider {
     override val enabled: Boolean = false
 
     override fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?): Commit? = null
+
+    override fun commitChanges(
+        changes: List<HistoryChange>,
+        message: String,
+        author: CommitIdentity,
+        committer: CommitIdentity,
+    ): CommitOutcome = CommitOutcome.Committed(null, null)
 
     override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> = emptyMap()
 

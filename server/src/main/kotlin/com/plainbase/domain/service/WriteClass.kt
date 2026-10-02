@@ -5,11 +5,8 @@ import com.plainbase.domain.root.RootName
 /**
  * WHICH kind of write a gate is being asked to authorize (ADR-0011 D6). The [Action] mapping is not
  * one-to-one - [PageEdit] and [AssetWrite] are both EDIT-action writes - so the CLASS is what a
- * per-root policy can discriminate on, and the facade passes the class it means.
- *
- * [gatedByEditable] is the forward constraint: every write class that MUTATES A PAGE is gated by the
- * root's `editable` flag. A future non-page write (a comment, an annotation) adds a class with
- * `gatedByEditable = false` and needs no reshaping of the gate.
+ * per-root policy can discriminate on, and the facade passes the class it means. The discussion gate selects
+ * [Discussion] or [DiscussionPurge] and uses [gatedByEditable] before checking the local-only backend.
  */
 sealed interface WriteClass {
 
@@ -32,6 +29,18 @@ sealed interface WriteClass {
     /** An asset upload into a page's folder - an EDIT of the page it belongs to. */
     data object AssetWrite : WriteClass {
         override val action: Action = Action.EDIT
+        override val gatedByEditable: Boolean = true
+    }
+
+    /** Non-purge discussion mutation. */
+    data object Discussion : WriteClass {
+        override val action: Action = Action.DISCUSS
+        override val gatedByEditable: Boolean = true
+    }
+
+    /** Raw comment purge, with the same editable-root requirement. */
+    data object DiscussionPurge : WriteClass {
+        override val action: Action = Action.PURGE
         override val gatedByEditable: Boolean = true
     }
 }

@@ -8,6 +8,7 @@ import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.DenyReason
+import com.plainbase.domain.service.DiscussionReadFailed
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.frameworks.ktor.CsrfGuard
 import com.plainbase.frameworks.ktor.PrincipalExtraction
@@ -18,6 +19,7 @@ import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdBody
 import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdEnvelope
 import com.plainbase.frameworks.ktor.isSecureContext
 import com.plainbase.frameworks.protocol.CANONICAL_PAGE_ID
+import com.plainbase.frameworks.protocol.DiscussionReadRefused
 import com.plainbase.frameworks.protocol.ErrorBody
 import com.plainbase.frameworks.protocol.ErrorCodes
 import com.plainbase.frameworks.protocol.ErrorEnvelope
@@ -362,6 +364,12 @@ internal suspend inline fun ApplicationCall.guarded(remedy: AmbiguityRemedy = Am
                     ErrorCodes.ROOT_NOT_EDITABLE,
                     "This root is configured read-only (editable = false); page writes are not accepted here",
                 )
+            denied.reason == DenyReason.DISCUSSIONS_UNSUPPORTED ->
+                respondError(
+                    HttpStatusCode.Forbidden,
+                    ErrorCodes.DISCUSSIONS_UNSUPPORTED,
+                    "Discussions are unavailable for object-backed roots",
+                )
             denied.principal is Principal.Anonymous ->
                 respondError(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, "Authentication required")
             else -> respondError(HttpStatusCode.Forbidden, ErrorCodes.FORBIDDEN, "You do not have permission for this action")
@@ -416,6 +424,10 @@ internal suspend inline fun ApplicationCall.guarded(remedy: AmbiguityRemedy = Am
             ),
             HttpStatusCode.Conflict,
         )
+    } catch (refused: DiscussionReadRefused) {
+        respondDiscussionRefusal(refused.status, refused.code)
+    } catch (_: DiscussionReadFailed) {
+        respondDiscussionRefusal(503, ErrorCodes.CONTENT_UNREADABLE)
     }
 }
 

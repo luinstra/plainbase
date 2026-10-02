@@ -25,6 +25,7 @@ import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
+import com.plainbase.domain.service.PageReindexListener
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.ProposalAuthorLabeler
@@ -37,6 +38,7 @@ import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import kotlin.time.Clock
 
 /** The typed construction boundary for the observed server and offline reindex index profiles. */
@@ -70,6 +72,7 @@ internal object IndexRuntimeFactory {
         epochs: ObservationEpoch,
         bindings: BindingLatch,
         listeners: List<IndexBuilder.PublicationListener>,
+        pageListeners: List<PageReindexListener> = emptyList(),
         searchIndexer: SearchIndexer?,
         sourceObserver: (List<IndexBuilder.Source>, Set<RootName>, (RootName) -> Int) -> Unit = noSourceObserver,
     ): ObservedIndexRuntime {
@@ -86,6 +89,7 @@ internal object IndexRuntimeFactory {
             epochs = epochs,
             bindings = bindings,
             listeners = listeners,
+            pageListeners = pageListeners,
             searchIndexer = searchIndexer,
             sourceObserver = sourceObserver,
         )
@@ -128,6 +132,7 @@ internal object IndexRuntimeFactory {
         epochs = ObservationEpoch(NoRetirements, RootConvergence()),
         bindings = BindingLatch(NoTopology),
         listeners = listOf(IndexBuilder.PublicationListener(support.checkpoint::replaceFrom)),
+        pageListeners = emptyList(),
         searchIndexer = searchIndexer,
         sourceObserver = sourceObserver,
     )
@@ -145,6 +150,7 @@ internal object IndexRuntimeFactory {
         epochs: ObservationEpoch,
         bindings: BindingLatch,
         listeners: List<IndexBuilder.PublicationListener>,
+        pageListeners: List<PageReindexListener>,
         searchIndexer: SearchIndexer?,
         sourceObserver: (List<IndexBuilder.Source>, Set<RootName>, (RootName) -> Int) -> Unit,
     ): IndexBuilder {
@@ -174,6 +180,7 @@ internal object IndexRuntimeFactory {
             rootRank = rootRank,
             registeredRoots = registeredRoots,
             listeners = listeners,
+            pageListeners = pageListeners,
             searchIndexer = searchIndexer,
             availability = availability,
             retirements = retirements,
@@ -222,4 +229,5 @@ internal class ServingRuntime(
     val proposalService: ProposalService,
     val proposalLabeler: ProposalAuthorLabeler,
     val agentDirectCommitGlobs: List<CommitGlob>,
+    val discussionFacade: DiscussionTransportFacade? = null,
 )

@@ -3,6 +3,7 @@ package com.plainbase.frameworks.filesystem
 import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.discussion.isReservedTopSegment
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
@@ -141,6 +142,7 @@ private fun structurallyAllowed(
     !pathUnder(path, excludedPaths) &&
         !pathOrAncestorMatches(path, excludePatterns) &&
         path.segments.none { it == ".git" } &&
+        path.segments.firstOrNull()?.let(::isReservedTopSegment) != true &&
         path.segments.none { it.startsWith(".") && !authorizedDotPath(path, includePrefixes) } &&
         !pathOrAncestorMatches(path, ignoreRules::isGlobIgnored)
 
@@ -166,7 +168,7 @@ private fun TreePath.prefixes(): Sequence<TreePath> =
 private fun <T> List<T>.hasPrefix(prefix: List<T>): Boolean =
     size >= prefix.size && subList(0, prefix.size) == prefix
 
-private fun literalPrefix(pattern: String): List<String> {
+internal fun literalPrefix(pattern: String): List<String> {
     val segments = pattern.split('/')
     val prefix = mutableListOf<String>()
     for (segment in segments) {

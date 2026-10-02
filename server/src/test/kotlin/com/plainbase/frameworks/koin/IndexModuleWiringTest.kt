@@ -1,7 +1,10 @@
 package com.plainbase.frameworks.koin
 
 import app.cash.sqldelight.db.SqlDriver
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.discussion.DiscussionPageSource
+import com.plainbase.domain.discussion.PageRef
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.repository.ProposalOperation
@@ -16,10 +19,15 @@ import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.AbsenceClassifier
+import com.plainbase.domain.service.ContentWriteMonitor
+import com.plainbase.domain.service.DiscussionFacade
+import com.plainbase.domain.service.DiscussionWriter
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
+import com.plainbase.domain.service.PageReindexListener
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.ProposalAuthorLabeler
@@ -52,6 +60,48 @@ import kotlin.time.Instant
 
 /** Verifies index-only resolution and the serving projection's shared runtime provenance. */
 class IndexModuleWiringTest : FunSpec({
+
+    test("IndexModule passes page reindex listeners") {
+        withTempTree(seed = { root -> writePage(root, "docs/reindex.md", "# Reindex\n\nlistener wiring\n") }) { root ->
+            withTempTree(seed = {}) { dataDir ->
+                val config = ConfigLoader.fromEnv(
+                    mapOf("CONTENT_DIR" to root.toString(), "DATA_DIR" to dataDir.toString()),
+                )
+                val openers = ServerOpeners()
+                val inputs = prepareRootBootInputs(config, openers.openLocal)
+                val owner = ServerResourceOwner()
+                val observed = mutableListOf<Pair<RootName, String>>()
+                val listener = PageReindexListener { pageRoot, page -> observed += pageRoot to page.id.value }
+                val app = createOwnedTestKoinApplication(
+                    owner,
+                    listOf(
+                        module {
+                            single { config }
+                            single<PageReindexListener> { listener }
+                        },
+                        createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                        repositoryModule(owner),
+                        securityModule,
+                        createHistoryModule(config, inputs.history, owner),
+                        indexModule,
+                        module { single<SqlDriver> { DatabaseFactory.createInMemoryDriver() } },
+                    ),
+                )
+                try {
+                    inputs.signals.arm(app.koin.get<ObservationEpoch>()::broke)
+                    val builder = app.koin.get<IndexBuilder>()
+                    val snapshot = builder.rebuild()
+                    val expected = snapshot.pages.single { it.path == TreePath.require("docs/reindex.md") }
+
+                    builder.reindex(RootedPath(RootName.PRIMARY, expected.path))
+
+                    observed shouldBe listOf(RootName.PRIMARY to expected.id.value)
+                } finally {
+                    owner.close()
+                }
+            }
+        }
+    }
 
     test("the production module set resolves IndexBuilder (indexModule is installed)") {
         val config = ConfigLoader.fromEnv(emptyMap())
@@ -100,6 +150,7 @@ class IndexModuleWiringTest : FunSpec({
                         module { single<IdProvider> { deterministicIds } },
                         checkpointModule,
                         searchModule(owner),
+                        createDiscussionModule(owner),
                         createRestModule(
                             resourceOwner = owner,
                             onServingRuntimeCollected = collected::add,
@@ -118,6 +169,10 @@ class IndexModuleWiringTest : FunSpec({
                         RootName.PRIMARY,
                         PageId.require("01900000-0000-7000-8000-000000000001"),
                     )
+                    val planted = PageRef(seeded.id, TreePath.require("planted/marker-path.md"))
+                    val discussionPage = app.koin.get<DiscussionPageSource>().read(seeded.root, planted)
+                        .shouldBeInstanceOf<ContentRead.Bytes>()
+                    discussionPage.bytes.decodeToString() shouldBe "# Runtime\n\nserving graph\n"
 
                     val context = app.koin.get<RouteContext>()
                     app.koin.get<RouteContext>() shouldBeSameInstanceAs context
@@ -146,6 +201,13 @@ class IndexModuleWiringTest : FunSpec({
                     serving.resolver shouldBeSameInstanceAs app.koin.get<PageRootResolver>()
                     serving.proposalService shouldBeSameInstanceAs app.koin.get<ProposalService>()
                     serving.proposalLabeler shouldBeSameInstanceAs app.koin.get<ProposalAuthorLabeler>()
+                    serving.discussionFacade shouldBeSameInstanceAs app.koin.get<DiscussionFacade>()
+                    context.discussions shouldBeSameInstanceAs serving.discussionFacade
+                    val monitor = app.koin.get<ContentWriteMonitor>()
+                    DiscussionWriter::class.java.getDeclaredField("monitor").apply { isAccessible = true }
+                        .get(app.koin.get<DiscussionWriter>()) shouldBeSameInstanceAs monitor
+                    WritePipeline::class.java.getDeclaredField("monitor").apply { isAccessible = true }
+                        .get(serving.writePipeline) shouldBeSameInstanceAs monitor
                     context.registry shouldBeSameInstanceAs serving.index.registry
                     context.availability shouldBeSameInstanceAs serving.index.availability
                     context.convergence shouldBeSameInstanceAs serving.index.convergence

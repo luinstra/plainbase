@@ -109,6 +109,9 @@ class IndexBuilderFixtureTest : FunSpec({
                     renders.merge(sourcePath.value, 1, Int::plus)
                     return delegate.render(sourcePath, source)
                 }
+
+                override fun renderFragment(sourcePath: TreePath, markdown: String): String =
+                    delegate.renderFragment(sourcePath, markdown)
             }
         }
 

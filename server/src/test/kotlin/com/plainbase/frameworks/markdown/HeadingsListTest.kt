@@ -1,11 +1,11 @@
 package com.plainbase.frameworks.markdown
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.page.Heading
 import com.plainbase.domain.service.FixtureIndexStub
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.shouldBe
 import java.nio.file.Files
 
 /**
@@ -21,11 +21,11 @@ class HeadingsListTest : FunSpec({
     test("deploy-guide.md headings: document order, levels, and PB-SLUG-1 ids") {
         val rel = "guides/deploy-guide.md"
         val page = renderer.render(TreePath.require(rel), Files.readAllBytes(Fixtures.demoDocs.resolve(rel)))
-        page.headings shouldContainExactly listOf(
-            Heading(id = "deploy-guide", level = 1, text = "Deploy Guide"),
-            Heading(id = "prerequisites", level = 2, text = "Prerequisites"),
-            Heading(id = "rolling-deploy", level = 2, text = "Rolling deploy"),
-            Heading(id = "rollback", level = 2, text = "Rollback"),
+        page.headings.map { Triple(it.id, it.level, it.text) } shouldContainExactly listOf(
+            Triple("deploy-guide", 1, "Deploy Guide"),
+            Triple("prerequisites", 2, "Prerequisites"),
+            Triple("rolling-deploy", 2, "Rolling deploy"),
+            Triple("rollback", 2, "Rollback"),
         )
     }
 
@@ -33,8 +33,10 @@ class HeadingsListTest : FunSpec({
         // Inline markup, a code span, and a link — §A1 keeps their TEXT, drops the delimiters/URL.
         val markdown = "# Use `git status` with **bold** and [a link](https://x.test)\n"
         val page = renderer.render(TreePath.require("notes/just-text.md"), markdown.toByteArray())
-        page.headings shouldContainExactly listOf(
-            Heading(id = "use-git-status-with-bold-and-a-link", level = 1, text = "Use git status with bold and a link"),
+        page.headings.map { Triple(it.id, it.level, it.text) } shouldContainExactly listOf(
+            Triple("use-git-status-with-bold-and-a-link", 1, "Use git status with bold and a link"),
         )
+        page.headings.single().byteStart shouldBe 0
+        page.headings.single().byteEnd shouldBe 61
     }
 })

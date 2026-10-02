@@ -65,6 +65,74 @@ function renderShell(primeTree: boolean, seeded: TreeResponse = tree, at: string
 afterEach(() => vi.unstubAllGlobals());
 
 describe("the chrome New action", () => {
+  it("keeps the discussion chooser rootless", async () => {
+    const view = renderShell(true, tree, "/discussions");
+    const action = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(action.getAttribute("href")).toBe("/new");
+    expect(view.container.querySelector("[data-pb-discussions-nav]")).toBeNull();
+  });
+
+  it("pins New to an extra-root discussion and disables it for an unknown named root", async () => {
+    const view = renderShell(true, tree, "/discussions/handbook/thread");
+    const action = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(action.getAttribute("href")).toBe("/new?root=handbook");
+    view.unmount();
+    const unknown = renderShell(true, tree, "/discussions/nosuchroot/thread");
+    const disabled = await waitFor(() => {
+      const el = unknown.container.querySelector("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(disabled.hasAttribute("disabled")).toBe(true);
+  });
+  it.each(["/discussions/handbook/", "/discussions/handbook/thread/", "/discussions/handbook/thread/deeper"])(
+    "keeps the named root on a rejected discussion address at %s",
+    async (address) => {
+      const view = renderShell(true, tree, address);
+      const action = await waitFor(() => {
+        const el = view.container.querySelector("[data-pb-new-page]");
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      expect(action.getAttribute("href")).toBe("/new?root=handbook");
+      await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    },
+  );
+  it("does not fall back to primary on a rejected unknown discussion root", async () => {
+    const view = renderShell(true, tree, "/discussions/nosuchroot/thread/deeper");
+    const action = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(action.tagName).toBe("BUTTON");
+    expect(action.hasAttribute("disabled")).toBe(true);
+    await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+  it.each(["/discussions/handbook%2Fdocs/thread", "/discussions/handbook%ZZ/thread"])(
+    "keeps New disabled for an invalid named discussion root at %s",
+    async (address) => {
+      const view = renderShell(true, tree, address);
+      const action = await waitFor(() => {
+        const el = view.container.querySelector("[data-pb-new-page]");
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      expect(action.tagName).toBe("BUTTON");
+      expect(action.hasAttribute("disabled")).toBe(true);
+      expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull();
+    },
+  );
   it("carries the current root once the tree has resolved", async () => {
     const view = renderShell(true);
     const action = await waitFor(() => {

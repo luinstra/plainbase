@@ -1,0 +1,20 @@
+{
+  "discussions": [{
+    "id": "{{discussion_id}}",
+    "page": {"id": "{{page_id}}", "path": "guide/example.md", "resolution": "by_id"},
+    "status": "open",
+    "state": "page_level",
+    "reason": null,
+    "range": null,
+    "candidates": null,
+    "placement": null,
+    "quote": null,
+    "comment_count": 1,
+    "starter": {"key": "{{author_key}}", "kind": "anonymous", "label": "anonymous"},
+    "created": "2026-09-28T12:00:00.000Z",
+    "updated": "2026-09-28T12:00:00.000Z"
+  }],
+  "next": null,
+  "discussions_available": true,
+  "reason": null
+}

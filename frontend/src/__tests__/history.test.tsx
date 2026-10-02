@@ -6,6 +6,7 @@ import { pageByPathQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { CommitDto, PageResponse, TreeResponse } from "../api/types";
 import { MAX_DIFF_RENDER_CHARS } from "../lib/unifiedDiff";
 import { createAppRouter } from "../router";
+import { emptyDiscussionList } from "./pageDiscussionFixture";
 
 const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 
@@ -106,7 +107,12 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("W7 history affordance (read view, MF-1)", () => {
   it("the history affordance is gated on commit, not a history fetch", async () => {
-    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => (urlOf(input).includes("/html") ? htmlResponse() : jsonResponse({ html: "", headings: [] })));
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = urlOf(input);
+      if (url === `/api/v1/pages/${ID}/discussions?root=docs&limit=200`) return jsonResponse(emptyDiscussionList);
+      if (url.includes("/html")) return htmlResponse();
+      throw new Error(`unexpected fetch: ${url}`);
+    });
     vi.stubGlobal("fetch", fetchSpy);
 
     // commit:null → no affordance, and the read view NEVER fetches /history.
@@ -128,6 +134,7 @@ describe("W7 history affordance (read view, MF-1)", () => {
     const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
       const url = urlOf(input);
       if (url.includes("/history")) return jsonResponse({ git_enabled: false, commits: [] });
+      if (url === `/api/v1/pages/${ID}/discussions?root=docs&limit=200`) return jsonResponse(emptyDiscussionList);
       if (url.includes("/html")) return htmlResponse();
       return jsonResponse({ html: "", headings: [] });
     });
@@ -435,6 +442,7 @@ describe("W7 history view (?mode=history)", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = urlOf(input);
         if (url.includes("/history")) return jsonResponse({ git_enabled: true, commits: [] });
+        if (url === `/api/v1/pages/${ID}/discussions?root=docs&limit=200`) return jsonResponse(emptyDiscussionList);
         if (url.includes("/html")) return htmlResponse();
         return jsonResponse({ html: "", headings: [] });
       }),

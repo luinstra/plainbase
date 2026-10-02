@@ -59,6 +59,8 @@
 
 /* ---- base ---------------------------------------------------------------------------- */
 
+html { scrollbar-gutter: stable; }
+
 body {
   background: var(--pb-surface);
   color: var(--pb-text);
@@ -131,6 +133,108 @@ body {
 }
 
 /* ---- prose (.pb-prose is a stable selector; markup comes from the server renderer) ---- */
+
+/* Discussions are separate from page prose: server comment fragments get only these
+   presentation rules, never heading anchors, syntax traversal, or page TOC behavior. */
+.pb-discussions, .pb-discussion-panel { overflow-wrap: anywhere; }
+.pb-discussion-list { display: grid; gap: 0.625rem; padding: 0; list-style: none; }
+.pb-discussion-card, .pb-discussion-evidence, .pb-discussion-notice {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--pb-border);
+  border-radius: 0.5rem;
+  background: var(--pb-surface-raised);
+}
+.pb-discussion-title { display: block; margin-bottom: 0.5rem; color: var(--pb-link); font-weight: 600; text-align: left; }
+.pb-discussion-title:hover { color: var(--pb-link-hover); text-decoration: underline; }
+.pb-discussion-action {
+  display: inline-block; padding: 0.25rem 0.5rem; border: 1px solid var(--pb-border);
+  border-radius: 0.25rem; background: var(--pb-surface); color: var(--pb-text); font-size: 0.75rem; line-height: 1.4; font-weight: 550;
+}
+.pb-discussion-action:hover:not(:disabled) { background: var(--pb-surface-hover); }
+.pb-discussion-action:disabled { opacity: 0.6; cursor: not-allowed; }
+.pb-discussion-primary { background: var(--pb-accent-soft); border-color: transparent; color: var(--pb-link); }
+.pb-discussion-primary:hover:not(:disabled) { background: var(--pb-accent-soft); border-color: var(--pb-accent); color: var(--pb-link-hover); }
+.pb-discussion-quiet { border-color: transparent; background: transparent; color: var(--pb-text-muted); }
+.pb-discussion-danger { color: var(--pb-danger); }
+.pb-discussion-danger:hover:not(:disabled) { background: var(--pb-danger-soft); }
+.pb-discussion-action:focus-visible, .pb-discussion-actions summary:focus-visible, .pb-discussion-card-link:focus-visible,
+.pb-discussion-history summary:focus-visible, .pb-discussion-action-hint:focus-visible { outline: 2px solid var(--pb-focus-ring); outline-offset: 3px; }
+.pb-discussion-margin-header, .pb-discussion-toolbar, .pb-discussion-thread-header, .pb-discussion-comment-header {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem;
+}
+.pb-discussion-margin-header { margin: 0.75rem 0 0.875rem; }
+.pb-discussion-margin-header .pb-rail-head { margin: 0; }
+.pb-discussion-margin-header .pb-discussion-action { padding: 0.2rem 0.4rem; font-size: 0.75rem; }
+.pb-discussion-list-toolbar > .pb-discussion-quiet { padding-left: 0; margin-top: 0.4rem; }
+.pb-discussion-hint { font-size: 0.75rem; line-height: 1.55; color: var(--pb-text-muted); }
+.pb-discussion-list-card { min-width: 0; border-radius: 0.5rem; background: var(--pb-surface-raised); }
+.pb-discussion-card-link { display: block; width: 100%; padding: 0.875rem; text-align: left; border-radius: inherit; }
+.pb-discussion-card-link:hover { background: var(--pb-surface-hover); }
+.pb-discussion-card-quote { color: var(--pb-text); font-size: 0.9375rem; line-height: 1.5; margin-bottom: 0.65rem; white-space: pre-wrap; }
+.pb-discussion-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem; font-size: 0.75rem; line-height: 1.6; color: var(--pb-text-muted); }
+.pb-discussion-author { color: var(--pb-text); font-weight: 600; }
+.pb-discussion-state { display: flex; flex-wrap: wrap; gap: 0.5rem; color: var(--pb-text-muted); font-size: 0.75rem; line-height: 1.5; }
+.pb-discussion-state:empty { display: none; }
+.pb-discussion-card-link .pb-discussion-state:not(:empty) { margin-top: 0.4rem; }
+.pb-discussion-empty { padding: 1.5rem 0.75rem; text-align: center; color: var(--pb-text-muted); font-size: 0.8125rem; line-height: 1.6; }
+.pb-discussion-empty svg { width: 1.75rem; height: 1.75rem; margin: 0 auto 0.75rem; color: var(--pb-accent); }
+.pb-discussion-heading { font-size: 0.9375rem; font-weight: 650; color: var(--pb-text); }
+.pb-discussion-empty .pb-discussion-heading { margin-bottom: 0.35rem; }
+.pb-discussion-thread-title { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.625rem; }
+.pb-discussion-thread-status { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; font-size: 0.75rem; color: var(--pb-text-muted); }
+.pb-discussion-eyebrow { font-size: 0.75rem; font-weight: 600; color: var(--pb-text-muted); margin-bottom: 0.5rem; }
+.pb-discussion-context { font-size: 0.875rem; line-height: 1.6; }
+.pb-discussion-context .pb-discussion-hint { margin-top: 0.75rem; }
+.pb-discussion-comment { padding-top: 0.875rem; border-top: 1px solid var(--pb-border); }
+.pb-discussion-comment-header { align-items: flex-start; margin-bottom: 0.625rem; }
+.pb-discussion-comment-header .pb-discussion-meta { flex: 1; min-width: 0; }
+.pb-discussion-actions { position: relative; flex: none; max-width: 100%; font-size: 0.75rem; }
+.pb-discussion-actions > summary { cursor: pointer; list-style: none; color: var(--pb-text-muted); padding: 0.15rem 0.25rem; border-radius: 0.25rem; }
+.pb-discussion-actions > summary::-webkit-details-marker { display: none; }
+.pb-discussion-actions[open] > summary { color: var(--pb-text); }
+.pb-discussion-action-items { position: absolute; right: 0; z-index: 2; width: max-content; max-width: 17rem; display: flex; flex-direction: column; align-items: stretch; gap: 0.25rem; padding: 0.4rem; margin-top: 0.35rem; border: 1px solid var(--pb-border); border-radius: 0.375rem; background: var(--pb-surface-raised); }
+.pb-discussion-actions[data-side="above"] .pb-discussion-action-items { bottom: calc(100% + 0.35rem); margin-top: 0; }
+.pb-discussion-action-items .pb-discussion-action { text-align: left; }
+.pb-discussion-action-hint { position: relative; border-radius: 0.375rem; }
+.pb-discussion-action-hint > button { width: 100%; }
+.pb-discussion-action-hint > button:disabled { pointer-events: none; }
+.pb-discussion-action-tooltip {
+  position: absolute; bottom: 100%; right: 0; z-index: 3; width: max-content; max-width: 15rem;
+  padding: 0.6rem 0.75rem; border: 1px solid var(--pb-border); border-radius: 0.375rem;
+  background: var(--pb-surface); color: var(--pb-text); font-size: 0.75rem; line-height: 1.5;
+  visibility: hidden;
+}
+.pb-discussion-action-tooltip[data-below] { bottom: auto; top: 100%; }
+.pb-discussion-action-hint:hover > .pb-discussion-action-tooltip,
+.pb-discussion-action-hint:focus-within > .pb-discussion-action-tooltip { visibility: visible; }
+.pb-discussion-history { padding-top: 0.875rem; border-top: 1px solid var(--pb-border); font-size: 0.75rem; color: var(--pb-text-muted); }
+.pb-discussion-history summary { cursor: pointer; }
+.pb-discussion-history[open] > div { margin-top: 0.875rem; }
+.pb-discussion-history .pb-discussion-evidence { border: 0; padding: 0; background: transparent; }
+.pb-discussion-composer { min-width: 0; }
+.pb-discussion-composer-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; }
+.pb-discussion-back { padding-left: 0; }
+.pb-discussion-quote { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid var(--pb-blockquote-border); padding-left: 0.75rem; }
+.pb-discussion-quote-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; }
+.pb-discussion-passage-toggle { margin-top: 0.35rem; padding-left: 0; }
+.pb-discussion-textarea { display: block; width: 100%; max-width: 100%; min-height: 8rem; resize: vertical; border: 1px solid var(--pb-border); border-radius: 0.375rem; background: var(--pb-surface); color: var(--pb-text); padding: 0.75rem; }
+.pb-discussion-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.pb-discussion-body { line-height: 1.7; overflow-wrap: anywhere; }
+.pb-discussion-panel .pb-discussions { margin-inline: 0; }
+.pb-discussion-panel .pb-discussion-body { font-size: 0.875rem; }
+.pb-discussion-body > * + * { margin-top: 0.75rem; }
+.pb-discussion-body h1, .pb-discussion-body h2, .pb-discussion-body h3 { font-weight: 650; line-height: 1.3; }
+.pb-discussion-body h1 { font-size: 1.4rem; }
+.pb-discussion-body h2 { font-size: 1.2rem; }
+.pb-discussion-body h3 { font-size: 1.05rem; }
+.pb-discussion-body a { color: var(--pb-link); text-decoration: underline; }
+.pb-discussion-body ul, .pb-discussion-body ol { padding-left: 1.5rem; }
+.pb-discussion-body ul { list-style: disc; }
+.pb-discussion-body ol { list-style: decimal; }
+.pb-discussion-body blockquote { border-left: 3px solid var(--pb-blockquote-border); padding-left: 0.75rem; }
+.pb-discussion-body pre, .pb-discussion-body table { max-width: 100%; overflow-x: auto; }
+.pb-discussion-body code { overflow-wrap: anywhere; }
 
 .pb-prose {
   max-width: 72ch;
@@ -385,6 +489,8 @@ body {
 
 /* heading anchor links (injected client-side) */
 .pb-heading-anchor {
+  user-select: none;
+  -webkit-user-select: none;
   margin-left: 0.4em;
   color: var(--pb-text-faint);
   font-weight: 400;
@@ -702,6 +808,17 @@ body {
  * the head loses its bottom rule. `.pb-rail`, `.pb-rail-card`, `.pb-meta-*`, `.pb-chip`, `.pb-avatar`,
  * `.pb-tag`, `.pb-docfoot` and the `data-pb-rail*` / `data-pb-chip-status` hooks are a public
  * customization API — never rename. The Rail is app chrome and never lives inside `.pb-prose`. */
+.pb-reading-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; }
+.pb-reading-column { max-width: 72ch; }
+.pb-reading-rail { min-width: 0; }
+.pb-margin-discussions { font-size: 1rem; overflow-wrap: anywhere; }
+.pb-margin-discussions [hidden] { display: none; }
+@media (min-width: 1280px) {
+  /* Reserve the same rail on folders, pending/error pages, and every discussion state.
+     The reading slot can be narrower than 72ch at 1280px; prose stays left aligned. */
+  .pb-reading-layout { grid-template-columns: minmax(0, 1fr) clamp(18rem, 22vw, 24rem); }
+  .pb-reading-rail { position: sticky; top: 5rem; align-self: start; max-height: calc(100vh - 6rem); overflow-y: auto; scrollbar-gutter: stable; }
+}
 .pb-rail {
   font-size: 13px;
 }
@@ -937,20 +1054,10 @@ body {
   font-size: 12px;
   color: var(--pb-text-faint);
 }
-.pb-docfoot-edit {
-  display: inline-block;
-  margin-bottom: 12px;
-  font-size: 14px;
-  color: var(--pb-link);
-}
-.pb-docfoot-edit:hover {
-  color: var(--pb-link-hover);
-}
-/* W7 history affordance — a sibling of the edit link, gated on PageResponse.commit (MF-1). */
+/* W7 history affordance, gated on PageResponse.commit (MF-1). */
 .pb-docfoot-history {
   display: inline-block;
   margin-bottom: 12px;
-  margin-left: 16px;
   font-size: 14px;
   color: var(--pb-link);
 }

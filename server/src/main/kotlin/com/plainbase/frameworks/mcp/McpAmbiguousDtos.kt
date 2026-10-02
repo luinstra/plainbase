@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class McpAmbiguousCandidate(val root: String, val id: String)
 
-/** Flat response: each root/id pair is a retry pin for the ambiguous page. */
+/** Flat response: each root/id pair is a retry pin for an ambiguous page or discussion. */
 @Serializable
 data class McpAmbiguousResponse(
     val code: String,

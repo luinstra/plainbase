@@ -76,6 +76,7 @@ class IndexHarness(
     /** Root membership used by durable identity and recovery consumers. */
     val policies: Map<RootName, ContentPathPolicy> =
         rootRegistry.roots.associate { configured -> configured.name to ContentPathPolicy.ALL },
+    val tokenClock: Clock = Clock.System,
 ) : AutoCloseable {
 
     private val driver = DatabaseFactory.createInMemoryDriver()
@@ -101,7 +102,7 @@ class IndexHarness(
     val auditRepository = SqlDelightAuditRepository(database)
     val apiTokenRepository = SqlDelightApiTokenRepository(database)
     val proposalRepository = SqlDelightProposalRepository(database)
-    val apiTokens = ApiTokenService(minter = ApiTokenMinter(), hasher = TokenHasher(), tokens = apiTokenRepository, clock = Clock.System)
+    val apiTokens = ApiTokenService(minter = ApiTokenMinter(), hasher = TokenHasher(), tokens = apiTokenRepository, clock = tokenClock)
 
     // A4a human-auth substrate over the SAME SQLite DB (the v7 schema includes users/sessions/setup_tokens).
     val userRepository = SqlDelightUserRepository(database)
@@ -192,6 +193,7 @@ class IndexHarness(
     fun writePipeline(
         historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _, _ -> null },
         store: ContentStore? = null,
+        monitor: ContentWriteMonitor = ContentWriteMonitor(),
     ): WritePipeline =
         WritePipeline(
             // A [store] override stands in for MAIN's tree (the failing/wrapping stand-in case); every other root
@@ -206,6 +208,7 @@ class IndexHarness(
             availability = availability,
             historyHook = historyHook,
             policies = policies,
+            monitor = monitor,
         )
 
     override fun close() = driver.close()

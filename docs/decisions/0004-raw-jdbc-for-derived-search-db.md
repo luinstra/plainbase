@@ -53,7 +53,7 @@ already-allowlisted xerial sqlite-jdbc driver. The app database remains SQLDelig
 - Raw JDBC means hand-written row mapping and resource handling (`use {}` discipline) for the
   search adapter — acceptable because search.db has no domain types to map and a single owner.
 - Two access idioms in the codebase. The boundary is bright: SQLDelight for durable app state,
-  raw JDBC only for this one derived, deletable database.
+  raw JDBC only for derived, deletable databases (`search.db`, `discussions.db`).
 
 **Reversibility**
 
@@ -68,3 +68,10 @@ the same derived-deletable law now also governs the object-mode `DATA_DIR/mirror
 (R13) a partial/corrupt object-mode `.git` (renamed aside or deleted, then re-restored from the
 bucket-shipped bundle). No change to this ADR's decision; see
 [ADR-0010](0010-object-storage-backend.md).
+
+## Extension (2026-09 discussions)
+
+`DATA_DIR/discussions.db`, the derived index of each root's `.plainbase/discussions/` files, follows the same laws: raw
+JDBC over the xerial driver, WAL, a busy timeout, drop-and-recreate on a schema-version change, no migrations, and
+deletable at any time, because a restart rebuilds it from the files. It is a separate file, so neither database's
+schema reset or writer touches the other.

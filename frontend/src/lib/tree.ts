@@ -224,19 +224,30 @@ export function rootOfUrl(roots: RootTree[], pathname: string): string | null {
 }
 
 /**
- * The root the READER is standing in, from the address alone - root URL ownership OR a rooted
- * `/p/{root}/{id}` permalink. The two sources are disjoint (a permalink is never in a root-content URL space)
- * and the second one is not a nicety: a path-space collision loser has `url = null`, so its permalink is
+ * The root the READER is standing in, from the address alone - root URL ownership, a rooted
+ * `/p/{root}/{id}` permalink, a rooted diagram, or a rooted discussion address. These address spaces
+ * are disjoint. A path-space collision loser has `url = null`, so its permalink is
  * its ONLY address, and reading that location as "no root" is what sent a reader's new page into the primary root
  * from a page that lives somewhere else entirely.
  *
- * A BARE `/p/{id}` still answers null, and must: that address names no root, and the only thing that
- * could supply one is the page response this location has not made. An UNKNOWN root name is answered
- * VERBATIM rather than filtered to null - callers gate on the registry themselves ([rootAcceptsWrites],
+ * A bare `/p/{id}` answers null until a page response supplies its root. The `/discussions` chooser
+ * also answers null because it names no root. An UNKNOWN root name is answered
+ * VERBATIM rather than filtered to null - including a raw invalid discussion segment. Callers gate on the registry themselves ([rootAcceptsWrites],
  * [entryFor]), and their answer for an unknown root is "not writable", which is the right one here too.
  * Filtering would instead hand back "no root", which every caller reads as the primary root.
+ * Discussion root extraction ignores an invalid trailing slash or deeper suffix for the same reason;
+ * the router separately rejects those addresses before fetching content.
  */
 export function rootOfLocation(roots: RootTree[], pathname: string): string | null {
+  const discussion = /^\/discussions\/([^/]+)/.exec(pathname);
+  if (discussion) {
+    try {
+      const root = decodeURIComponent(discussion[1]);
+      return root.includes("/") ? discussion[1] : root;
+    } catch {
+      return discussion[1];
+    }
+  }
   const diagram = parseDiagramPath(pathname);
   if (diagram) return diagram.root;
   const splat = permalinkSplat(pathname);

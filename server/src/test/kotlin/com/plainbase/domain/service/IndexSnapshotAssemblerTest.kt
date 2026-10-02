@@ -262,6 +262,9 @@ class IndexSnapshotAssemblerTest : FunSpec({
                             delegate.render(sourcePath, source).also {
                                 actualRenderCounts[root] = actualRenderCounts.getOrDefault(root, 0) + 1
                             }
+
+                        override fun renderFragment(sourcePath: TreePath, markdown: String): String =
+                            delegate.renderFragment(sourcePath, markdown)
                     }
                 }
                 lateinit var harness: IndexHarness
@@ -383,6 +386,9 @@ class IndexSnapshotAssemblerTest : FunSpec({
                                 renderCounts[key] = renderCounts.getOrDefault(key, 0) + 1
                                 captured.getOrPut(key) { mutableListOf() } += rendered
                             }
+
+                        override fun renderFragment(sourcePath: TreePath, markdown: String): String =
+                            delegate.renderFragment(sourcePath, markdown)
                     }
                 }
                 val sources = listOf(

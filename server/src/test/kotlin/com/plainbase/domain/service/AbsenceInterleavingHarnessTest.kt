@@ -492,6 +492,12 @@ private class HookedHistory(private val delegate: HistoryProvider, private val h
     override fun deletedIn(from: String, to: String): Set<TreePath>? = delegate.deletedIn(from, to)
     override fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?): Commit? =
         delegate.commit(path, bytes, author, committer)
+    override fun commitChanges(
+        changes: List<com.plainbase.domain.history.HistoryChange>,
+        message: String,
+        author: CommitIdentity,
+        committer: CommitIdentity,
+    ): com.plainbase.domain.history.CommitOutcome = delegate.commitChanges(changes, message, author, committer)
     override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> = delegate.lastCommits(paths)
     override fun log(path: TreePath, limit: Int?): List<Commit> = delegate.log(path, limit)
     override fun diff(from: String, to: String, path: TreePath): FileDiff = delegate.diff(from, to, path)
@@ -537,6 +543,12 @@ private class MovingHistory(private val deletes: Boolean) : HistoryProvider {
     override fun deletedIn(from: String, to: String): Set<TreePath> =
         if (deletes) setOf(TreePath.require("notes/rollback.md")) else emptySet()
     override fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?): Commit? = null
+    override fun commitChanges(
+        changes: List<com.plainbase.domain.history.HistoryChange>,
+        message: String,
+        author: CommitIdentity,
+        committer: CommitIdentity,
+    ): com.plainbase.domain.history.CommitOutcome = error("unused in this test")
     override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> = emptyMap()
     override fun log(path: TreePath, limit: Int?): List<Commit> = emptyList()
     override fun diff(from: String, to: String, path: TreePath): FileDiff = FileDiff(from, to, path, "")

@@ -13,6 +13,7 @@ import type { WriteConflictReason } from "../api/types";
 import { frontmatterValue, splitFrontmatter } from "../lib/frontmatter";
 import { insertLink, toggleBold, toggleCode, toggleItalic } from "../lib/markdownCommands";
 import { PAGE_TEMPLATES } from "../lib/pageTemplates";
+import { permalinkOf } from "../lib/permalink";
 import { previewPath } from "../lib/slugPreview";
 import { primaryEntry } from "../lib/tree";
 import { useDebounced } from "../lib/useDebounced";
@@ -20,6 +21,7 @@ import { EditorToolbar } from "./EditorToolbar";
 import { isRootUnavailable, QueryErrorView } from "./ErrorView";
 import { MetaForm } from "./MetaForm";
 import { NotFoundView } from "./NotFound";
+import { PageViewAction } from "./PageActions";
 import { Prose } from "./Prose";
 
 /**
@@ -117,6 +119,7 @@ function Editor({
   initialHash: string;
 }) {
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   const [buffer, setBuffer] = useState(initialBuffer);
   // The latest buffer, readable SYNCHRONOUSLY from an event handler that fires before the next render
@@ -249,8 +252,17 @@ function Editor({
     }
   }
 
+  function viewPage() {
+    if (save.isPending) return;
+    // Metadata inputs can commit on blur immediately before this click. Read the live
+    // buffer, as Save does, so that a just-entered value is included in the discard guard.
+    if (bufferRef.current !== savedBuffer && !window.confirm("Discard unsaved changes and view this page?")) return;
+    router.history.push(initialUrl ?? permalinkOf(root, id));
+  }
+
   return (
     <div className="pb-editor flex min-w-0 flex-1 gap-8" data-pb-editor>
+      <PageViewAction onView={viewPage} disabled={save.isPending} />
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
           <Breadcrumb path={docPath} />

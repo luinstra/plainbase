@@ -263,7 +263,7 @@ const val PROXY_ISSUER = "proxy"
 const val SESSION_COOKIE_NAME = "pb_session"
 
 /** The raw token of an `Authorization: Bearer <token>` header, or null (no header / not a Bearer scheme). */
-private fun ApplicationRequest.bearerToken(): String? {
+internal fun ApplicationRequest.bearerToken(): String? {
     val header = headers["Authorization"]?.trim() ?: return null
     if (!header.regionMatches(0, BEARER_PREFIX, 0, BEARER_PREFIX.length, ignoreCase = true)) return null
     return header.substring(BEARER_PREFIX.length).trim().ifEmpty { null }

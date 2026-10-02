@@ -8,6 +8,9 @@ import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.DenyReason
+import com.plainbase.domain.service.DiscussionReadFailed
+import com.plainbase.domain.service.DiscussionRefusal
+import com.plainbase.domain.service.DiscussionWriteOutcome
 import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ProposeOutcome
 import com.plainbase.domain.service.ReadFacade
@@ -17,6 +20,14 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.protocol.CANONICAL_PAGE_ID
 import com.plainbase.frameworks.protocol.CANONICAL_PROPOSAL_ID
 import com.plainbase.frameworks.protocol.ChangeDetail
+import com.plainbase.frameworks.protocol.DiscussionDetailDto
+import com.plainbase.frameworks.protocol.DiscussionListArguments
+import com.plainbase.frameworks.protocol.DiscussionListDto
+import com.plainbase.frameworks.protocol.DiscussionMutationDto
+import com.plainbase.frameworks.protocol.DiscussionReadRefused
+import com.plainbase.frameworks.protocol.DiscussionRequestInvalid
+import com.plainbase.frameworks.protocol.DiscussionRequestParser
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.protocol.ErrorBody
 import com.plainbase.frameworks.protocol.ErrorCodes
 import com.plainbase.frameworks.protocol.ErrorEnvelope
@@ -47,15 +58,16 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
 private val logger = KotlinLogging.logger {}
+private const val DISCUSSION_UNREADABLE_MESSAGE = "Discussion content is temporarily unreadable; retry shortly"
 
 /**
  * The per-connection MCP [Server] factory (P3): given the connect-time-authenticated [principal], the existing guarded
- * [read] and [proposals] facades, and the configured [roots], register the seven §2.6 tools — each a THIN adapter over
+ * [read], [proposals], and [discussions] facades, and the configured [roots], register eleven tools as thin adapters over
  * those facades, closing the principal over the handler so the A3 choke point (`policy.check*`) runs
  * ONCE inside each facade method exactly as the REST routes invoke it. No second authz path, no new wire DTO: the
- * tools reuse the frozen PB-* DTO mappers + the scoped [RestJson], so the six read/list/get tools are byte-identical
- * to their REST endpoints and `propose_change` is structural-parity (its only divergence is the freshly minted id).
- * Every handler returns through [toolResult]/[catchingErrors]/[errorResult] so NO exception can escape an open SSE
+ * tools reuse shared DTO mappers and [RestJson]; the original six read/list/get tools and new discussion reads share
+ * successful JSON with REST, while `propose_change` mints a fresh id on each transport.
+ * Every handler contains failures in its transport result, so no exception can escape an open SSE
  * stream (a throw after the header flush can't become a clean error).
  */
 fun buildPlainbaseMcpServer(
@@ -63,6 +75,8 @@ fun buildPlainbaseMcpServer(
     read: ReadFacade,
     proposals: ProposalFacade,
     roots: Set<RootName>,
+    discussions: DiscussionTransportFacade?,
+    maxWriteBodyBytes: Long,
 ): Server {
     val server = Server(
         Implementation(name = "plainbase", version = PlainbaseConfig.VERSION),
@@ -153,8 +167,104 @@ fun buildPlainbaseMcpServer(
         }
     }
 
+    server.addTool(McpTools.LIST_DISCUSSIONS, LIST_DISCUSSIONS_DESCRIPTION, listDiscussionsSchema) { request ->
+        catchingDiscussionErrors {
+            val args = DiscussionRequestParser.mcpList(DiscussionRequestParser.mcpPreflight(request.arguments, maxWriteBodyBytes))
+            val facade = checkNotNull(discussions) { "Discussion facade is not wired" }
+            when (args) {
+                is DiscussionListArguments.Page -> discussionRead(args.pageId.value, DiscussionListDto.serializer()) {
+                    facade.pageList(principal, args.pageId, args.root, args.query.cursor, args.query.limit)
+                }
+                is DiscussionListArguments.Root -> discussionRead(args.root.value, DiscussionListDto.serializer()) {
+                    facade.rootList(principal, args.root, args.query.cursor, args.query.limit, args.query.state)
+                }
+            }
+        }
+    }
+
+    server.addTool(McpTools.GET_DISCUSSION, GET_DISCUSSION_DESCRIPTION, getDiscussionSchema) { request ->
+        catchingDiscussionErrors {
+            val args = DiscussionRequestParser.mcpGet(DiscussionRequestParser.mcpPreflight(request.arguments, maxWriteBodyBytes))
+            discussionRead(args.id.value, DiscussionDetailDto.serializer()) {
+                checkNotNull(discussions) { "Discussion facade is not wired" }
+                    .detail(principal, args.id, args.root, args.query.cursor, args.query.limit)
+            }
+        }
+    }
+
+    server.addTool(McpTools.START_DISCUSSION, START_DISCUSSION_DESCRIPTION, startDiscussionSchema) { request ->
+        catchingDiscussionErrors {
+            val args = DiscussionRequestParser.mcpStart(DiscussionRequestParser.mcpPreflight(request.arguments, maxWriteBodyBytes))
+            discussionWrite(args.pageId.value) {
+                checkNotNull(discussions) { "Discussion facade is not wired" }
+                    .start(principal, args.pageId, args.root, args.anchor, args.body)
+            }
+        }
+    }
+
+    server.addTool(McpTools.ADD_COMMENT, ADD_COMMENT_DESCRIPTION, addCommentSchema) { request ->
+        catchingDiscussionErrors {
+            val args = DiscussionRequestParser.mcpComment(DiscussionRequestParser.mcpPreflight(request.arguments, maxWriteBodyBytes))
+            discussionWrite(args.id.value) {
+                checkNotNull(discussions) { "Discussion facade is not wired" }
+                    .comment(principal, args.id, args.root, args.body)
+            }
+        }
+    }
+
     return server
 }
+
+private inline fun catchingDiscussionErrors(body: () -> CallToolResult): CallToolResult =
+    runCatching(body).getOrElse { failure ->
+        when (failure) {
+            is DiscussionRequestInvalid -> errorResult(failure.code, failure.message)
+            is DiscussionReadFailed -> errorResult(ErrorCodes.CONTENT_UNREADABLE, DISCUSSION_UNREADABLE_MESSAGE)
+            else -> mcpFailureResult(failure)
+        }
+    }
+
+private inline fun <T> discussionRead(id: String, serializer: KSerializer<T>, body: () -> T): CallToolResult =
+    try {
+        jsonResult(serializer, body())
+    } catch (refused: DiscussionReadRefused) {
+        discussionRefusalResult(refused.refusal, id)
+    }
+
+private inline fun discussionWrite(id: String, body: () -> DiscussionWriteOutcome): CallToolResult =
+    when (val result = body()) {
+        is DiscussionWriteOutcome.Done -> jsonResult(
+            DiscussionMutationDto.serializer(), DiscussionMutationDto(result.id.value, result.commentId?.value, result.commit),
+        )
+        is DiscussionWriteOutcome.Refused -> discussionRefusalResult(result.refusal, id)
+    }
+
+private fun discussionRefusalResult(refusal: DiscussionRefusal, id: String): CallToolResult =
+    if (refusal.code == ErrorCodes.AMBIGUOUS_PAGE_ID || refusal.code == ErrorCodes.AMBIGUOUS_DISCUSSION_ID) {
+        CallToolResult(
+            content = listOf(
+                TextContent(
+                    RestJson.encodeToString(
+                        McpAmbiguousResponse.serializer(),
+                        McpAmbiguousResponse(
+                            refusal.code, id, refusal.candidateRoots.map { McpAmbiguousCandidate(it.value, id) },
+                            "This id has multiple root candidates; retry with the root argument.",
+                        ),
+                    ),
+                ),
+            ),
+            isError = true,
+        )
+    } else {
+        errorResult(
+            refusal.code,
+            if (refusal.code == ErrorCodes.CONTENT_UNREADABLE) {
+                DISCUSSION_UNREADABLE_MESSAGE
+            } else {
+                "Discussion request refused: ${refusal.code}"
+            },
+        )
+    }
 
 /** The `id` arg parsed via the §A4 canonical page-id shape, or null (a non-canonical id → `invalid_page_id`). */
 private fun io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest.canonicalPageId(): PageId? {
@@ -306,6 +416,8 @@ private fun deniedResult(denied: AccessDenied): CallToolResult = when {
             ErrorCodes.ROOT_NOT_EDITABLE,
             "This root is configured read-only (editable = false); page writes are not accepted here",
         )
+    denied.reason == DenyReason.DISCUSSIONS_UNSUPPORTED ->
+        errorResult(ErrorCodes.DISCUSSIONS_UNSUPPORTED, "Discussions are unavailable for object-backed roots")
     denied.principal is Principal.Anonymous -> errorResult("unauthorized", "Authentication required")
     else -> errorResult("forbidden", "You do not have permission for this action")
 }

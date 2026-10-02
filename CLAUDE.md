@@ -11,9 +11,9 @@ Filesystem-native, agent-native internal docs product. Master plan:
   with the catalog change. CI fails on unrecorded runtime-classpath drift.
 - **Banned outright** (fails resolution, even transitively): Netty, Jackson, Gson, Exposed.
 - Ktor server engine is **CIO only**. Serialization is **kotlinx.serialization only**.
-  The app DB is **SQLDelight only**; `DATA_DIR/search.db` is **raw JDBC over the same
-  xerial driver** per ADR-0004 (derived state, deletable, no migrations — never SQLDelight,
-  never a second driver).
+  The app DB is **SQLDelight only**; `DATA_DIR/search.db` and
+  `DATA_DIR/discussions.db` are **raw JDBC over the same xerial driver** per ADR-0004 (derived state, deletable, no
+  migrations; never SQLDelight, never a second driver).
 - Compute-hungry features (search scoring, future embeddings/OCR) belong in external
   processes (the Meilisearch pattern), never in this binary.
 
@@ -58,7 +58,12 @@ command string. Use these stable `./gradlew :*` invocations instead:
 - `./gradlew :frontend:build` — adds `tsc --noEmit` + `vite build`; run this to catch type errors
   `npmTest` alone misses.
 - `./gradlew :frontend:smokeTest` — Playwright against the real server (downloads Chromium first run;
-  not part of `build`).
+  not part of `build`). The full suite includes headed caret tests; on headless Linux use
+  `xvfb-run -a ./gradlew :frontend:smokeTest`.
+- The discussion auth caret smoke runs headed in `auth-caret`. Run
+  `./gradlew :frontend:smokeTest -PsmokeArgs='discussions-auth.spec.ts --project=auth-caret' --console=plain`. It needs a display;
+  on Linux prefix the command with `xvfb-run -a`. The original review auth smoke stays headless:
+  `./gradlew :frontend:smokeTest -PsmokeArgs='review.spec.ts --project=auth' --console=plain`.
 
 ## Build workflow (how chunks get built)
 

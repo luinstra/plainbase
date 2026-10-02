@@ -29,8 +29,8 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
  * The serialized write pipeline (PB-WRITE-1): the single funnel for a content-mutating
- * save. Every [write] runs under ONE `@Synchronized` monitor (the house [IndexBuilder] idiom, never
- * `@Volatile`); the disk write is a single atomic, disk-authoritative compare-and-swap, and the index
+ * save. Every [write] runs under the shared [ContentWriteMonitor], which page saves and Discussion writes both hold.
+ * The disk write is a single atomic, disk-authoritative compare-and-swap, and the index
  * update is a targeted reindex of the changed page. Pure domain; no framework imports.
  *
  * The critical section, in order:
@@ -70,6 +70,7 @@ class WritePipeline(
     private val availability: RootAvailability,
     private val historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _, _ -> null },
     private val policies: Map<RootName, ContentPathPolicy>,
+    private val monitor: ContentWriteMonitor = ContentWriteMonitor(),
 ) {
 
     /** The shared probe-and-mark rule, over the SAME holder (see [markIfRootGone]). */
@@ -78,8 +79,10 @@ class WritePipeline(
     /** The ONE 404-vs-503 rule (C1), over the SAME durable index this pipeline binds into. Never re-derived here. */
     private val absence = AbsenceClassifier(idMap, policies)
 
-    @Synchronized
-    fun write(@Suppress("UNUSED_PARAMETER") grant: EditGrant, intent: WriteIntent): WriteOutcome {
+    fun write(@Suppress("UNUSED_PARAMETER") grant: EditGrant, intent: WriteIntent): WriteOutcome =
+        monitor.withLock { writeLocked(grant, intent) }
+
+    private fun writeLocked(@Suppress("UNUSED_PARAMETER") grant: EditGrant, intent: WriteIntent): WriteOutcome {
         // [grant] is an unused compile-time witness that PolicyService.checkEdit() ran (A3): the gated mutator
         // CANNOT be reached without a minted grant. The body is unchanged.
         // (0) Edit-classification guard — a rename is rejected, never half-applied.
@@ -151,8 +154,8 @@ class WritePipeline(
      * The critical section mirrors [write]'s write-ahead-then-post-steps shape:
      *  0. **Canonical-URL collision guard**: the prospective page/folder canonical URL,
      *     read against the published snapshot, must not be owned by a DIFFERENT page/folder/live-alias —
-     *     a hit → [WriteOutcome.SlugConflict], NOTHING written. The race safety is the `@Synchronized`
-     *     monitor (shared with [write]): it serializes WHOLE create sequences, so
+     *     a hit → [WriteOutcome.SlugConflict], NOTHING written. The race safety is the shared
+     *     [ContentWriteMonitor], which page saves and Discussion writes both hold: it serializes WHOLE create sequences, so
      *     two concurrent colliding creates can't interleave their check-then-create — the second sees the
      *     first's published rebuild and loses cleanly. (The snapshot read itself is lock-free — an
      *     `AtomicReference.get` of a deeply-immutable index — so this is NOT "read under the rebuild's
@@ -175,8 +178,10 @@ class WritePipeline(
      *     PROPAGATING single-page search upsert surfaces an FTS-sync failure. A post-step throw is
      *     caught → [WriteOutcome.WrittenButUnindexed] (the bytes ARE on disk, the page IS dirty).
      */
-    @Synchronized
-    fun create(@Suppress("UNUSED_PARAMETER") grant: CreateGrant, intent: CreateIntent): WriteOutcome {
+    fun create(@Suppress("UNUSED_PARAMETER") grant: CreateGrant, intent: CreateIntent): WriteOutcome =
+        monitor.withLock { createLocked(grant, intent) }
+
+    private fun createLocked(@Suppress("UNUSED_PARAMETER") grant: CreateGrant, intent: CreateIntent): WriteOutcome {
         // [grant] is an unused compile-time witness that PolicyService.checkCreate() ran (A3). Body unchanged.
         // (0) Canonical-URL collision guard, under the monitor against the fresh snapshot — BEFORE any
         // write or dirty mark, so a no-write conflict never touches the journal at all.
@@ -374,8 +379,9 @@ class WritePipeline(
      * comes back `RootDown`, i.e. the root went away and nothing has marked it yet. Only a genuine deletion
      * under a LIVE root clears.
      */
-    @Synchronized
-    fun reconcileDirtyPages() {
+    fun reconcileDirtyPages() = monitor.withLock { reconcileDirtyPagesLocked() }
+
+    private fun reconcileDirtyPagesLocked() {
         val dirty = dirtyPages.all()
         if (dirty.isEmpty()) return
         logger.info { "reconciling ${dirty.size} dirty page(s) from a prior interrupted save" }

@@ -1,10 +1,13 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ApiError } from "../api/client";
-import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
-import type { PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
+import { pageDiscussionsQuery } from "../api/discussions";
+import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlKey, pageHtmlQuery, pageKey, pageQuery, treeQuery } from "../api/queries";
+import type { DiscussionQuoteRequestAnchor, PageHtmlResponse, PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
+import { focusDiscussionElement } from "../lib/discussionFocus";
+import { useDiscussionSelection } from "../lib/useDiscussionSelection";
 import { parsePermalink, permalinkOf } from "../lib/permalink";
 import {
   folderByUrl,
@@ -21,8 +24,10 @@ import {
 import { Breadcrumbs } from "./Breadcrumbs";
 import { QueryErrorView, RootUnavailableView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
+import { PageEditAction } from "./PageActions";
 import { Prose } from "./Prose";
 import { Toc } from "./Toc";
+import { DiscussionPanel, type PassageRequest } from "./DiscussionPanel";
 
 /**
  * The `/$` canonical route body: resolve the splat through `by-path` (canonical or
@@ -70,13 +75,13 @@ export function DocsPage({ path }: { path: string }) {
   if (page.isError) {
     // A by-path 404 may be a folder's URL prefix — folders aren't in by-path space (ADR-0003).
     if (page.error instanceof ApiError && page.error.isNotFound) return <FolderLanding />;
-    return <PageError error={page.error} />;
+    return <PageError error={page.error} root={rootEntryOfUrl(tree.data?.roots ?? [], pathname)?.root} />;
   }
   // A landing page renders AS its folder (the index content replaces the generated listing); the effect canonicalizes the URL.
   if (landingEntry?.folder.url) return <FolderLanding url={landingEntry.folder.url} />;
   // The by-path response IS the page's PageResponse (frontmatter included) — hand it to the Rail
   // directly so it reads already-loaded metadata with no redundant /api/v1/pages/:id fetch.
-  return <PageContent id={page.data.id} root={page.data.root} page={page.data} />;
+  return <PageContent key={JSON.stringify([page.data.root, page.data.id])} id={page.data.id} root={page.data.root} page={page.data} />;
 }
 
 /**
@@ -104,14 +109,14 @@ export function FolderLanding({ url }: { url?: string }) {
     // url survives, on the synthetic root folder node below). URL ownership is the one thing a down root still tells
     // us - every CONFIGURED root is listed with its url - so ask who owns the address before calling this not-found.
     const owner = rootEntryOfUrl(tree.data.roots, target);
-    if (owner && !owner.available) return <RootUnavailableView root={owner.root} label={rootLabel(owner)} />;
-    return <NotFoundView />;
+    if (owner && !owner.available) return <><RootUnavailableView root={owner.root} label={rootLabel(owner)} /><DiscussionEscape root={owner.root} /></>;
+    return <><NotFoundView /><DiscussionEscape root={owner?.root} /></>;
   }
   // A root that is not serving has an EMPTY subtree on the wire (the server must never ship its stale carried
   // listing), so rendering the folder anyway would draw an empty directory over an outage - "your docs are gone"
   // instead of "this disk is not mounted". The pages under it 503 through their own requests; the folder view has
   // no request to 503, which is exactly why the flag has to be read here.
-  if (!resolved.available) return <RootUnavailableView root={resolved.root} label={rootLabel(resolved)} />;
+  if (!resolved.available) return <><RootUnavailableView root={resolved.root} label={rootLabel(resolved)} /><DiscussionEscape root={resolved.root} /></>;
 
   // The landing renders AT the folder URL — its one canonical home (the index/README's own bare
   // page URL redirects here; see DocsPage). With an index/README the authored content renders as the
@@ -119,14 +124,15 @@ export function FolderLanding({ url }: { url?: string }) {
   // through the sidebar tree. With no index, it's a purely-generated listing — no rail, but the rail
   // column stays reserved so the content width matches a page (see FolderListing).
   const landing = landingPage(resolved.folder);
-  return landing ? <PageContent id={landing.id} root={resolved.root} /> : <FolderListing root={resolved.root} folder={resolved.folder} />;
+  return landing ? <PageContent key={JSON.stringify([resolved.root, landing.id])} id={landing.id} root={resolved.root} /> :
+    <FolderListing root={resolved.root} folder={resolved.folder} />;
 }
 
 /**
  * The purely-generated directory view (no index/README): `_folder.yaml` title (else name) as
  * heading, then the generated listing. `data-pb-folder` marks this rail-less generated view.
  *
- * It has no rail or TOC, but mirrors PageContent's column shell — reading column centered at 72ch,
+ * It has no rail or TOC, but mirrors PageContent's column shell — reading column left aligned at at most 72ch,
  * an (empty) rail column held open beside it — so the content lands at the same width as a page.
  * Without that spacer the listing would bleed full-bleed and jar against every page view.
  */
@@ -139,16 +145,16 @@ function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
   }, [title]);
 
   return (
-    <div className="pb-folder flex gap-12" data-pb-folder>
-      <div className="min-w-0 flex-1">
-        <div className="mx-auto max-w-[72ch]">
+    <div className="pb-folder pb-reading-layout" data-pb-folder>
+      <div className="min-w-0">
+        <div className="pb-reading-column">
           <Breadcrumbs root={root} path={folder.path} title={title} />
           <h1 className="text-3xl font-bold text-ink">{title}</h1>
           <FolderListingGroups root={root} folder={folder} />
         </div>
       </div>
       {/* Rail column reserved (empty) — no rail/TOC here, but the reading column keeps a page's width. */}
-      <div className="hidden w-[clamp(14rem,18vw,20rem)] shrink-0 xl:block" aria-hidden="true" />
+      <div className="hidden xl:block" aria-hidden="true" />
     </div>
   );
 }
@@ -293,13 +299,13 @@ export function PermalinkPage({ splat }: { splat: string }) {
   }, [canonicalUrl, stillHere, router]);
 
   if (page.isPending) return <PagePending />;
-  if (page.isError) return <PermalinkError error={page.error} id={id} />;
+  if (page.isError) return <PermalinkError error={page.error} id={id} root={root} />;
   // The permalink response is the page's PageResponse — hand it to the Rail, no redundant fetch. Still the
   // PARSED root, never the response's: the client acts on the address the reader used. Re-pin the html leg
   // to the root the metadata read NAMED and this view silently resolves an ambiguity the server refuses to -
   // once the id is duplicated, a fresh load of the same bare `/p/{id}` answers 300 while the pinned render
   // shows a page, which is the click-vs-reload split the structural gate exists to close.
-  return <PageContent id={page.data.id} root={root} page={page.data} />;
+  return <PageContent key={JSON.stringify([root, page.data.id])} id={page.data.id} root={root} page={page.data} />;
 }
 
 /**
@@ -310,10 +316,10 @@ export function PermalinkPage({ splat }: { splat: string }) {
  * links are built here, from `permalinkOf` (the same emitter mirror `pageHref` uses - no new URL semantics).
  * NOT the candidates' own `url`s: those are the API retry targets, and would send a reader to JSON.
  */
-function PermalinkError({ error, id }: { error: Error; id: string }) {
+function PermalinkError({ error, id, root }: { error: Error; id: string; root: string | null }) {
   const tree = useQuery(treeQuery);
   const candidates = error instanceof ApiError ? error.candidates : [];
-  if (candidates.length === 0) return <PageError error={error} />;
+  if (candidates.length === 0) return <PageError error={error} root={root} />;
   return (
     <QueryErrorView error={error}>
       <ul className="mt-4 space-y-1" data-pb-candidates>
@@ -325,14 +331,15 @@ function PermalinkError({ error, id }: { error: Error; id: string }) {
           </li>
         ))}
       </ul>
+      <DiscussionEscape root={root} />
     </QueryErrorView>
   );
 }
 
 /**
  * Breadcrumbs + server HTML + doc footer in the main column, with a metadata Rail + TOC in
- * the right rail. HTML is the primary content and gates the view (pending/error → the whole
- * page); the Rail/footer read the page's frontmatter. Callers that already hold the page's
+ * the right rail. HTML gates the reading column; after success the rail and discussion workspace
+ * survive same-page source failures. The Rail/footer read the page's frontmatter. Callers that already hold the page's
  * `PageResponse` (the root-qualified by-path route, the permalink route) pass it in via [seeded], so
  * the Rail reads already-loaded metadata with NO extra `/api/v1/pages/:id` fetch. Only a
  * folder-landing child — which arrives with just a tree-node id — fetches `pageQuery` here, and a
@@ -347,7 +354,36 @@ function PermalinkError({ error, id }: { error: Error; id: string }) {
  * server would refuse to serve on reload.
  */
 function PageContent({ id, root, page: seeded }: { id: string; root: string | null; page?: PageResponse }) {
+  const [discussionOpen, setDiscussionOpen] = useState(true);
+  const discussionBodyId = `pb-page-discussions-${useId()}`;
+  const [passageRequest, setPassageRequest] = useState<PassageRequest | null>(null);
+  const [pageRequest, setPageRequest] = useState<{ nonce: number; id: string; root: string | null } | null>(null);
+  const [selectionHelp, setSelectionHelp] = useState<string | null>(null);
+  const [postingFor, setPostingFor] = useState<{ workspace: string; owner: string } | null>(null);
+  const [actionFor, setActionFor] = useState<{ workspace: string; owner: string } | null>(null);
+  const discussionTrigger = useRef<HTMLButtonElement>(null);
+  const articleWrapper = useRef<HTMLDivElement>(null);
+  const requestNumber = useRef(0);
+  const reloading = useRef<string | null>(null);
   const html = useQuery(pageHtmlQuery(id, root));
+  const lastSource = useRef<{ id: string; root: string | null; hash: string; data: PageHtmlResponse } | null>(null);
+  if (html.isSuccess) lastSource.current = { id, root, hash: html.data.content_hash, data: html.data };
+  const sourceHash = lastSource.current?.id === id && lastSource.current.root === root ? lastSource.current.hash : null;
+  const railSource = sourceHash !== null ? lastSource.current!.data : null;
+  const displayedRoot = railSource?.root ?? root;
+  const workspaceId = JSON.stringify([displayedRoot, id]);
+  const [presentationWorkspace, setPresentationWorkspace] = useState(workspaceId);
+  // A bare permalink keeps its unqualified query keys even when fresh HTML resolves another root.
+  // Reset before rendering the new keyed panel so old requests cannot activate it or steal focus.
+  if (presentationWorkspace !== workspaceId) {
+    setPresentationWorkspace(workspaceId);
+    setDiscussionOpen(true); setSelectionHelp(null); setPassageRequest(null); setPageRequest(null);
+    setPostingFor(null); setActionFor(null);
+  }
+  const { capture, captureIfSelected, reset: resetSelection } = useDiscussionSelection(
+    articleWrapper, workspaceId, html.data?.content_hash ?? null, html.isSuccess,
+  );
+  const queryClient = useQueryClient();
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
   const fetched = useQuery({ ...pageQuery(id, root), enabled: seeded === undefined });
   const page = seeded ?? fetched.data;
@@ -356,39 +392,132 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   // reason: the alternative is an editor session that can only end in a 403 (or a 503) at save.
   const tree = useQuery(treeQuery);
   const editable = rootAcceptsWrites(tree.data?.roots, html.data?.root ?? null);
+  const rootEntry = tree.data?.roots.find((entry) => entry.root === displayedRoot);
+  const knownUnsupported = !!rootEntry && (!rootEntry.available || !rootEntry.editable);
+  // Observe an existing page-list answer without fetching solely to decide whether to offer creation.
+  const discussions = useInfiniteQuery({ ...pageDiscussionsQuery(displayedRoot ?? "", id), enabled: false });
+  const canStartDiscussion = !knownUnsupported && discussions.data?.pages[0]?.discussions_available !== false;
 
   const title = html.data?.title;
   useEffect(() => {
     if (title) document.title = `${title} · Plainbase`;
   }, [title]);
 
-  if (html.isPending) return <PagePending />;
-  if (html.isError) return <PageError error={html.error} />;
+  useEffect(() => {
+    setPassageRequest(null);
+  }, [html.data?.content_hash]);
 
+  function startDiscussion(requireSelection = false) {
+    if (posting || activeAction || !html.isSuccess || html.isFetching || !canStartDiscussion) return;
+    const captured = requireSelection ? capture() : captureIfSelected(true);
+    if (captured === null) {
+      discussWholePage();
+      return;
+    }
+    if ("reason" in captured) {
+      setSelectionHelp(captured.reason);
+      return;
+    }
+    if (new TextEncoder().encode(captured.selected_text).length > 16_384) {
+      setSelectionHelp("That passage is too long. Select less text or discuss the whole page.");
+      return;
+    }
+    setSelectionHelp(null);
+    setPassageRequest({ nonce: ++requestNumber.current, root: html.data!.root, pageId: id, anchor: captured as DiscussionQuoteRequestAnchor });
+    resetSelection();
+  }
+
+  function discussWholePage() {
+    if (posting || activeAction || !html.isSuccess || html.isFetching || !canStartDiscussion) return;
+    resetSelection();
+    setSelectionHelp(null); setPassageRequest(null);
+    setPageRequest({ nonce: ++requestNumber.current, id, root: displayedRoot });
+  }
+
+  async function reloadPage(): Promise<boolean> {
+    if (posting || reloading.current === workspaceId) return false;
+    reloading.current = workspaceId;
+    const jobs = [
+      queryClient.invalidateQueries({ queryKey: pageHtmlKey(id), predicate: (query) => query.queryKey[3] === root }, { throwOnError: true }),
+      queryClient.invalidateQueries({ queryKey: pageKey(id), predicate: (query) => query.queryKey[3] === root }, { throwOnError: true }),
+      queryClient.invalidateQueries({ queryKey: ["page", "by-path"], predicate: (query) => {
+        const cached = query.state.data as PageResponse | undefined;
+        return cached?.id === id && (root === null || cached.root === root);
+      } }, { throwOnError: true }),
+    ];
+    try {
+      const results = await Promise.allSettled(jobs);
+      return results.every((result) => result.status === "fulfilled") && queryClient.getQueryState(pageHtmlQuery(id, root).queryKey)?.status === "success";
+    } finally {
+      if (reloading.current === workspaceId) reloading.current = null;
+    }
+  }
+
+  const posting = postingFor?.workspace === workspaceId;
+  const activeAction = actionFor?.workspace === workspaceId;
+  function focusDiscussionAction() {
+    const panel = document.getElementById(discussionBodyId);
+    requestAnimationFrame(() => {
+      focusDiscussionElement(panel?.querySelector<HTMLElement>("[data-pb-active-action] textarea") ??
+        panel?.querySelector<HTMLElement>("[data-pb-action-focus]") ?? panel?.querySelector<HTMLElement>("textarea"));
+    });
+  }
+  const retainedPanel = sourceHash !== null && displayedRoot !== null;
   const frontmatter = page?.frontmatter;
+  const rail = <aside className="pb-rail pb-reading-rail" data-pb-rail>
+    {railSource && <DocRail frontmatter={frontmatter} path={railSource.path} />}
+    {retainedPanel && <section className="pb-margin-discussions" aria-label="Discussions">
+      <div className="pb-discussion-margin-header">
+        <h2 className="pb-rail-head">Discussions</h2>
+        <button ref={discussionTrigger} type="button" className="pb-discussion-action pb-discussion-quiet" data-pb-discussions-toggle
+          aria-label={discussionOpen ? "Hide discussions" : "Show discussions"}
+          aria-expanded={discussionOpen} aria-controls={discussionBodyId} onClick={() => {
+            setDiscussionOpen((open) => !open);
+            if (discussionOpen) discussionTrigger.current?.focus(); else focusDiscussionAction();
+          }}>{discussionOpen ? "Hide" : "Show"}</button>
+      </div>
+      <div id={discussionBodyId} hidden={!discussionOpen}>
+        {selectionHelp && canStartDiscussion && <p role="alert" className="pb-discussion-notice mb-4">{selectionHelp}
+          <button type="button" className="pb-discussion-action ml-2"
+            disabled={posting || activeAction || !html.isSuccess || html.isFetching}
+            onClick={discussWholePage}>Discuss the whole page instead</button>
+        </p>}
+        <DiscussionPanel key={workspaceId} root={displayedRoot} pageId={id}
+          onStart={() => startDiscussion()}
+          startDisabled={posting || activeAction || !html.isSuccess || html.isFetching || !canStartDiscussion}
+          sourceHash={sourceHash} sourceReady={html.isSuccess} sourceBusy={html.isFetching}
+          pageRequestNonce={pageRequest?.id === id && pageRequest.root === displayedRoot ? pageRequest.nonce : 0}
+          request={passageRequest?.root === displayedRoot && passageRequest.pageId === id && passageRequest.anchor.content_hash === html.data?.content_hash ? passageRequest : null}
+          onReselect={() => startDiscussion(true)} onReload={reloadPage}
+          onPostingChange={(busy, owner) => setPostingFor((current) => busy ? { workspace: workspaceId, owner } : current?.owner === owner ? null : current)}
+          onActionChange={(active, owner) => setActionFor((current) => active ? { workspace: workspaceId, owner } : current?.owner === owner ? null : current)}
+          source={{ root: displayedRoot, pageId: id, hash: html.data?.content_hash ?? null,
+            ready: html.isSuccess && html.data?.id === id && html.data?.root === displayedRoot, busy: html.isFetching,
+            capture: () => html.isFetching ? { reason: "Wait for the page to finish loading before selecting a passage." } : capture(true),
+            resetSelection, reload: reloadPage }}
+        />
+      </div>
+    </section>}
+    {railSource && <div className="hidden xl:block"><Toc headings={railSource.headings} /></div>}
+  </aside>;
+
   return (
-    <div className="flex gap-12">
-      {/* The reading column takes the middle and centers at a readable width; the side columns
-          (sidebar + this rail) grow/shrink with the window up to their clamp caps. */}
-      <div className="min-w-0 flex-1">
-        <div className="mx-auto max-w-[72ch]">
-          <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
-          <Prose html={html.data.html} />
-          <DocFooter
-            frontmatter={frontmatter}
-            url={page?.url ?? null}
-            editable={editable}
-            hasHistory={(page?.commit ?? null) !== null}
-          />
+    <div className="pb-reading-layout">
+      <div className="min-w-0">
+        <div className="pb-reading-column">
+          {html.isPending ? <PagePending /> : html.isError ? <PageError error={html.error} root={root} /> : <>
+            <PageEditAction url={page?.url ?? null} editable={editable} />
+            <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
+            <div ref={articleWrapper} data-pb-page-article><Prose html={html.data.html} /></div>
+            <DocFooter
+              frontmatter={frontmatter}
+              url={page?.url ?? null}
+              hasHistory={(page?.commit ?? null) !== null}
+            />
+          </>}
         </div>
       </div>
-      <aside
-        className="pb-rail sticky top-20 hidden max-h-[calc(100vh-6rem)] w-[clamp(14rem,18vw,20rem)] shrink-0 overflow-y-auto xl:block"
-        data-pb-rail
-      >
-        <DocRail frontmatter={frontmatter} path={html.data.path} />
-        <Toc headings={html.data.headings} />
-      </aside>
+      {rail}
     </div>
   );
 }
@@ -506,42 +635,28 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * The doc footer below `<Prose>` (a sibling, never inside it): the "Edit this page" affordance
- * (W6/D-3 — links to the SAME path with `?mode=edit`, the canonical url is the splat key so the editor
- * inherits rename-stability), the W7 "History" affordance beside it, plus a mono "Last updated {date} by
- * {owner}" line sourced from frontmatter. The Edit link renders regardless of `updated`. A collision loser
- * (no canonical url) gets no Edit/History link (it has no root-content address). The History link gates on
+ * The doc footer below `<Prose>` (a sibling, never inside it): History plus a mono "Last updated {date} by
+ * {owner}" line sourced from frontmatter. Editing lives in the shell header. A collision loser
+ * (no canonical url) gets no History link (it has no root-content address). The History link gates on
  * `hasHistory` (W7/MF-1: `PageResponse.commit != null` — git-on with ≥1 commit — a ZERO-extra-fetch signal;
  * NoOp git always yields null so git-off never false-positives, and a zero-commit page correctly shows none).
- *
- * [editable] is the root's topology bit (`RootTree.editable`), not a permission: a READ-ONLY root's pages
- * offer no Edit link at all, because every write into one answers 403 `root_not_editable` in every auth mode.
- * History is NOT gated on it - a read-only root's history is perfectly readable.
+ * History remains readable on read-only roots.
  */
 function DocFooter({
   frontmatter,
   url,
-  editable,
   hasHistory,
 }: {
   frontmatter?: Record<string, unknown>;
   url: string | null;
-  editable: boolean;
   hasHistory: boolean;
 }) {
   const updated = asString(frontmatter?.updated);
   const owner = asString(frontmatter?.owner);
   const splat = byPathKeyForUrl(url);
-  // A read-only page with no `updated` and no history has nothing to put in the footer - render no footer at
-  // all rather than an empty frame (a `splat` alone no longer implies an Edit link).
-  if (!(splat && (editable || hasHistory)) && !updated) return null;
+  if (!(splat && hasHistory) && !updated) return null;
   return (
     <div className="pb-docfoot" data-pb-docfoot>
-      {splat && editable && (
-        <Link to="/$" params={{ _splat: splat }} search={{ mode: "edit" }} className="pb-docfoot-edit" data-pb-edit-page>
-          Edit this page
-        </Link>
-      )}
       {splat && hasHistory && (
         <Link to="/$" params={{ _splat: splat }} search={{ mode: "history" }} className="pb-docfoot-history" data-pb-history-page>
           History
@@ -565,9 +680,15 @@ function PagePending() {
   );
 }
 
-function PageError({ error }: { error: Error }) {
-  if (error instanceof ApiError && (error.isNotFound || error.status === 400)) return <NotFoundView />;
+function PageError({ error, root }: { error: Error; root?: string | null }) {
+  if (error instanceof ApiError && (error.isNotFound || error.status === 400)) return <><NotFoundView /><DiscussionEscape root={root} /></>;
   // Everything else - including the outage arriving the other way (a 503 on the page request rather than the tree's
   // flag) - is the shared query-error surface's call, not this one's.
-  return <QueryErrorView error={error} />;
+  return <><QueryErrorView error={error} /><DiscussionEscape root={root} /></>;
+}
+
+function DiscussionEscape({ root }: { root?: string | null }) {
+  return <p className="mt-4 text-center text-sm">{root ?
+    <Link to="/discussions/$root" params={{ root }} className="text-link hover:underline">Discussions in {root}</Link> :
+    <Link to="/discussions" className="text-link hover:underline">Browse discussions</Link>}</p>;
 }

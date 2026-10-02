@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
@@ -310,6 +311,35 @@ class GitCliHistoryProviderTest : FunSpec({
             exec.run(listOf("rev-parse", "HEAD")).stdoutText.trim() shouldBe second.sha
             // Byte-fidelity holds on sha256 too.
             exec.run(listOf("show", "HEAD:docs/page.md")).stdoutText shouldBe "sha256 second\n"
+        }
+    }
+
+    test("a transient object format probe failure is retried by a later blob id") {
+        val root = Files.createTempDirectory("plainbase-object-format-retry")
+        val home = Files.createTempDirectory("plainbase-object-format-retry-home")
+        val failedProbe = root.resolve("failed-object-format-probe")
+        val script = "#!/bin/sh\n" +
+            "show=0\n" +
+            "for a in \"\$@\"; do if [ \"\$a\" = --show-object-format ]; then show=1; fi; done\n" +
+            "if [ \"\$show\" -eq 1 ]; then\n" +
+            "  if [ ! -f \"$failedProbe\" ]; then touch \"$failedProbe\"; echo transient-probe-failure 1>&2; exit 128; fi\n" +
+            "fi\n" +
+            "exec git -C \"$root\" \"\$@\"\n"
+        val binary = Files.createTempFile("plainbase-object-format-git", ".sh")
+        Files.writeString(binary, script)
+        Files.setPosixFilePermissions(binary, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"))
+        try {
+            val exec = GitExecutor(workTree = root, home = home, gitBinary = binary.toString())
+            exec.run(listOf("init")).ok shouldBe true
+            val provider = providerOver(exec, root, home)
+            val bytes = "retry the object format probe\n".encodeToByteArray()
+
+            provider.blobId(bytes) shouldBe null
+            provider.blobId(bytes).shouldNotBeNull()
+        } finally {
+            Files.deleteIfExists(binary)
+            root.toFile().deleteRecursively()
+            home.toFile().deleteRecursively()
         }
     }
 

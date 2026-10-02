@@ -19,6 +19,8 @@ import { DiagramView } from "./components/DiagramView";
 import { ReviewDetail } from "./components/ReviewDetail";
 import { ReviewQueue } from "./components/ReviewQueue";
 import { Shell } from "./components/Shell";
+import { DiscussionsIndex } from "./components/DiscussionsIndex";
+import { DiscussionThread } from "./components/DiscussionThread";
 import { treeQuery } from "./api/queries";
 import { primaryEntry } from "./lib/tree";
 
@@ -65,6 +67,9 @@ const splatRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/$",
   component: DocsSplat,
+  beforeLoad: ({ location }) => {
+    if (location.pathname.startsWith("/discussions/")) throw notFound();
+  },
   // A bogus `?mode=foo` coerces to undefined → the read view; never an undefined/blank state (D-1).
   validateSearch: (search: Record<string, unknown>): DocsSearch => {
     const mode = search.mode;
@@ -159,6 +164,47 @@ const reviewDetailRoute = createRoute({
   beforeLoad: ({ location }) => rejectTrailingSlash(location.pathname),
 });
 
+const discussionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/discussions",
+  component: () => <DiscussionsIndex />,
+  beforeLoad: ({ location }) => rejectDiscussionAddress(location.pathname),
+});
+
+const discussionsRootRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/discussions/$root",
+  component: DiscussionsRootSplat,
+  beforeLoad: ({ location }) => rejectDiscussionAddress(location.pathname),
+});
+
+function DiscussionsRootSplat() {
+  const { root } = discussionsRootRoute.useParams();
+  return <DiscussionsIndex root={root} />;
+}
+
+const discussionDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/discussions/$root/$id",
+  component: DiscussionDetailSplat,
+  beforeLoad: ({ location }) => rejectDiscussionAddress(location.pathname),
+});
+
+function DiscussionDetailSplat() {
+  const { root, id } = discussionDetailRoute.useParams();
+  return <DiscussionThread key={`${root}/${id}`} root={root} id={id} />;
+}
+
+function rejectDiscussionAddress(pathname: string): void {
+  rejectTrailingSlash(pathname);
+  if (/%2f/i.test(pathname)) throw notFound();
+  try {
+    decodeURIComponent(pathname);
+  } catch {
+    throw notFound();
+  }
+}
+
 function ReviewDetailSplat() {
   const { id } = reviewDetailRoute.useParams();
   return <ReviewDetail id={id} />;
@@ -191,6 +237,9 @@ const routeTree = rootRoute.addChildren([
   adminRoute,
   reviewRoute,
   reviewDetailRoute,
+  discussionsRoute,
+  discussionsRootRoute,
+  discussionDetailRoute,
   permalinkRoute,
 ]);
 

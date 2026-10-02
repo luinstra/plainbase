@@ -25,6 +25,6 @@ fun Route.spaShellRoutes(ctx: RouteContext) {
  * UNGATED.
  */
 internal object SpaTopLevel {
-    val segments = listOf("admin", "new", "review")
-    val parameterized = listOf("/review/{id}")
+    val segments = listOf("admin", "discussions", "new", "review")
+    val parameterized = listOf("/review/{id}", "/discussions/{root}", "/discussions/{root}/{id}")
 }

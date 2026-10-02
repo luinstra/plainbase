@@ -34,7 +34,7 @@ import kotlin.concurrent.getOrSet
  *    read-then-maybe-write body has arms like this, and its early returns are the usual ones.
  *
  * Two consequences worth naming because they are not obvious from the rule. `IdMapRepository.bind` runs inside the write
- * pipeline's `@Synchronized create`, so a contended bind now holds THAT monitor for up to the busy budget instead of
+ * pipeline's shared `ContentWriteMonitor` during create, so a contended bind now holds THAT monitor for up to the busy budget instead of
  * failing instantly, stalling other creates and edits behind it. And `RetirementRepository.applyProofs` sits in both
  * halves of the rule at once: when every proof AND every checkpoint advance is rejected, absent, or otherwise
  * non-writing, its corpus-sized loop executes NO DML, so a transaction that was entirely SHARED under DEFERRED becomes

@@ -73,8 +73,8 @@ class RenderBridgeTest : FunSpec({
                 else -> {
                     // Broken/blocked: inert — the error class is present, the navigable attribute is gone.
                     errorClass(page.html) shouldBe outcomeClass
-                    page.html.contains("href=") shouldBe false
-                    page.html.contains("src=") shouldBe false
+                    page.html.containsAttribute("href") shouldBe false
+                    page.html.containsAttribute("src") shouldBe false
                 }
             }
         }
@@ -84,7 +84,10 @@ class RenderBridgeTest : FunSpec({
 private val ID_ATTR = Regex("""<h[1-6][^>]*\bid="([^"]*)"""")
 
 private fun attrValue(html: String, attr: String): String? =
-    Regex("""\b$attr="([^"]*)"""").find(html)?.groupValues?.get(1)
+    Regex("""(?:^|\s)$attr="([^"]*)"""").find(html)?.groupValues?.get(1)
+
+private fun String.containsAttribute(attr: String): Boolean =
+    Regex("""(?:^|\s)$attr="""").containsMatchIn(this)
 
 private fun errorClass(html: String): String? =
     Regex("""data-pb-link-error="([^"]*)"""").find(html)?.groupValues?.get(1)

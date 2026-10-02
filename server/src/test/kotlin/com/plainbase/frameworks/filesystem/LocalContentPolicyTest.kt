@@ -151,6 +151,16 @@ class LocalContentPolicyTest : FunSpec({
         policy.allowsFile(TreePath.require("other/.private/page.md")) shouldBe false
     }
 
+    test("the reserved directory is never content even when an include names it") {
+        val reserved = policy(includes = listOf(".plainbase/**"))
+        reserved.allowsFile(TreePath.require(".plainbase/discussions/x/discussion.md")) shouldBe false
+        reserved.mayTraverse(TreePath.require(".plainbase")) shouldBe false
+
+        val notes = policy(includes = listOf(".notes/**"))
+        notes.allowsFile(TreePath.require(".notes/page.md")) shouldBe true
+        notes.mayTraverse(TreePath.require(".notes")) shouldBe true
+    }
+
     test("metadata follows folder reachability but honors an explicit sidecar exclusion") {
         val allowed = policy(includes = listOf("docs/**/*.md"))
         val excluded = policy(

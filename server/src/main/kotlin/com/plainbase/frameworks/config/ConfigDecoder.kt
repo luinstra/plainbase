@@ -2,6 +2,7 @@ package com.plainbase.frameworks.config
 
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.discussion.isReservedTopSegment
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.ReservedSegments
@@ -9,6 +10,7 @@ import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.CommitGlob
+import com.plainbase.frameworks.filesystem.literalPrefix
 import com.plainbase.frameworks.net.RemoteAddress
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigObject
@@ -353,26 +355,34 @@ private object RootsConfigParser {
             editable = entry.boolStrict("editable", "roots.$key.editable") ?: isPrimary,
             history = history,
             displayName = entry.stringOrNull("displayName")?.let { parseDisplayName("roots.$key.displayName", it) },
-            includes = parseRootGlobs(entry, "includes", key),
+            includes = parseRootGlobs(entry, "includes", key, refuseReservedPrefix = true),
             excludes = parseRootGlobs(entry, "excludes", key).orEmpty(),
             folderLabels = parseFolderLabels(entry, key),
         )
     }
 
-    private fun parseRootGlobs(entry: Config, field: String, root: String): List<String>? {
+    private fun parseRootGlobs(
+        entry: Config,
+        field: String,
+        root: String,
+        refuseReservedPrefix: Boolean = false,
+    ): List<String>? {
         if (!entry.hasPath(field)) return null
         return entry.getStringList(field).mapIndexed { index, raw ->
-            parseRootGlob("roots.$root.$field[$index]", raw)
+            parseRootGlob("roots.$root.$field[$index]", raw, refuseReservedPrefix)
         }
     }
 
-    private fun parseRootGlob(key: String, raw: String): String {
+    private fun parseRootGlob(key: String, raw: String, refuseReservedPrefix: Boolean): String {
         require(raw.isNotEmpty()) { "$key must not contain an empty pattern" }
         require('\\' !in raw) { "$key must use / separators and may not contain backslashes: '$raw'" }
         require(!raw.startsWith('/') && !raw.endsWith('/')) {
             "$key must be relative and may not start or end with '/': '$raw'"
         }
         val normalized = Nfc.normalize(raw)
+        require(!refuseReservedPrefix || literalPrefix(normalized).firstOrNull()?.let(::isReservedTopSegment) != true) {
+            "$key may not expose the reserved .plainbase directory: '$raw'"
+        }
         require(normalized.split('/').none { it == ".." }) {
             "$key may not contain a '..' path segment: '$raw'"
         }

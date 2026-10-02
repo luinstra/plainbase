@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.principal.Principal
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import io.ktor.server.application.ApplicationCall
 
 /** Test-only principal source used by fixed-principal route matrices. */
@@ -8,11 +9,16 @@ fun fixedPrincipal(principal: Principal): ApplicationCall.() -> PrincipalExtract
     { PrincipalExtraction.Resolved(principal) }
 
 /** Reconstructs only the test extraction seam after the real guarded graph has been assembled. */
-internal fun RouteContext.withExtract(extract: ApplicationCall.() -> PrincipalExtraction): RouteContext =
+internal fun RouteContext.withExtract(
+    extract: ApplicationCall.() -> PrincipalExtraction,
+    discussions: DiscussionTransportFacade? = this.discussions,
+    writeBodyCap: Long = maxWriteBodyBytes,
+): RouteContext =
     RouteContext(
         read = read,
         mutate = mutate,
         proposals = proposals,
+        discussions = discussions,
         registry = registry,
         availability = availability,
         convergence = convergence,
@@ -21,7 +27,7 @@ internal fun RouteContext.withExtract(extract: ApplicationCall.() -> PrincipalEx
         auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,
         idProvider = idProvider,
-        maxWriteBodyBytes = maxWriteBodyBytes,
+        maxWriteBodyBytes = writeBodyCap,
         maxAssetBytes = maxAssetBytes,
         mcpAllowedHosts = mcpAllowedHosts,
         mcpAllowedOrigins = mcpAllowedOrigins,

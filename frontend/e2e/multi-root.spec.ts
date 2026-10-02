@@ -200,9 +200,27 @@ test("an ordinary root-qualified view of a duplicated id renders in BOTH roots",
   await gotoExpectStatus(page, "/extra/permalink/hub");
   await expect(page.locator(".pb-prose h1")).toContainText("Permalink Hub");
   await expect(page).toHaveURL("/extra/permalink/hub");
-  await expect(page.locator("[data-pb-edit-page]")).toHaveAttribute("href", "/extra/permalink/hub?mode=edit");
+  const edit = page.locator("[data-pb-header]").getByRole("link", { name: "Edit this page" });
+  await expect(edit).toHaveAttribute("href", "/extra/permalink/hub?mode=edit");
   await expect(page.locator('[data-pb-breadcrumbs] a[href="/extra"]')).toHaveText("extra");
   await expect(page.locator("[data-pb-breadcrumbs] li").first()).toContainText("extra");
+
+  // The page owns its header action: entering the editor or leaving for a page without
+  // a canonical edit address must remove the old action from the persistent shell.
+  await plantNoReloadMarker(page);
+  await edit.click();
+  await expect(page).toHaveURL("/extra/permalink/hub?mode=edit");
+  await expect(page.locator("[data-pb-editor]")).toBeVisible();
+  await expect(page.locator("[data-pb-edit-page]")).toHaveCount(0);
+  await expectNoReload(page);
+  await page.locator("[data-pb-header]").getByRole("button", { name: "View page" }).click();
+  await expect(page).toHaveURL("/extra/permalink/hub");
+  await expect(page.locator("[data-pb-view-page]")).toHaveCount(0);
+  await expectNoReload(page);
+  await expect(edit).toBeVisible();
+  await page.locator(".pb-prose a", { hasText: "shadowed loser" }).click();
+  await expect(page.locator(".pb-prose h1")).toContainText("Shadowed Loser");
+  await expect(page.locator("[data-pb-edit-page]")).toHaveCount(0);
 });
 
 test("a same-path diagram keeps its selected root and source URL", async ({ page }) => {

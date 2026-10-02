@@ -12,6 +12,7 @@ import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ReadFacade
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.TransportSecurityPolicy
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.security.ProxyCsrf
 import io.ktor.server.application.ApplicationCall
 
@@ -31,6 +32,7 @@ class RouteContext(
     val mutate: MutatingFacade,
     /** PB-PROPOSE-1 the guarded proposal surface for `/api/v1/changes` (P1a propose/list/get/reject + P1b approve-apply/rebase). */
     val proposals: ProposalFacade,
+    val discussions: DiscussionTransportFacade? = null,
     /** The configured topology, in D7 order — health enumerates it, and [roots] derives from it. */
     val registry: RootRegistry,
     /**

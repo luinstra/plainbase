@@ -49,6 +49,9 @@ data class PlainbaseConfig(
     /** Path of the rebuildable derived-state search database. */
     val searchDatabasePath: Path get() = dataDir.resolve("search.db")
 
+    /** Path of the rebuildable derived-state discussion database. */
+    val discussionDatabasePath: Path get() = dataDir.resolve("discussions.db")
+
     /** The local primary root, or the legacy path needed by object-mode mirror and CLI seams. */
     fun mainContentRoot(): Path = roots.primary.localPath ?: contentDir
 

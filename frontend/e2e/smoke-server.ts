@@ -24,6 +24,9 @@ export type SmokeScenario = {
 export type SmokeServer = {
   baseURL: string;
   seed?: SmokeSeed;
+  /** Per-attempt temporary fixture roots; tests may create their own content here. */
+  contentDir: string;
+  extraDir: string | null;
   stop: () => Promise<void>;
 };
 
@@ -112,6 +115,9 @@ export async function startSmokeServer(
         cpSync(permalinkFixture, path.join(extraDir, "permalink"), { recursive: true });
         mkdirSync(path.join(extraDir, "diagrams"), { recursive: true });
         writeFileSync(path.join(extraDir, "diagrams", "shared.mmd"), "flowchart LR\n  A[Extra] --> B[Root]\n");
+        // The discussion watcher registers existing collection directories at boot. Keep the
+        // temporary extra root observable for tests that copy a discussion between roots.
+        mkdirSync(path.join(extraDir, ".plainbase", "discussions"), { recursive: true });
       }
       writeFileSync(
         path.join(dataDir, "plainbase.conf"),
@@ -146,7 +152,7 @@ export async function startSmokeServer(
     const baseURL = `http://127.0.0.1:${port}`;
     await waitForOwnedBind(processState, logs, startupDeadline);
     await waitForHealth(processState, baseURL, logs, startupDeadline);
-    return { baseURL, seed, stop };
+    return { baseURL, seed, contentDir, extraDir: scenario.roots === "multi" ? extraDir : null, stop };
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     try {

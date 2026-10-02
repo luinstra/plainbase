@@ -113,7 +113,7 @@ being ambiguous with the bare `/p/{id}` permalink.
 **The reserved segments.** No root may be named:
 
 - one of Plainbase's own top-level URLs, live or foreseeable - `api`, `assets`, `browse`, `healthz`,
-  `p`, `fonts`, the SPA's `admin`, `new` and `review`, and the auth/ops/discovery vocabulary
+  `p`, `fonts`, the SPA's `admin`, `discussions`, `new` and `review`, and the auth/ops/discovery vocabulary
   (`login`, `search`, `session`, `settings`, `static`, `metrics`, `well-known` and the rest);
   `ReservedSegments.kt` holds the list in full and it is deliberately generous, because growing it later
   would boot-refuse an install that had already taken the new word;
@@ -136,7 +136,7 @@ $ plainbase root add main /home/me/docs
 root add: 'main' is a reserved segment - Plainbase owns that top-level URL, or expects to
 ```
 
-**Nothing in your CONTENT is reserved.** The rule above governs the names you give ROOTS, and nothing
+The URL-name rule above governs the names you give ROOTS, and nothing
 else. A directory literally named `main/` inside the primary `docs` root, a `main.md`, and a `slug: main`
 are all ordinary content. The directory serves at `/docs/main/...`, while a page named `main` or with
 `slug: main` can serve at `/docs/main`; reserving `main` as a root name does not make content named `main` illegal.
@@ -180,6 +180,13 @@ JDK glob matching is whole-path matching: `**/*.md` matches nested Markdown but 
 both shapes when both are intended. Dot-prefixed entries remain hidden unless an include contains the literal
 dot-prefixed prefix (for example `.crew/**`; `**/*.md` does not authorize `.crew`). Internally supplied legacy ignore
 rules remain additive; there is no live `content.ignore` configuration key in this release.
+The top-level `.plainbase/` directory is reserved for authoritative discussion files and is never page content.
+Reservation is NFC-normalized and case-insensitive. Includes whose first literal-prefix segment normalizes to
+`.plainbase` are refused at config load; wildcard patterns are not all refused, but runtime hiding independently
+prevents any include from exposing the collection.
+Startup refuses `DATA_DIR` equal to a root, or inside it with reserved `.plainbase` as the first relative segment
+after canonical path comparison. Hidden aliased `DATA_DIR`-inside-root nesting is also fatal. A root inside
+`DATA_DIR` is warning-only; keep roots outside disposable app state.
 Traversal is bounded for non-recursive includes: `*.md` and `docs/*.md` prune directories deeper than the matching
 file depth from scans, watches, listings and the sidebar, while any pattern containing `**` retains conservative
 traversal. Brace alternatives mixing `**` with bounded patterns may traverse more broadly; prefer separate includes
@@ -307,7 +314,8 @@ Validation and startup behavior (config faults are actionable `serve:` refusals;
   until it is restored AND the server is restarted;
 - `history = auto` on an extra root is refused (see above);
 - no two roots may resolve to the same directory (symlinks are resolved for this check), no root may
-  nest inside another, and no root may equal or live inside `DATA_DIR`;
+  nest inside another; `DATA_DIR` equality, reserved collection placement and hidden aliased nesting are refused
+  as described above, while a root inside `DATA_DIR` is warning-only;
 - `roots {}` cannot be combined with `storage.backend=object` in this release - object deployments
   keep the plain `CONTENT_DIR`-less config shape.
 
@@ -349,11 +357,13 @@ preserves its durable bindings, while duplicate declarations make startup refuse
 `root add` refuses outright (an error message, not a silent skip) on:
 
 - **a reserved segment** - Plainbase owns a set of top-level URLs for its own surfaces (`api`,
-  `assets`, `browse`, `healthz`, `p`, `admin`, `new`, `review` and the like), plus the `pb-` and
+  `assets`, `browse`, `healthz`, `p`, `admin`, `discussions`, `new`, `review` and the like), plus the `pb-` and
   `plainbase-` prefixes and any `v` followed only by digits. No root may take one. The refusal names
   the word, and it is exit 2 - a bad argument, refused before anything is locked or read.
-- **nesting** - the new path may not sit inside another configured root or inside `DATA_DIR`, and may
-  not equal one already configured.
+- **root overlap** - the new path may not equal, contain or sit inside another configured root.
+- **unsafe `DATA_DIR` placement** - the new path may not equal `DATA_DIR`. `DATA_DIR` inside the root
+  is refused when its canonical first relative segment is reserved `.plainbase` (NFC-normalized,
+  case-insensitive), or when aliases hide the nesting.
 - **a duplicate declaration** - the name is already in `roots.conf` or in `plainbase.conf`'s block.
 - **object mode** - `roots {}` cannot be combined with `storage.backend=object` in this release, so
   there is no local tree for a root to add.
@@ -367,6 +377,9 @@ It does **not** refuse a path that is not there: an extra root may legitimately 
 not mounted yet (the server marks it unavailable and serves 503 for it until it is restored and the
 server restarted). The CLI prints the same warning `serve` prints, and exits 0 - so a typo'd path is
 visible, not silent.
+
+A root inside `DATA_DIR` is also warning-only: the CLI prints the same warning as `serve` and permits
+the addition. Move the root outside disposable app state; a `DATA_DIR` wipe would take its content too.
 
 `--editable` defaults to `false` for an extra root; `--history` defaults to `off`.
 
@@ -452,7 +465,8 @@ A configured root that is missing at boot, or whose directory vanishes while the
   the client can render its outage UI. A 404 is a miss in the requested visible scope; a root pin narrows that
   scope, and hidden or excluded content can also be 404. Do not infer physical deletion or erase historical
   citations/provenance. A 503 leaves availability unresolved: keep citations/provenance and retry after recovery or
-  convergence. Nothing is written when root rejection happens before the operation is entered; shutdown admission is a
+  convergence for reads. Root rejection before entry into the operation leaves no write; late discussion failures can
+  follow persistence, so inspect the outcome before resubmitting. Shutdown admission is a
   separate 503, `server_shutting_down`, with no `Retry-After` promise (see [the agent error table](connect-your-agent.md#4-roots-what-a-page-lives-under-and-what-its-errors-mean));
 - **root loss grants no new retirement or purge authority.** Live/unretired pages and their `id_map`, `url_alias`,
   `page_checkpoint` and `dirty_page` rows are retained; last-good page sections are carried where available. A
@@ -481,6 +495,42 @@ then restart the server.
   refuses to start at all. See
   [`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) for a worked deployment (Caddy +
   oauth2-proxy).
+
+## Discussions support and authorship
+
+| Root configuration | Lists and root-pinned detail | Preview and mutations |
+|---|---|---|
+| Editable local root | Available | Subject to principal policy |
+| Read-only root | `200`, `discussions_available=false`, `reason="read_only_root"` | Refused with `root_not_editable` |
+| Editable object-mode root | `200`, `discussions_available=false`, `reason="object_storage"` | Refused with `discussions_unsupported` |
+
+Unpinned discussion-ID lookup scans only editable local roots. An ID present only in an unsupported
+root returns `404 discussion_not_found` unless another eligible root has an uncertain claim; pin that
+root for disabled detail or an ID mutation's topology refusal. Read-only refusal takes precedence when
+both restrictions apply. Local defaults stay `editable=true`, `history=auto` for `docs`, and
+`editable=false`, `history=off` for extra roots. Discussion watcher coverage requires editable local
+roots available at boot. Added roots need restart before discussion watcher/index coverage; a root
+missing at boot also needs restoration and restart for watcher coverage. Object-mode Discussions remain deferred.
+
+The root name `discussions` is now reserved. Before upgrading, rename any such root in the file that
+declares it: `plainbase.conf` or `DATA_DIR/roots.conf`. The root-removal command cannot run while that
+configuration is refused; this upgrade remedy requires a deliberate declaring-file edit.
+
+With enforced auth, humans can read, start and reply. Every human role, including ADMIN, may edit or
+retract only its own comments. VIEWER may resolve/reopen/reattach only discussions it started;
+EDITOR/ADMIN may do so for others. Only ADMIN may purge. Agent `READ_ONLY` permits reads and preview;
+`PROPOSE`/`COMMIT` directly start/reply, edit/retract their own comments and resolve/reopen any discussion,
+independently of page proposal fallback and direct-commit globs. Agents cannot reattach or purge.
+
+Uncredentialed `auth.mode=off` uses one shared Anonymous identity (label `anonymous`) with ownership bypass
+and local lifecycle actions including purge, not private per-person authorship. Agent bearers still
+authenticate and retain their live token restrictions in off mode; an invalid Plainbase bearer is
+refused there. Off/proxy mode does not derive builtin human identity from a leftover session cookie.
+Author labels and kinds are server-derived snapshots, not client-supplied fields.
+
+Discussion limits are fixed, not new HOCON/environment knobs; the existing `maxWriteBodyBytes` can
+further constrain JSON envelopes. See [the authoritative limits table](http-agent-workflow.md#discussion-limits)
+and [operator recovery](operating-plainbase.md#discussions).
 
 ## Heap size (native binary) - not an env var
 

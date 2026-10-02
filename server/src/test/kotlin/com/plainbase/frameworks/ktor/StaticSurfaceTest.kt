@@ -121,7 +121,10 @@ class StaticSurfaceTest : FunSpec({
         restTest(Fixtures.demoDocs) {
             val client = restClient()
             val shell = client.get("/docs").bodyAsBytes()
-            listOf("/new", "/admin", "/review", "/review/0197c4d5-1234-7abc-8def-0123456789ab").forEach { path ->
+            listOf(
+                "/new", "/admin", "/review", "/review/0197c4d5-1234-7abc-8def-0123456789ab",
+                "/discussions", "/discussions/docs", "/discussions/docs/0197c4d5-1234-7abc-8def-0123456789ab",
+            ).forEach { path ->
                 withClue(path) {
                     val response = client.get(path)
                     response.status shouldBe HttpStatusCode.OK
@@ -136,7 +139,10 @@ class StaticSurfaceTest : FunSpec({
     test("SPA route boundaries are 404 shell responses") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
-            listOf("/review/a/b", "/new/", "/admin/", "/review/").forEach { path ->
+            listOf(
+                "/review/a/b", "/new/", "/admin/", "/review/", "/discussions/",
+                "/discussions/docs/", "/discussions/docs/id/", "/discussions/docs/id/extra",
+            ).forEach { path ->
                 withClue(path) {
                     val response = client.get(path)
                     response.status shouldBe HttpStatusCode.NotFound

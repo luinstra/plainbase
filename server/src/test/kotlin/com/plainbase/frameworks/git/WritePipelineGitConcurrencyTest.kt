@@ -13,9 +13,9 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 
 /**
- * End-to-end through the W1 pipeline (W4 §6 #4): two pages saved concurrently both commit, with no
- * `.git/index.lock` error, producing two one-file commits. The pipeline's `@Synchronized` monitor
- * serializes the commits; the per-op temp index means neither commit ever touches a shared `.git/index`
+ * Two pages saved concurrently both commit, with no `.git/index.lock` error, producing two one-file commits.
+ * Page saves and Discussion writes both hold the shared `ContentWriteMonitor`; the per-op temp index means
+ * neither commit ever touches a shared `.git/index`
  * (so there is no lock to contend on), and each commit's tree touches exactly its own page.
  */
 class WritePipelineGitConcurrencyTest : FunSpec({

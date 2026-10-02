@@ -102,7 +102,7 @@
     "slug": "shadowed",
     "url": null,
     "title": "Shadowed",
-    "html": "<h1 id=\"shadowed\">Shadowed</h1>",
+    "html": "<h1 id=\"shadowed\" data-pb-src=\"0-10\">Shadowed</h1>",
     "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "commit": null,
     "headings": [
@@ -242,7 +242,7 @@
     }
   },
   "previewResponse": {
-    "html": "<h1 id=\"deploy-guide\">Deploy Guide</h1>",
+    "html": "<h1 id=\"deploy-guide\" data-pb-src=\"0-14\">Deploy Guide</h1>",
     "headings": [
       {
         "id": "deploy-guide",

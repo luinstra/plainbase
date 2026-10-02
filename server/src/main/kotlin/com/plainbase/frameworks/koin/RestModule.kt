@@ -1,9 +1,11 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AdminFacade
+import com.plainbase.domain.service.ContentWriteMonitor
 import com.plainbase.domain.service.LoginService
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
@@ -27,6 +29,7 @@ import com.plainbase.frameworks.ktor.buildGuardedApplication
 import com.plainbase.frameworks.ktor.securityAssembly
 import com.plainbase.frameworks.ktor.transportSettings
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.ServingRuntime
 import com.plainbase.frameworks.security.ProxyCsrf
@@ -71,6 +74,7 @@ internal fun createRestModule(
         val index = get<ObservedIndexRuntime>()
         AbsenceClassifier(get(), index.policies)
     }
+    single { ContentWriteMonitor() }
     single {
         val index = get<ObservedIndexRuntime>()
         WritePipeline(
@@ -84,6 +88,7 @@ internal fun createRestModule(
             availability = index.availability,
             historyHook = get(),
             policies = index.policies,
+            monitor = get(),
         )
     }
     single {
@@ -100,6 +105,7 @@ internal fun createRestModule(
             enforced = get<PlainbaseConfig>().auth.mode != AuthMode.OFF,
             // Fails CLOSED on an unknown name - a belt behind the wire-level `invalid_root` check.
             editableOf = { registry.byName(it)?.editable == true },
+            objectBackendOf = { registry.byName(it)?.backend is RootBackend.Object },
         )
     }
     // A4a session/login/setup/admin services. Session id ROTATES on login/change/reset (§5); the TTLs use the
@@ -191,6 +197,7 @@ internal fun createRestModule(
                     absence = get(),
                     proposalService = get(),
                     proposalLabeler = get(),
+                    discussionFacade = get<DiscussionTransportFacade>(),
                     agentDirectCommitGlobs = ConfigValuePolicy.agentDirectCommitGlobs(config),
                 )
                 onServingRuntimeCollected(serving)

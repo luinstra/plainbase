@@ -81,6 +81,7 @@ class IndexBuilder(
     rootRank: (RootName) -> Int,
     private val registeredRoots: Set<RootName>,
     private val listeners: List<PublicationListener> = emptyList(),
+    private val pageListeners: List<PageReindexListener> = emptyList(),
     private val searchIndexer: SearchIndexer? = null,
     /** Shared availability state used for both skip checks and root-loss marking. */
     private val availability: RootAvailability = RootAvailability(kotlin.time.Clock.System),
@@ -646,6 +647,7 @@ class IndexBuilder(
         )
         // Store before targeted search; search checks current durable retirement authority independently.
         holder.store(snapshot)
+        notifyReindexed(target.root, reindexed)
         logger.info {
             "reindexed page ${reindexed.id.value} (${target.path.value} in '${target.root}'); ${snapshot.pages.size} page(s) published"
         }
@@ -666,6 +668,18 @@ class IndexBuilder(
                 if (failure is Error) throw failure
                 // Contain Exception but let JVM Error terminate the rebuild.
                 logger.error(failure) { "publication listener failed; the published snapshot stands" }
+            }
+        }
+    }
+
+    /** Contains listener failures after the page snapshot has been published. */
+    private fun notifyReindexed(root: RootName, page: IndexedPage) {
+        pageListeners.forEach { listener ->
+            runCatching {
+                listener.reindexed(root, page)
+            }.onFailure { failure ->
+                if (failure is Error) throw failure
+                logger.error(failure) { "page reindex listener failed; the published page stands" }
             }
         }
     }

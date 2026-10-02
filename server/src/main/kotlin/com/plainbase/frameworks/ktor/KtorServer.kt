@@ -12,6 +12,7 @@ import com.plainbase.frameworks.ktor.routes.apiFallbackRoute
 import com.plainbase.frameworks.ktor.routes.assetRoute
 import com.plainbase.frameworks.ktor.routes.authRoutes
 import com.plainbase.frameworks.ktor.routes.browseRedirectRoute
+import com.plainbase.frameworks.ktor.routes.discussionRoutes
 import com.plainbase.frameworks.ktor.routes.frontendStaticRoutes
 import com.plainbase.frameworks.ktor.routes.healthRoute
 import com.plainbase.frameworks.ktor.routes.historyRoutes
@@ -442,6 +443,7 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         pageCreateRoutes(ctx)
         // PB-PROPOSE-1 (P1a): the agent proposal surface under `/api/v1/changes` (distinct constant prefix).
         proposalRoutes(ctx)
+        discussionRoutes(ctx)
         // P3: the in-binary MCP server (SSE-on-CIO) at `/api/v1/mcp` — agent-only connect auth on the SSE GET. Mounted
         // here (a distinct constant prefix), BEFORE apiFallbackRoute(), so the §A4 "API → fallback → static" order holds.
         plainbaseMcp(ctx)

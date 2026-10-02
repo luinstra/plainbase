@@ -83,6 +83,7 @@ internal fun buildGuardedApplication(
         read = read,
         mutate = mutate,
         proposals = proposals,
+        discussions = serving.discussionFacade,
         registry = rooted.registry,
         availability = rooted.availability,
         convergence = rooted.convergence,

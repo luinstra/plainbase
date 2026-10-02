@@ -34,7 +34,7 @@ object ReservedSegments {
         // The embedded bundle's fonts directory, enforced by FrontendBundleTest's bundle reservation row.
         "fonts",
         // Live SPA top-level routes, enforced by FrontendBundleTest via SpaTopLevel.
-        "admin", "new", "review",
+        "admin", "discussions", "new", "review",
         // Product-owned, and the stems of the prefixes below.
         "pb", "plainbase",
         // The former primary name is frozen into migration-stamped rows, so no live root may bind over those rows.

@@ -84,6 +84,87 @@ export interface TreeResponse {
   roots: RootTree[];
 }
 
+// Discussion read DTOs (DiscussionDtos.kt and DiscussionReadProjection.kt). These are
+// persisted read anchors, distinct from write/selection request anchors.
+export type DiscussionState = "page_level" | "exact" | "moved" | "ambiguous" | "changed" | "orphaned" | "unavailable" | "unreadable" | "incomplete";
+export type DiscussionResolution = "by_id" | "by_path" | "orphaned" | "unavailable" | "unknown";
+export interface DiscussionPage { id: string | null; path: string | null; resolution: DiscussionResolution }
+export interface DiscussionActor { key: string; kind: "human" | "agent" | "anonymous"; label: string }
+export interface DiscussionRange { byte_start: number; byte_end: number }
+export interface DiscussionCandidates { count: number; items: DiscussionRange[]; truncated: boolean }
+export interface DiscussionPlacement { kind: "heading" | "line"; id: string | null; line: number | null }
+export interface DiscussionItem {
+  id: string;
+  page: DiscussionPage;
+  status: "open" | "resolved" | null;
+  state: DiscussionState;
+  reason: string | null;
+  range: DiscussionRange | null;
+  candidates: DiscussionCandidates | null;
+  placement: DiscussionPlacement | null;
+  quote: string | null;
+  comment_count: number;
+  starter: DiscussionActor | null;
+  created: string | null;
+  updated: string | null;
+}
+export interface DiscussionPageAnchor { kind: "page"; content_hash: string; commit: string | null }
+export interface DiscussionQuoteAnchor {
+  kind: "quote";
+  content_hash: string;
+  commit: string | null;
+  quote: string;
+  prefix: string;
+  suffix: string;
+  byte_start: number;
+  byte_end: number;
+  body_start: number;
+  line: number;
+  selection: "narrowed" | "snapped";
+  heading_path: { level: number; text: string }[];
+}
+export type DiscussionReadAnchor = DiscussionPageAnchor | DiscussionQuoteAnchor;
+export interface DiscussionReattachment { by: { key: string; label: string }; at: string; anchor: DiscussionReadAnchor }
+export interface DiscussionDetail extends DiscussionItem { anchor: DiscussionReadAnchor | null; reattachment: DiscussionReattachment | null }
+export interface DiscussionComment {
+  id: string;
+  author: DiscussionActor;
+  created: string;
+  edited_at: string | null;
+  retracted: boolean;
+  html: string;
+  markdown: string;
+}
+export interface DiscussionListResponse {
+  discussions: DiscussionItem[];
+  next: string | null;
+  discussions_available: boolean;
+  reason: string | null;
+}
+export interface DiscussionDetailResponse {
+  discussion: DiscussionDetail | null;
+  comments: DiscussionComment[];
+  next: string | null;
+  discussions_available: boolean;
+  reason: string | null;
+}
+export interface DiscussionPageRequestAnchor { kind: "page"; content_hash: string }
+export interface DiscussionQuoteRequestAnchor {
+  kind: "quote";
+  content_hash: string;
+  block_start: number;
+  block_end: number;
+  selected_text: string;
+}
+export type DiscussionRequestAnchor = DiscussionPageRequestAnchor | DiscussionQuoteRequestAnchor;
+export interface DiscussionPreviewResponse {
+  content_hash: string;
+  byte_start: number;
+  byte_end: number;
+  selection: "narrowed" | "snapped";
+  quote_text: string;
+}
+export interface DiscussionMutationResponse { id: string; comment_id: string | null; commit: string | null }
 export interface CitationDto {
   page_id: string;
   heading_id: string | null;

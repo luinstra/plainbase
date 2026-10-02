@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pageByPathQuery, pageHtmlQuery, pageQuery } from "../api/queries";
+import { pageByPathQuery, pageHtmlQuery, pageQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse } from "../api/types";
 import { createAppRouter } from "../router";
+import { primePageDiscussionLists, emptyDiscussionList } from "./pageDiscussionFixture";
 
 /**
  * Chunk-4 doc reading metadata Rail / footer (addendum §6 acceptance). The Rail renders one
@@ -14,7 +15,7 @@ import { createAppRouter } from "../router";
  *
  * `PageContent` is reached via the `/p/$` permalink route, which fetches the page by id and
  * renders `<PageContent>`; we prime BOTH `pageQuery` (frontmatter + permalink resolution) and
- * `pageHtmlQuery` (prose + TOC) so nothing touches the network.
+ * `pageHtmlQuery` (prose + TOC) with an explicit cached default discussion list.
  */
 
 const PAGE_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
@@ -60,6 +61,7 @@ function renderRail(frontmatter: Record<string, unknown> | null, headings: PageH
   // answer to both reads rather than re-pinning the second to the first response's root.
   queryClient.setQueryData(pageHtmlQuery(PAGE_ID, null).queryKey, htmlResponse(PAGE_ID, headings));
   if (frontmatter) queryClient.setQueryData(pageQuery(PAGE_ID, null).queryKey, pageResponse(PAGE_ID, frontmatter));
+  primePageDiscussionLists(queryClient);
   const history = createMemoryHistory({ initialEntries: [`/p/${PAGE_ID}`] });
   const router = createAppRouter(queryClient, history);
   return render(
@@ -82,6 +84,53 @@ function railRows(container: HTMLElement): Record<string, string> {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("doc reading metadata rail (chunk-4)", () => {
+  it("keeps Page Info and TOC beside the default loading, list, detail and hidden workspace", async () => {
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    const calls: string[] = [];
+    const item = { id: "thread", page: { id: PAGE_ID, path: "infra/kubernetes.md", resolution: "by_id" },
+      status: "open", state: "page_level", reason: null, range: null, candidates: null, placement: null,
+      quote: null, comment_count: 0, starter: null, created: null, updated: null, anchor: null, reattachment: null };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input); calls.push(url);
+      if (url === `/api/v1/pages/${PAGE_ID}/discussions?root=docs&limit=200`) return pending;
+      if (url === "/api/v1/discussions/thread?root=docs&limit=50") return Response.json({
+        discussion: item, comments: [], next: null, discussions_available: true, reason: null,
+      });
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(pageQuery(PAGE_ID, null).queryKey, pageResponse(PAGE_ID, { owner: "ops", status: "active" }));
+    client.setQueryData(pageHtmlQuery(PAGE_ID, null).queryKey, htmlResponse(PAGE_ID, [
+      { id: "a", level: 2, text: "Alpha" }, { id: "b", level: 2, text: "Beta" },
+    ]));
+    client.setQueryData(treeQuery.queryKey, { roots: [] });
+    client.setQueryData(sessionQuery.queryKey, { authenticated: false, auth_mode: "off", username: null, csrf_token: null });
+    const router = createAppRouter(client, createMemoryHistory({ initialEntries: [`/p/${PAGE_ID}`] }));
+    const { container } = render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
+    await screen.findByText("Loading page discussions…");
+    const rail = container.querySelector("[data-pb-rail]")!;
+    const info = rail.querySelector("[data-pb-rail-meta]")!;
+    const toc = rail.querySelector("[data-pb-toc]")!;
+    expect(container.querySelector("[data-pb-discussions-nav]")).toBeNull();
+    expect(container.querySelector(".pb-reading-column [data-pb-discussions-toggle]")).toBeNull();
+    expect(info.closest(".pb-prose")).toBeNull();
+    expect(router.history.location.pathname).toBe(`/p/${PAGE_ID}`);
+    await act(async () => { finish(Response.json({ ...emptyDiscussionList, discussions: [item] })); });
+    const panel = screen.getByRole("region", { name: "Page discussions" });
+    const card = await within(panel).findByRole("button", { name: /About this page/ });
+    expect(info.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(card);
+    await screen.findByRole("heading", { name: "Discussion on infra/kubernetes.md" });
+    expect(within(panel).queryByRole("link", { name: /Discussions in|All discussions/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Hide discussions" }));
+    expect(screen.queryByRole("region", { name: "Page discussions" })).toBeNull();
+    expect(rail.querySelector("[data-pb-rail-meta]")).toBe(info);
+    expect(rail.querySelector("[data-pb-toc]")).toBe(toc);
+    fireEvent.click(screen.getByRole("button", { name: "Show discussions" }));
+    expect(screen.getByRole("button", { name: "Close discussion" })).toBeTruthy();
+    expect(calls).toEqual([`/api/v1/pages/${PAGE_ID}/discussions?root=docs&limit=200`, "/api/v1/discussions/thread?root=docs&limit=50"]);
+  });
   it("renders one row per present frontmatter key plus the always-present File row, omitting absent keys", async () => {
     const { container } = renderRail({ owner: "ops", status: "active", tags: ["infra", "kubernetes"], updated: "2026-06-11" });
 
@@ -185,6 +234,7 @@ describe("doc reading metadata rail (chunk-4)", () => {
       const path = new URL(url, "http://x").pathname;
       if (path === "/api/v1/tree") return json(emptyRoot);
       if (path === "/api/v1/session") return json(session);
+      if (path === `/api/v1/pages/${PAGE_ID}/discussions` && new URL(url, "http://x").searchParams.get("root") === "docs") return json(emptyDiscussionList);
       throw new Error(`unexpected fetch: ${url}`);
     }));
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
@@ -206,6 +256,7 @@ describe("doc reading metadata rail (chunk-4)", () => {
     // by-path endpoints are distinct paths, so this only catches the duplicate page load.
     // Compared as a PATHNAME, not as a URL tail: the by-id read carries `?root=docs` now, so a
     // tail match could never fire again while still reporting green.
+    await waitFor(() => expect(calls).toContain(`/api/v1/pages/${PAGE_ID}/discussions?root=docs&limit=200`));
     expect(calls.some((u) => new URL(u, "http://x").pathname === `/api/v1/pages/${PAGE_ID}`)).toBe(false);
   });
 
@@ -219,6 +270,7 @@ describe("doc reading metadata rail (chunk-4)", () => {
     ];
     queryClient.setQueryData(pageByPathQuery("docs/infra/kubernetes").queryKey, pageResponse(PAGE_ID, {}));
     queryClient.setQueryData(pageHtmlQuery(PAGE_ID, "docs").queryKey, htmlResponse(PAGE_ID, headings));
+    primePageDiscussionLists(queryClient);
     const history = createMemoryHistory({ initialEntries: ["/docs/infra/kubernetes"] });
     const router = createAppRouter(queryClient, history);
     const { container } = render(

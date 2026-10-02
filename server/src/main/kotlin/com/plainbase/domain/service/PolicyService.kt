@@ -1,10 +1,13 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.discussion.IdentityDigest
 import com.plainbase.domain.principal.ApproveGrant
 import com.plainbase.domain.principal.CreateGrant
+import com.plainbase.domain.principal.DiscussionGrant
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.principal.ManageGrant
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.principal.SubjectKey
 import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.ApiTokenRepository
 import com.plainbase.domain.repository.AuditEntry
@@ -26,10 +29,10 @@ import kotlin.time.Clock
  *  - **Non-escalation:** [roleFor] reads the role ONLY from the DB/token row — a Human's `subject_role`, an
  *    Agent's token `mode` — NEVER a header/claim/frontmatter. The [permits] matrix is hardcoded Kotlin (no
  *    data-driven escalation: `subject_role` stores only WHICH role, never what a role may do).
- *  - **Compile-time floor:** the EDIT/CREATE/MANAGE checks MINT an unforgeable typed grant on success; the ~4
- *    mutators require it. A bypassed check is a compile error. PolicyService is the ONLY production mint site.
+ *  - **Compile-time floor:** mutating checks mint typed grants required by their writers. PolicyService is the
+ *    only production mint site.
  *
- * Audit is PRE-EFFECT and MUTATING-only: `checkEdit`/`checkCreate`/`checkManage` write ONE `audit_log` row
+ * Audit is PRE-EFFECT and MUTATING-only: `checkEdit`/`checkCreate`/`checkManage`/`checkDiscussion` write ONE `audit_log` row
  * (allowed AND denied) BEFORE returning the grant / throwing; [checkRead] does NOT audit (per-request read
  * volume). The filesystem effect and the audit row cannot be one txn, so the guaranteed row is the DECISION.
  *
@@ -42,8 +45,9 @@ import kotlin.time.Clock
  * that a decision has to be recorded against arrives through the WRITE gates.
  *
  * Mode-aware ([enforced]): under `auth.mode = off` (loopback-dev — the phase-4 plan's "open behavior") the
- * matrix is NOT consulted — every principal is authorized (a grant is minted, reads pass) AND a mutating
- * decision is still audited as `allowed`. Under `builtin`/`proxy` the role×action [permits] matrix decides. This
+ * matrix is NOT consulted for humans/Anonymous — a grant is minted and a mutating decision is audited as
+ * `allowed`. Discussion checks still require a live agent token and discussion mode capability. Under `builtin`/`proxy` the
+ * role×action [permits] matrix decides. This
  * is a CONFIG decision, not a claim — non-escalation holds (an OFF deployment is the operator's explicit choice,
  * never a header/frontmatter input).
  */
@@ -61,6 +65,7 @@ class PolicyService(
      * semantics, so a single-root construction stays terse and inert.
      */
     private val editableOf: (RootName) -> Boolean = { true },
+    private val objectBackendOf: (RootName) -> Boolean = { false },
 ) {
 
     /** READ gate: throws [AccessDenied] on deny (no grant type for reads per the owner decision). Not audited. */
@@ -91,6 +96,80 @@ class PolicyService(
      */
     fun checkApprove(principal: Principal, resource: String): ApproveGrant =
         gate(principal, Action.APPROVE, writeClass = null, resource = RootedResource(null, resource)) { ApproveGrant() }
+
+    fun checkDiscussion(
+        principal: Principal,
+        operation: DiscussionAction,
+        facts: DiscussionFacts,
+        resource: RootedResource,
+    ): DiscussionGrant {
+        val action = operation.auditAction
+        val writeClass = if (operation == DiscussionAction.PURGE) WriteClass.DiscussionPurge else WriteClass.Discussion
+        val mode = (principal as? Principal.Agent)?.let { apiTokens.modeOf(it.tokenId, clock.now()) }
+        val role = if (principal is Principal.Agent) mode?.toRole() else roleFor(principal)
+        if ((enforced && role == null) || (principal is Principal.Agent && mode == null)) {
+            denied(principal, action, resource.audit, DenyReason.POLICY)
+        }
+        resource.root?.let { discussionTopology(it, writeClass) }?.let { denied(principal, action, resource.audit, it) }
+        if (principal is Principal.Agent && !agentCanDiscuss(mode, operation)) {
+            denied(principal, action, resource.audit, DenyReason.POLICY)
+        }
+        if (enforced && !permits(role, action)) denied(principal, action, resource.audit, DenyReason.POLICY)
+        val ownership = ownershipFor(operation, role, !enforced && principal == Principal.Anonymous)
+        val reliedOn = discussionReliedOn(principal, action, resource.audit, ownership, facts)
+        audit.record(decisionRow(principal, action, resource.audit, allowed = true))
+        return DiscussionGrant(resource.root, operation, reliedOn, ownership != DiscussionOwnership.NONE)
+    }
+
+    private fun discussionTopology(root: RootName, writeClass: WriteClass): DenyReason? = when {
+        writeClass.gatedByEditable && !editableOf(root) -> DenyReason.ROOT_NOT_EDITABLE
+        objectBackendOf(root) -> DenyReason.DISCUSSIONS_UNSUPPORTED
+        else -> null
+    }
+
+    private fun agentCanDiscuss(mode: AgentMode?, operation: DiscussionAction): Boolean =
+        mode != null && mode != AgentMode.READ_ONLY && operation != DiscussionAction.REATTACH && operation != DiscussionAction.PURGE
+
+    private fun ownershipFor(operation: DiscussionAction, role: Role?, bypass: Boolean): DiscussionOwnership = when {
+        bypass -> DiscussionOwnership.NONE
+        operation == DiscussionAction.EDIT || operation == DiscussionAction.RETRACT -> DiscussionOwnership.AUTHOR
+        role == Role.VIEWER && operation in STARTER_ACTIONS -> DiscussionOwnership.STARTER
+        else -> DiscussionOwnership.NONE
+    }
+
+    private fun discussionReliedOn(
+        principal: Principal,
+        action: Action,
+        resource: String,
+        ownership: DiscussionOwnership,
+        facts: DiscussionFacts,
+    ): ReliedOn {
+        if (facts !is DiscussionFacts.Known || facts.state != "ok" || ownership == DiscussionOwnership.NONE) return ReliedOn()
+        val subject = SubjectKey.of(principal)
+        val expected = IdentityDigest.of(subject)
+        return when (ownership) {
+            DiscussionOwnership.NONE -> ReliedOn()
+            DiscussionOwnership.AUTHOR -> facts.authorKey?.let {
+                if (it != expected) denied(principal, action, resource, DenyReason.POLICY)
+                ReliedOn(author = subject)
+            } ?: ReliedOn()
+            DiscussionOwnership.STARTER -> facts.starterKey?.let {
+                if (it != expected) denied(principal, action, resource, DenyReason.POLICY)
+                ReliedOn(starter = subject)
+            } ?: ReliedOn()
+        }
+    }
+
+    fun checkDiscussionRead(principal: Principal, resource: RootedResource, preview: Boolean = false): DenyReason? {
+        if (principal is Principal.Agent && agentModeFor(principal) == null) {
+            throw AccessDenied(Action.READ, resource.audit, principal)
+        }
+        checkRead(principal, resource.audit)
+        val root = resource.root ?: return null
+        val reason = discussionTopology(root, WriteClass.Discussion)
+        if (preview && reason != null) throw AccessDenied(Action.READ, resource.audit, principal, reason)
+        return reason
+    }
 
     /**
      * Read-only, NON-auditing: the live [AgentMode] for a [Principal.Agent] (null for non-agents OR a revoked/expired
@@ -208,15 +287,16 @@ class PolicyService(
     private companion object {
         const val MANAGE_RESOURCE = "admin"
         const val AGENT_ISSUER = "agent"
+        val STARTER_ACTIONS = setOf(DiscussionAction.RESOLVE, DiscussionAction.REOPEN, DiscussionAction.REATTACH)
 
         /**
-         * VIEWER: READ. EDITOR: READ + EDIT + CREATE. ADMIN: all (incl. MANAGE + APPROVE — the proposal
-         * status transition rides `Role.ADMIN -> true`, D1, no new arm). Anonymous / no-row: deny everything.
+         * VIEWER: READ + DISCUSS. EDITOR: those plus EDIT + CREATE. ADMIN: all, including PURGE, MANAGE and APPROVE.
+         * Anonymous / no-row: deny in enforced mode.
          */
         fun permits(role: Role?, action: Action): Boolean = when (role) {
             null -> false
-            Role.VIEWER -> action == Action.READ
-            Role.EDITOR -> action == Action.READ || action == Action.EDIT || action == Action.CREATE
+            Role.VIEWER -> action == Action.READ || action == Action.DISCUSS
+            Role.EDITOR -> action == Action.READ || action == Action.EDIT || action == Action.CREATE || action == Action.DISCUSS
             Role.ADMIN -> true
         }
 
@@ -227,8 +307,21 @@ class PolicyService(
     }
 }
 
-/** The authZ verbs. READ is gated by the ReadFacade; EDIT/CREATE/MANAGE/APPROVE require a typed grant. */
-enum class Action { READ, EDIT, CREATE, MANAGE, APPROVE }
+private enum class DiscussionOwnership { NONE, AUTHOR, STARTER }
+
+/** Authorization verbs; mutating checks mint typed grants, including DISCUSS/PURGE for discussions. */
+enum class Action { READ, EDIT, CREATE, MANAGE, APPROVE, DISCUSS, PURGE }
+
+enum class DiscussionAction(val auditAction: Action) {
+    START(Action.DISCUSS),
+    COMMENT(Action.DISCUSS),
+    EDIT(Action.DISCUSS),
+    RETRACT(Action.DISCUSS),
+    RESOLVE(Action.DISCUSS),
+    REOPEN(Action.DISCUSS),
+    REATTACH(Action.DISCUSS),
+    PURGE(Action.PURGE),
+}
 
 /**
  * A denied authorization decision (A3) — thrown by [PolicyService] AFTER the denied audit row is written. The
@@ -237,7 +330,8 @@ enum class Action { READ, EDIT, CREATE, MANAGE, APPROVE }
  * grant) means a caller cannot accidentally ignore a deny and still get a grant — there is no grant on this path.
  *
  * [reason] distinguishes the role×action matrix deny ([DenyReason.POLICY], today's 401/403) from the
- * per-root topology deny ([DenyReason.ROOT_NOT_EDITABLE], a 403 with its own code). It defaults to POLICY,
+ * per-root topology denies ([DenyReason.ROOT_NOT_EDITABLE] or [DenyReason.DISCUSSIONS_UNSUPPORTED], both 403).
+ * It defaults to POLICY,
  * so every pre-C4 throw site is unchanged.
  */
 class AccessDenied(
@@ -247,8 +341,8 @@ class AccessDenied(
     val reason: DenyReason = DenyReason.POLICY,
 ) : RuntimeException("access denied: $action on '$resource' for ${principal::class.simpleName} ($reason)")
 
-/** WHY an [AccessDenied] fired: the role×action matrix, or the target root's `editable = false` topology. */
-enum class DenyReason { POLICY, ROOT_NOT_EDITABLE }
+/** Why an [AccessDenied] fired: policy, non-editable root, or unsupported discussion backend. */
+enum class DenyReason { POLICY, ROOT_NOT_EDITABLE, DISCUSSIONS_UNSUPPORTED }
 
 /**
  * A rooted operation whose root is NOT SERVING (ADR-0011 D5): its disk vanished, its watcher died, it was
