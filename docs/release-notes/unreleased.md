@@ -10,6 +10,7 @@
 ## Changed
 
 - **Discussion controls.** Discussion buttons are smaller and use a quieter accent, with secondary actions in menus that close when focus moves away.
+- **Edit and View.** Switch between reading and editing from the same top-bar position; View asks before discarding unsaved edits.
 
 ## Limitations
 

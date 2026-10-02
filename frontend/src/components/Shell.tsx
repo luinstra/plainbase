@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useRouter, useRouterState } from "@tanstack/react-router";
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import { sessionQuery, treeQuery } from "../api/queries";
 import type { RootTree } from "../api/types";
 import { interceptableHref } from "../lib/links";
 import { entryFor, primaryEntry, rootAcceptsWrites, rootLabel, rootOfLocation } from "../lib/tree";
 import { ROOT_UNAVAILABLE } from "./ErrorView";
+import { PageActionsTarget } from "./PageActions";
 import { SearchPalette } from "./SearchPalette";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
@@ -59,6 +60,7 @@ function newPageBlockedReason(target: RootTree | null): string | undefined {
  */
 export function Shell() {
   const router = useRouter();
+  const [pageActions, setPageActions] = useState<HTMLDivElement | null>(null);
   // F8: the only available auth signal is `authenticated` (SessionResponse carries no role) — agents/anonymous
   // never approve, so the "Review" nav is gated on it. The queue itself renders for any authenticated reader;
   // an approve/reject/rebase 403 becomes the no-access state in the detail (NOT a hard client capability gate —
@@ -119,6 +121,7 @@ export function Shell() {
               <span className="max-sm:hidden">Review</span>
             </Link>
           )}
+          <div ref={setPageActions} className="contents" />
           {canCreate ? (
             <Link
               to="/new"
@@ -147,7 +150,7 @@ export function Shell() {
       <div className="flex w-full">
         <Sidebar />
         <main className="pb-main min-w-0 flex-1 px-4 py-8 lg:pl-12 lg:pr-8" data-pb-main>
-          <Outlet />
+          <PageActionsTarget.Provider value={pageActions}><Outlet /></PageActionsTarget.Provider>
         </main>
       </div>
       <SearchPalette />

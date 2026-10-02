@@ -85,10 +85,13 @@ function renderPage(root: string) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("the Edit affordance", () => {
-  it("renders on an EDITABLE root", async () => {
+  it("renders in the header on an EDITABLE root, not in the document footer", async () => {
     const { container } = renderPage("docs");
     await waitFor(() => expect(container.querySelector("[data-pb-docfoot]")).not.toBeNull());
-    expect(container.querySelector("[data-pb-edit-page]")).not.toBeNull();
+    const edit = container.querySelector("[data-pb-header] [data-pb-edit-page]");
+    expect(edit?.textContent).toBe("Edit");
+    expect(edit?.getAttribute("href")).toBe("/docs/guides/onboarding?mode=edit");
+    expect(container.querySelector("[data-pb-docfoot] [data-pb-edit-page]")).toBeNull();
   });
 
   it("is ABSENT on a READ-ONLY root - the rest of the footer is untouched", async () => {

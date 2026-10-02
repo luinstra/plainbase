@@ -1054,20 +1054,10 @@ body {
   font-size: 12px;
   color: var(--pb-text-faint);
 }
-.pb-docfoot-edit {
-  display: inline-block;
-  margin-bottom: 12px;
-  font-size: 14px;
-  color: var(--pb-link);
-}
-.pb-docfoot-edit:hover {
-  color: var(--pb-link-hover);
-}
-/* W7 history affordance — a sibling of the edit link, gated on PageResponse.commit (MF-1). */
+/* W7 history affordance, gated on PageResponse.commit (MF-1). */
 .pb-docfoot-history {
   display: inline-block;
   margin-bottom: 12px;
-  margin-left: 16px;
   font-size: 14px;
   color: var(--pb-link);
 }

@@ -24,6 +24,7 @@ import {
 import { Breadcrumbs } from "./Breadcrumbs";
 import { QueryErrorView, RootUnavailableView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
+import { PageEditAction } from "./PageActions";
 import { Prose } from "./Prose";
 import { Toc } from "./Toc";
 import { DiscussionPanel, type PassageRequest } from "./DiscussionPanel";
@@ -505,12 +506,12 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
       <div className="min-w-0">
         <div className="pb-reading-column">
           {html.isPending ? <PagePending /> : html.isError ? <PageError error={html.error} root={root} /> : <>
+            <PageEditAction url={page?.url ?? null} editable={editable} />
             <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
             <div ref={articleWrapper} data-pb-page-article><Prose html={html.data.html} /></div>
             <DocFooter
               frontmatter={frontmatter}
               url={page?.url ?? null}
-              editable={editable}
               hasHistory={(page?.commit ?? null) !== null}
             />
           </>}
@@ -634,42 +635,28 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * The doc footer below `<Prose>` (a sibling, never inside it): the "Edit this page" affordance
- * (W6/D-3 — links to the SAME path with `?mode=edit`, the canonical url is the splat key so the editor
- * inherits rename-stability), the W7 "History" affordance beside it, plus a mono "Last updated {date} by
- * {owner}" line sourced from frontmatter. The Edit link renders regardless of `updated`. A collision loser
- * (no canonical url) gets no Edit/History link (it has no root-content address). The History link gates on
+ * The doc footer below `<Prose>` (a sibling, never inside it): History plus a mono "Last updated {date} by
+ * {owner}" line sourced from frontmatter. Editing lives in the shell header. A collision loser
+ * (no canonical url) gets no History link (it has no root-content address). The History link gates on
  * `hasHistory` (W7/MF-1: `PageResponse.commit != null` — git-on with ≥1 commit — a ZERO-extra-fetch signal;
  * NoOp git always yields null so git-off never false-positives, and a zero-commit page correctly shows none).
- *
- * [editable] is the root's topology bit (`RootTree.editable`), not a permission: a READ-ONLY root's pages
- * offer no Edit link at all, because every write into one answers 403 `root_not_editable` in every auth mode.
- * History is NOT gated on it - a read-only root's history is perfectly readable.
+ * History remains readable on read-only roots.
  */
 function DocFooter({
   frontmatter,
   url,
-  editable,
   hasHistory,
 }: {
   frontmatter?: Record<string, unknown>;
   url: string | null;
-  editable: boolean;
   hasHistory: boolean;
 }) {
   const updated = asString(frontmatter?.updated);
   const owner = asString(frontmatter?.owner);
   const splat = byPathKeyForUrl(url);
-  // A read-only page with no `updated` and no history has nothing to put in the footer - render no footer at
-  // all rather than an empty frame (a `splat` alone no longer implies an Edit link).
-  if (!(splat && (editable || hasHistory)) && !updated) return null;
+  if (!(splat && hasHistory) && !updated) return null;
   return (
     <div className="pb-docfoot" data-pb-docfoot>
-      {splat && editable && (
-        <Link to="/$" params={{ _splat: splat }} search={{ mode: "edit" }} className="pb-docfoot-edit" data-pb-edit-page>
-          Edit this page
-        </Link>
-      )}
       {splat && hasHistory && (
         <Link to="/$" params={{ _splat: splat }} search={{ mode: "history" }} className="pb-docfoot-history" data-pb-history-page>
           History
