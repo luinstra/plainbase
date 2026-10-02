@@ -9,14 +9,63 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md). The 
 
 ```sh
 ./gradlew build                          # backend + frontend + tests (universal JAR floor)
+./gradlew -p buildSrc test              # shared-build contract and isolated Gradle wiring tests
 ./gradlew :server:run --args=serve       # run the server on the JVM
 ./gradlew :server:run --args=spike       # full-stack native dependency spike (JVM)
 ./gradlew :server:run --args="root list" # the topology CLI: root add|remove|list (docs/configuration.md)
 ./gradlew :server:nativeCompile          # native binary (requires CE 25.3.4.1 / JDK 25.0.4.1 on JAVA_HOME/GRAALVM_HOME)
 ```
 
-Requirements: JDK 25+ (the build auto-provisions the 25 toolchain for
-bytecode). Node is downloaded by the Gradle build - no local install needed.
+Ordinary source builds require JDK 25+ (the build auto-provisions the 25 toolchain for bytecode).
+Shared preparation/consumption and `./gradlew -p buildSrc test` require the Gradle daemon to run on Java 25 exactly;
+use `JAVA_HOME` to select it. Node is downloaded by the Gradle build - no local install needed.
+
+The root `build` does not run `buildSrc` tests. Run the explicit command above when changing build logic, and run
+`python3 -B -m unittest discover -s scripts/ci -p 'test_prepare_runtime_context.py'` for the runtime transport helper.
+
+### Shared CI compilation
+
+CI and release prepare application, frontend, JVM-test and native-test outputs once in the read-only `compile` job.
+`prepareSharedRuntime` runs `prepareSharedBuild`, boots the installed launcher to check `/healthz` against the resolved
+version, verifies the runtime tar has exactly the installed distribution's file bytes and executable flags, and exports
+both payloads. The bundle includes the JAR, both distribution archives, generated sources and processed resources;
+it excludes tool caches, test results, native images and native UID lists.
+
+Gradle consumers receive `ORG_GRADLE_PROJECT_ciSharedBuild` (an absolute ZIP path),
+`ORG_GRADLE_PROJECT_ciSharedBuildSha256` and `CI_SHARED_BUILD_REQUIRED=true`. Every invocation validates the producer hash,
+commit, source fingerprint, workflow run, resolved version, Java 25/Gradle 9.7.1 compatibility and exact external dependency
+inventories for main, JVM-test and native-test runtimes before any reader runs. Compiler and frontend build actions are
+disabled only in this explicit mode. Tests, coverage, migration verification, lint, dependency allowlist, native builds and
+process gates retain their normal checks. Native UID discovery runs freshly on each consumer platform.
+`ciSharedBuildProfile` is obsolete and rejected: all three dependency inventories are always validated.
+Shared tasks use cross-project resolution and task-graph callbacks; configuration cache and isolated projects are unsupported.
+Keep Gradle parallel project execution disabled for this workflow.
+
+Artifact downloads select IDs exported by `compile`, with one fixed file per payload. Consumer-only retries reuse those
+successful producer outputs; rerunning the producer creates new IDs for that attempt. An absent/expired artifact, input
+mutation, changed dependency or incorrect version fails without source fallback. Internal artifacts use `ci-build-bundle-`
+and `ci-runtime-dist-` names so release assembly's `plainbase-*` selection cannot ship them.
+
+For an explicit local round trip, use a unique `-PciSharedBuildRunId=local-<id>` on both preparation and consumption,
+and pass `-PciSharedBuild=<absolute-zip>` and `-PciSharedBuildSha256=<producer-sha256>` to the consumer.
+Use physical absolute checkout, archive, installed-distribution and output paths for the runtime helper; it rejects
+symlink ancestors, including macOS `/tmp` and `/var` aliases. Resolve local working paths with `pwd -P` and use
+`/private/tmp` for temporary runtime contexts.
+These local run overrides are forbidden inside Actions. Preparation refuses frontend `.env*` files and `VITE_*`
+environment overrides, uses production `NODE_ENV`, and fails if a generator changes an input, including the lockfile.
+Gradle's hermetic `npmInstall` uses `npm ci` to leave the tracked lockfile stable.
+To regenerate the lockfile after editing `frontend/package.json`, run `./gradlew :frontend:npm_install` through Gradle's
+managed Node/npm toolchain, then review `frontend/package-lock.json` before preparing a shared bundle.
+The fingerprint reads every file under explicit source roots even if ignored, including `frontend/public/dist` and
+nested source packages named `build`; only known generated/tool roots are excluded. Root and frontend `.npmrc` files
+are included even when untracked. Unrelated untracked files are left unread.
+
+Ordinary local Gradle commands retain source compilation and need neither Git nor CI identity/Python transport helpers.
+No marker persists after consumption. The default Dockerfile and `docker compose up --build` also retain their source build.
+The shared image jobs override the Dockerfile's `build` stage with the validated named runtime context, using the same
+pinned runtime base. Application compilation for shared images originates on the producer's Java 25 runner rather than
+the Docker build JDK; the image job still attests same-run packaging. Validation logs report cost per Gradle invocation;
+compile, artifact transfer, job overlap and the separate source Docker build must be measured independently.
 
 The platform-neutral runner self-test and Linux-only PID1 regression gates are separate from ordinary test discovery:
 
@@ -71,11 +120,14 @@ metadata only and is not evidence that the binary ran on macOS 14.
 
 ## What CI checks
 
-The always-run `ci-gate` aggregate in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) depends on six jobs.
+The always-run `ci-gate` aggregate in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) depends on nine jobs.
 That source fact does not establish live branch protection:
 
 - **`build-test`** - the JVM universal-JAR floor: `./gradlew build`, the positive `gitZombieJvmPid1`
   control, and the full-stack dependency spike.
+- **`compile`** - explicit buildSrc/helper contract tests, shared compilation, executed version proof and validated payload uploads.
+- **`consumer-portability`** - read-only validation of the Linux-produced bundle and executed launcher on macOS arm64 and Linux arm64
+  with GraalVM CE 25.3.4.1; no additional native images or publication.
 - **`enforced-auth-smoke`** - the builtin auth/CSRF matrix on loopback (anon `401`, bootstrap, CSRF
   present/absent/cross-origin, a PB-WRITE-1 save, an agent-bearer read + REST revoke). The builtin lane
   is the focused enforced-mode matrix; Docker, frontend and native lanes also exercise their own
@@ -83,6 +135,8 @@ That source fact does not establish live branch protection:
 - **`multi-root-smoke`** - the JVM-distribution multi-root topology smoke, separate from the native artifact lane.
 - **`docker-image`** - the compose-tier image build plus a non-loopback proxy/transport smoke (a
   `421` transport refusal and the full proxy CSRF path - only reachable from outside loopback).
+- **`docker-source-compatibility`** - an independent, parallel source Docker build and health/SPA/structured-log smoke.
+  This is the explicit second application compilation that protects the default local Docker path.
 - **`native-gate` (linux-x64)** - `nativeCompile` → `nativeTest` → the positive `gitZombieNativePid1`
   control → the spike (9/9) → the enforced-auth smoke again, against the native binary → the native-startup
   regression tripwire.
@@ -95,6 +149,9 @@ Focused smoke runs accept `-PsmokeArgs` as whitespace-separated tokens; argument
 
 Release builds (`.github/workflows/release.yml`) produce the universal JAR
 plus three native binaries: linux-x64, linux-arm64, and macos-arm64.
+The release's read-only `compile` job prepares the tag-stamped bundle once; the three native jobs and universal-JAR job
+consume it directly. The image job validates the runtime tar before registry login and runs no host Gradle or source stage
+under write/OIDC privileges. Assembly keeps its required-platform, checksum, attestation and immutable-publication gates.
 
 Native Windows is intentionally deferred until demand justifies the platform-specific filesystem
 contract and a green Windows CI lane. Direct Windows JVM operation is not a documented fallback: the

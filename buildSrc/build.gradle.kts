@@ -3,6 +3,10 @@ plugins {
 }
 
 dependencies {
+    testImplementation(gradleTestKit())
+    testImplementation(libs.kotlin.test.junit5)
+    testRuntimeOnly(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.platform.launcher)
     implementation(
         "${libs.plugins.kotlin.jvm.get().pluginId}:" +
             "${libs.plugins.kotlin.jvm.get().pluginId}.gradle.plugin:" +
@@ -30,5 +34,13 @@ gradlePlugin {
             id = "plainbase.native-tests"
             implementationClass = "com.plainbase.buildlogic.NativeTestsPlugin"
         }
+        register("sharedBuild") {
+            id = "plainbase.shared-build"
+            implementationClass = "com.plainbase.buildlogic.SharedBuildPlugin"
+        }
     }
+}
+
+tasks.test {
+    useJUnitPlatform()
 }

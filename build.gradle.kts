@@ -3,17 +3,18 @@ import org.jmailen.gradle.kotlinter.tasks.LintTask
 
 // Root build — module configuration lives in :server and :frontend and the
 // version catalog (gradle/libs.versions.toml). The root only carries
-// project-wide formatting for the root-level Gradle scripts.
+// project-wide formatting and the CI shared-build handoff.
 
 plugins {
     alias(libs.plugins.kotlinter)
     alias(libs.plugins.kover)
+    id("plainbase.shared-build")
 }
 
 group = "com.plainbase"
-// C5: the release workflow drives this from the tag (`-PreleaseVersion=0.1.0`, `.github/workflows/release.yml`);
-// dev/CI builds fall back to the snapshot. `:server` inherits this via `version = rootProject.version`
-// (server/build.gradle.kts) and self-reports it through the generated `BuildInfo` (item 8).
+// Workflows set ORG_GRADLE_PROJECT_releaseVersion: CI uses 0.0.0-ci and releases use the validated tag version.
+// Local source builds default to the snapshot; -PreleaseVersion can override it explicitly.
+// :server inherits this value and reports it through generated BuildInfo, including consumed shared bytes.
 version = (findProperty("releaseVersion") as String?)?.takeIf { it.isNotBlank() } ?: "0.1.0-SNAPSHOT"
 
 dependencies {
