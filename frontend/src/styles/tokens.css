@@ -107,6 +107,11 @@
   --pb-border: var(--pb-gray-200);
   --pb-border-strong: var(--pb-gray-300);
 
+  /* diagrams: distinct blocks with a small, dark shadow rather than a pale glow */
+  --pb-diagram-node-bg: var(--pb-surface-raised);
+  --pb-diagram-node-border: var(--pb-border-strong);
+  --pb-diagram-shadow: color-mix(in srgb, var(--pb-gray-950) 14%, transparent);
+
   /* interactive */
   --pb-accent: var(--pb-teal-700);
   --pb-accent-contrast: var(--pb-white);
@@ -172,6 +177,10 @@
   /* edges */
   --pb-border: var(--pb-gray-750);
   --pb-border-strong: var(--pb-gray-600);
+
+  --pb-diagram-node-bg: var(--pb-surface-active);
+  --pb-diagram-node-border: var(--pb-gray-500);
+  --pb-diagram-shadow: color-mix(in srgb, var(--pb-gray-950) 75%, transparent);
 
   /* interactive */
   --pb-accent: var(--pb-teal-400);

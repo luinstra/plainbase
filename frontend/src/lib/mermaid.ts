@@ -78,6 +78,9 @@ function themeConfig(): Parameters<MermaidInstance["initialize"]>[0] {
   const strongBorder = resolveColorToken("--pb-border-strong");
   const accent = resolveColorToken("--pb-accent");
   const text = resolveColorToken("--pb-text");
+  const nodeBackground = resolveColorToken("--pb-diagram-node-bg");
+  const nodeBorder = resolveColorToken("--pb-diagram-node-border");
+  const shadow = resolveColorToken("--pb-diagram-shadow");
 
   return {
     secure: SECURE_CONFIG_KEYS,
@@ -89,10 +92,13 @@ function themeConfig(): Parameters<MermaidInstance["initialize"]>[0] {
     theme: "base",
     themeCSS: "",
     themeVariables: {
+      darkMode: document.documentElement.dataset.theme === "dark",
+      dropShadow: `drop-shadow(0 2px 3px ${shadow})`,
+      useGradient: false,
       background,
-      primaryColor: raised,
+      primaryColor: nodeBackground,
       primaryTextColor: text,
-      primaryBorderColor: accent,
+      primaryBorderColor: nodeBorder,
       lineColor: accent,
       secondaryColor: background,
       secondaryTextColor: text,
@@ -100,8 +106,8 @@ function themeConfig(): Parameters<MermaidInstance["initialize"]>[0] {
       tertiaryColor: raised,
       tertiaryTextColor: text,
       tertiaryBorderColor: border,
-      mainBkg: background,
-      nodeBorder: border,
+      mainBkg: nodeBackground,
+      nodeBorder,
       clusterBkg: background,
       clusterBorder: strongBorder,
       textColor: text,

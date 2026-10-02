@@ -23,7 +23,8 @@ async function diagramColors(page: Page, selector: string): Promise<string[]> {
   );
 }
 
-test("renders multiple Mermaid diagrams in page preview and rerenders with the theme", async ({ page }) => {
+test("renders multiple Mermaid diagrams in page preview and rerenders with the theme", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1848, height: 1400 });
   await page.emulateMedia({ colorScheme: "light" });
   await captureCspViolations(page);
 
@@ -32,8 +33,14 @@ test("renders multiple Mermaid diagrams in page preview and rerenders with the t
   const source = [
     "",
     "```mermaid",
-    "flowchart LR",
-    "  A[Start] --> B[Finish]",
+    "flowchart TD",
+    "  A[Write a document] --> B{Ready for review?}",
+    "  B -->|Yes| C[Request review]",
+    "  B -->|Not yet| F[Keep editing]",
+    "  C --> D{Approved?}",
+    "  D -->|Approved| E[Publish]",
+    "  D -->|Changes needed| F",
+    "  F --> A",
     "```",
     "",
     "~~~mermaid",
@@ -68,6 +75,13 @@ test("renders multiple Mermaid diagrams in page preview and rerenders with the t
     expect(box?.width).toBeGreaterThan(0);
     expect(box?.height).toBeGreaterThan(0);
   }
+  async function captureDiagram(theme: string) {
+    const diagram = preview.locator("[data-pb-mermaid]").first();
+    await diagram.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await diagram.screenshot({ path: testInfo.outputPath(`diagram-${theme}.png`) });
+  }
+  await captureDiagram("light");
 
   await page.locator("[data-pb-theme-toggle]").click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -75,6 +89,16 @@ test("renders multiple Mermaid diagrams in page preview and rerenders with the t
   await expect(preview.locator("[data-pb-mermaid] svg")).toHaveCount(2);
   const darkColors = await diagramColors(page, '[data-pb-preview] [data-pb-mermaid] svg');
   expect(darkColors).not.toEqual(lightColors);
+  const node = preview.locator("[data-pb-mermaid] .node rect").first();
+  const nodeStyle = await node.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { fill: style.fill, stroke: style.stroke, filter: style.filter,
+      background: getComputedStyle(document.body).backgroundColor };
+  });
+  expect(nodeStyle.fill).not.toBe(nodeStyle.background);
+  expect(nodeStyle.stroke).not.toBe(nodeStyle.fill);
+  expect(nodeStyle.filter).toContain("drop-shadow");
+  await captureDiagram("dark");
 
   await page.locator("[data-pb-theme-toggle]").click();
   await expect(page.locator("html")).not.toHaveAttribute("data-theme");
