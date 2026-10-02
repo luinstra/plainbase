@@ -142,8 +142,15 @@ class SharedBuildPlugin : Plugin<Project> {
                     }
                 }
                 server.tasks.named<Test>("nativeTestList") {
-                    outputs.upToDateWhen { false }
-                    outputs.cacheIf("Native UIDs must be discovered freshly on this platform") { false }
+                    outputs.cacheIf("Native UIDs stay platform-local; only unchanged workspace outputs may be reused") { false }
+                    // consumeSharedBuild validates this archive identity before every discovery/reuse decision.
+                    inputs.property("ciSharedBuildSha256", project.providers.gradleProperty("ciSharedBuildSha256"))
+                    listOf("os.name", "os.arch", "os.version").forEach { property ->
+                        inputs.property("nativeDiscovery.$property", project.providers.systemProperty(property))
+                    }
+                    inputs.property("nativeDiscovery.java.vendor", javaLauncher.map { it.metadata.vendor })
+                    inputs.property("nativeDiscovery.java.runtime", javaLauncher.map { it.metadata.javaRuntimeVersion })
+                    inputs.property("nativeDiscovery.java.vm", javaLauncher.map { it.metadata.jvmVersion })
                 }
             }
         }

@@ -36,7 +36,8 @@ Gradle consumers receive `ORG_GRADLE_PROJECT_ciSharedBuild` (an absolute ZIP pat
 commit, source fingerprint, workflow run, resolved version, Java 25/Gradle 9.7.1 compatibility and exact external dependency
 inventories for main, JVM-test and native-test runtimes before any reader runs. Compiler and frontend build actions are
 disabled only in this explicit mode. Tests, coverage, migration verification, lint, dependency allowlist, native builds and
-process gates retain their normal checks. Native UID discovery runs freshly on each consumer platform.
+process gates retain their normal checks. Native UID discovery runs freshly for each validated bundle, consumer platform and
+test JVM, then reuses unchanged local outputs; Gradle build-cache reuse remains disabled.
 `ciSharedBuildProfile` is obsolete and rejected: all three dependency inventories are always validated.
 Shared tasks use cross-project resolution and task-graph callbacks; configuration cache and isolated projects are unsupported.
 Keep Gradle parallel project execution disabled for this workflow.

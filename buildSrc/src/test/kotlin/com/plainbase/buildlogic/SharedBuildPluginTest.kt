@@ -1,5 +1,6 @@
 package com.plainbase.buildlogic
 
+import org.gradle.testkit.runner.BuildResult
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.Test
@@ -9,7 +10,9 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption.APPEND
 import java.util.Properties
 import java.util.jar.JarOutputStream
+import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -151,6 +154,199 @@ class SharedBuildPluginTest {
         """.trimIndent(),
         )
         write("server/src/main/resources/META-INF/native-image/reflect-config.json", "[]")
+    }
+
+    private fun discoveryTrackingFixture() {
+        fixture()
+        Files.writeString(
+            root.resolve("settings.gradle"),
+            "\n" + """
+
+            buildCache { local { directory = file('isolated-build-cache') } }
+            def originalOsVersion = System.getProperty('os.version')
+            if (providers.gradleProperty('fixtureOsVersion').isPresent()) {
+                System.setProperty('os.version', providers.gradleProperty('fixtureOsVersion').get())
+                gradle.buildFinished { System.setProperty('os.version', originalOsVersion) }
+            }
+            """.trimIndent(),
+            APPEND,
+        )
+        Files.writeString(
+            root.resolve("server/build.gradle"),
+            "\n" + """
+
+            // Task-tracking fixture only: keep Test's real inputs/outputs with a compiled Java candidate.
+            // This miniature writer does not cover JUnit discovery or GraalVM image compilation.
+            def uidDirectory = layout.buildDirectory.dir('test-results/nativeTestList/testlist')
+            tasks.named('nativeTestList', Test) { task ->
+                testClassesDirs = files('build/classes/java/main')
+                classpath = sourceSets.main.runtimeClasspath
+                javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+                reports.html.required = false
+                reports.junitXml.required = false
+                outputs.dir(uidDirectory)
+                actions.clear()
+                doLast {
+                    def directory = uidDirectory.get().asFile
+                    delete(directory)
+                    directory.mkdirs()
+                    // Real discovery changes random filenames even when UID bytes remain identical.
+                    def uid = File.createTempFile('uid-', '.txt', directory)
+                    uid.text = '[engine:fixture]/[class:Example]\n'
+                    def binary = binaryResultsDirectory.get().asFile
+                    binary.mkdirs()
+                    new File(binary, 'fixture.bin').text = 'tracking fixture results'
+                    println 'DISCOVERY_ACTION:' + uid.name + ':' + uid.text.trim()
+                }
+            }
+            tasks.named('nativeTestCompile') {
+                inputs.dir(uidDirectory).withPropertyName('testListDirectory')
+                def image = layout.buildDirectory.file('native/nativeTestCompile/fixture-image')
+                outputs.file(image)
+                doLast {
+                    def output = image.get().asFile
+                    output.parentFile.mkdirs()
+                    output.text = uidDirectory.get().asFile.listFiles().sort { it.name }
+                        .collect { it.name + ':' + it.text }.join('\n')
+                }
+            }
+            tasks.register('assertDiscoveryIdentity') {
+                doLast {
+                    def task = tasks.named('nativeTestList', Test).get()
+                    def properties = task.inputs.properties
+                    if (!providers.gradleProperty('ciSharedBuild').isPresent()) {
+                        assert !properties.keySet().any { it == 'ciSharedBuildSha256' || it.startsWith('nativeDiscovery.') }
+                    } else {
+                        assert properties['ciSharedBuildSha256'] == providers.gradleProperty('ciSharedBuildSha256').get()
+                        ['name', 'arch', 'version'].each { key ->
+                            assert properties['nativeDiscovery.os.' + key] == System.getProperty('os.' + key)
+                        }
+                        def metadata = task.javaLauncher.get().metadata
+                        assert properties['nativeDiscovery.java.vendor'] == metadata.vendor
+                        assert properties['nativeDiscovery.java.runtime'] == metadata.javaRuntimeVersion
+                        assert properties['nativeDiscovery.java.vm'] == metadata.jvmVersion
+                    }
+                    println 'DISCOVERY_IDENTITY_VERIFIED'
+                }
+            }
+            """.trimIndent(),
+            APPEND,
+        )
+    }
+
+    private fun prepareDiscoveryBundle(): Path {
+        discoveryTrackingFixture()
+        val prepared = runner("prepareSharedBuild", "-PciSharedBuildRunId=local-discovery").build()
+        assertEquals(TaskOutcome.SUCCESS, prepared.task(":prepareSharedBuild")?.outcome)
+        assertTrue(Files.size(root.resolve("server/build/classes/java/main/Example.class")) > 0)
+        return root.resolve("build/ci-shared/shared-build.zip")
+    }
+
+    private fun discoveryArguments(bundle: Path): Array<String> = arrayOf(
+        "-PciSharedBuild=$bundle", "-PciSharedBuildSha256=${SharedBuildFiles.sha256(bundle)}", "-PciSharedBuildRunId=local-discovery",
+    )
+
+    private fun discover(bundle: Path, vararg arguments: String): BuildResult =
+        runner(":server:nativeTestCompile", *discoveryArguments(bundle), *arguments)
+            .forwardOutput().build().also {
+                assertEquals(TaskOutcome.SUCCESS, it.task(":consumeSharedBuild")?.outcome)
+                assertTrue(it.output.contains("Shared build validated"))
+                if (":server:assertDiscoveryIdentity" in arguments) assertTrue(it.output.contains("DISCOVERY_IDENTITY_VERIFIED"))
+            }
+
+    private fun assertDiscoveryOutcomes(result: BuildResult, outcome: TaskOutcome) {
+        val paths = listOf(":server:nativeTestList", ":server:nativeTestCompile")
+        assertEquals(paths.associateWith { outcome }, paths.associateWith { result.task(it)?.outcome })
+    }
+
+    private fun uidInventory(): Map<String, String> = Files.list(root.resolve("server/build/test-results/nativeTestList/testlist")).use {
+        it.toList().associate { path -> path.fileName.toString() to Files.readString(path) }
+    }
+
+    @Test
+    fun `should reuse consumer discovery and native compilation for identical validated inputs`() {
+        val bundle = prepareDiscoveryBundle()
+        assertDiscoveryOutcomes(discover(bundle), TaskOutcome.SUCCESS)
+        val first = uidInventory()
+        assertEquals(listOf("[engine:fixture]/[class:Example]\n"), first.values.toList())
+        val image = Files.readString(root.resolve("server/build/native/nativeTestCompile/fixture-image"))
+
+        val repeated = discover(bundle)
+        assertDiscoveryOutcomes(repeated, TaskOutcome.UP_TO_DATE)
+        assertEquals(first, uidInventory())
+        assertEquals(image, Files.readString(root.resolve("server/build/native/nativeTestCompile/fixture-image")))
+        assertFalse(repeated.output.contains("DISCOVERY_ACTION") || repeated.output.contains("NATIVE_READER"))
+    }
+
+    @Test
+    fun `should invalidate consumer discovery for valid bundle and platform changes and reject corrupt identity before readers`() {
+        val bundle = prepareDiscoveryBundle()
+        assertDiscoveryOutcomes(discover(bundle, ":server:assertDiscoveryIdentity"), TaskOutcome.SUCCESS)
+        val first = uidInventory()
+        val changedBundle = root.resolve("build/ci-shared/commented.zip")
+        ZipFile(bundle.toFile()).use { zip ->
+            ZipOutputStream(Files.newOutputStream(changedBundle)).use { output ->
+                output.setComment("same payload with a different transport identity")
+                zip.entries().asSequence().forEach { entry ->
+                    output.putNextEntry(ZipEntry(entry.name))
+                    zip.getInputStream(entry).use { it.copyTo(output) }
+                    output.closeEntry()
+                }
+            }
+        }
+        assertFalse(SharedBuildFiles.sha256(bundle) == SharedBuildFiles.sha256(changedBundle))
+        assertDiscoveryOutcomes(discover(changedBundle), TaskOutcome.SUCCESS)
+        assertFalse(first.keys == uidInventory().keys)
+        assertEquals(first.values.toList(), uidInventory().values.toList())
+        assertDiscoveryOutcomes(discover(changedBundle), TaskOutcome.UP_TO_DATE)
+
+        val platform = "-PfixtureOsVersion=tracking-fixture-version"
+        assertDiscoveryOutcomes(discover(changedBundle, platform), TaskOutcome.SUCCESS)
+        assertDiscoveryOutcomes(discover(changedBundle, platform), TaskOutcome.UP_TO_DATE)
+        assertDiscoveryOutcomes(discover(changedBundle), TaskOutcome.SUCCESS)
+        assertDiscoveryOutcomes(discover(changedBundle), TaskOutcome.UP_TO_DATE)
+
+        val invalid = runner(
+            ":server:nativeTestCompile", *discoveryArguments(changedBundle), "-PciSharedBuildSha256=${"0".repeat(64)}",
+        ).buildAndFail()
+        assertEquals(TaskOutcome.FAILED, invalid.task(":consumeSharedBuild")?.outcome)
+        assertTrue(invalid.task(":server:nativeTestList") == null && invalid.task(":server:nativeTestCompile") == null)
+        assertFalse(invalid.output.contains("DISCOVERY_ACTION") || invalid.output.contains("NATIVE_READER"))
+
+        val validArguments = discoveryArguments(changedBundle)
+        val validInventory = uidInventory()
+        Files.write(changedBundle, byteArrayOf(0), APPEND)
+        val corrupt = runner(":server:nativeTestCompile", *validArguments).buildAndFail()
+        assertEquals(TaskOutcome.FAILED, corrupt.task(":consumeSharedBuild")?.outcome)
+        assertTrue(corrupt.task(":server:nativeTestList") == null && corrupt.task(":server:nativeTestCompile") == null)
+        assertFalse(corrupt.output.contains("DISCOVERY_ACTION") || corrupt.output.contains("NATIVE_READER"))
+        assertEquals(validInventory, uidInventory())
+    }
+
+    @Test
+    fun `should rerun consumer discovery for missing or changed outputs without build cache reuse`() {
+        val bundle = prepareDiscoveryBundle()
+        // Positive control: this exact Test fixture is cache-capable in unchanged source mode.
+        val source = runner(":server:nativeTestList", ":server:assertDiscoveryIdentity", "--build-cache").forwardOutput().build()
+        assertEquals(TaskOutcome.SUCCESS, source.task(":server:nativeTestList")?.outcome)
+        assertTrue(source.output.contains("DISCOVERY_IDENTITY_VERIFIED"))
+        SharedBuildFiles.deleteTree(root.resolve("server/build/test-results/nativeTestList"))
+        val restored = runner(":server:nativeTestList", "--build-cache").forwardOutput().build()
+        assertEquals(TaskOutcome.FROM_CACHE, restored.task(":server:nativeTestList")?.outcome)
+
+        assertDiscoveryOutcomes(discover(bundle, "--build-cache"), TaskOutcome.SUCCESS)
+        assertDiscoveryOutcomes(discover(bundle, "--build-cache"), TaskOutcome.UP_TO_DATE)
+        val first = uidInventory()
+        SharedBuildFiles.deleteTree(root.resolve("server/build/test-results/nativeTestList"))
+        assertDiscoveryOutcomes(discover(bundle, "--build-cache"), TaskOutcome.SUCCESS)
+        assertFalse(first.keys == uidInventory().keys)
+        assertEquals(first.values.toList(), uidInventory().values.toList())
+        Files.list(root.resolve("server/build/test-results/nativeTestList/testlist")).use {
+            Files.writeString(it.findFirst().orElseThrow(), "changed UID output\n")
+        }
+        assertDiscoveryOutcomes(discover(bundle, "--build-cache"), TaskOutcome.SUCCESS)
+        assertEquals(first.values.toList(), uidInventory().values.toList())
+        assertDiscoveryOutcomes(discover(bundle, "--build-cache"), TaskOutcome.UP_TO_DATE)
     }
 
     @Test
