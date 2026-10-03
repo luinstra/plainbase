@@ -17,7 +17,7 @@ function SearchTrigger() {
     <button
       type="button"
       onClick={() => document.dispatchEvent(new CustomEvent("pb:search-open"))}
-      className="pb-search-trigger flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink"
+      className="pb-search-trigger flex items-center gap-2 rounded-md border border-edge bg-field px-3 py-1.5 text-sm text-muted hover:text-ink"
       data-pb-search-trigger
       aria-label="Search"
     >
@@ -102,7 +102,7 @@ export function Shell() {
   return (
     <div className="pb-shell min-h-screen bg-surface text-ink" data-pb-shell onClick={onClick}>
       <header
-        className="pb-header sticky top-0 z-10 flex h-14 items-center justify-between border-b border-edge bg-raised px-4"
+        className="pb-header sticky top-0 z-10 flex h-14 items-center justify-between border-b border-edge bg-chrome px-4"
         data-pb-header
       >
         <a href="/" className="pb-logo-home flex items-center" aria-label="Plainbase" data-pb-home>

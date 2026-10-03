@@ -66,10 +66,10 @@ export function Sidebar() {
     });
   };
 
-  if (!data) return <aside className="pb-sidebar w-[clamp(16rem,20vw,22rem)] shrink-0" data-pb-sidebar />;
+  if (!data) return <aside className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 bg-chrome max-lg:hidden" data-pb-sidebar />;
   return (
     <aside
-      className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
+      className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-chrome max-lg:hidden"
       data-pb-sidebar
     >
       {data.roots.length > 1 && selectedEntry && (

@@ -279,7 +279,7 @@ function Editor({
             </button>
             <button
               type="button"
-              className="pb-editor-save rounded-md border border-edge bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast disabled:opacity-50"
+              className="pb-editor-save rounded-md border border-primary-edge bg-primary px-3 py-1.5 text-sm font-medium text-primary-ink disabled:opacity-50"
               data-pb-save
               disabled={save.isPending || !dirty || !editable}
               onClick={() => save.mutate()}
@@ -489,7 +489,7 @@ function DeletedBanner({ buffer, root, initialPath }: { buffer: string; root: st
       <p className="mt-1 text-muted">Your edits are kept. Save them as a new page so nothing is lost.</p>
       <button
         type="button"
-        className="pb-editor-save mt-2 rounded-md border border-edge bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast disabled:opacity-50"
+        className="pb-editor-save mt-2 rounded-md border border-primary-edge bg-primary px-3 py-1.5 text-sm font-medium text-primary-ink disabled:opacity-50"
         data-pb-save-as-new
         disabled={saving}
         onClick={() => void saveAsNew()}
@@ -669,7 +669,7 @@ export function NewPage({ root }: { root?: string }) {
         </label>
         <button
           type="submit"
-          className="self-start rounded-md border border-edge bg-accent px-4 py-2 text-sm font-medium text-accent-contrast disabled:opacity-50"
+          className="self-start rounded-md border border-primary-edge bg-primary px-4 py-2 text-sm font-medium text-primary-ink disabled:opacity-50"
           data-pb-new-create
           disabled={create.isPending || !title.trim() || !sectionReady || !targetRoot}
         >
@@ -708,7 +708,8 @@ const pbEditorTheme = EditorView.theme({
   ".cm-activeLine": { backgroundColor: "var(--pb-surface-raised)" },
   "&.cm-focused": { outline: "none" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--pb-accent)" },
-  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": { backgroundColor: "var(--pb-selection-bg)" },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": { backgroundColor: "var(--pb-selection-bg)" },
+  ".cm-content ::selection": { backgroundColor: "var(--pb-selection-bg)", color: "var(--pb-selection-text)" },
   ".cm-scroller": { fontFamily: "var(--font-mono)" },
 });
 

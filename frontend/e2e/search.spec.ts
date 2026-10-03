@@ -88,7 +88,7 @@ test("Stage 1 quick-switcher is zero-network and Enter navigates via node.url", 
   await expect(selected).toHaveCount(1);
   const selectedStyle = await selected.evaluate((element) => ({
     background: getComputedStyle(element).backgroundColor,
-    paletteBackground: getComputedStyle(element.closest("[data-pb-search]")!).backgroundColor,
+    paletteBackground: getComputedStyle(element.closest("[data-pb-search-panel]")!).backgroundColor,
     marker: getComputedStyle(element, "::before").content,
   }));
   expect(selectedStyle.background).not.toBe(selectedStyle.paletteBackground);

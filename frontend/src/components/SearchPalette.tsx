@@ -250,7 +250,7 @@ function PaletteBody({
         if (event.target === overlayRef.current) close();
       }}
     >
-      <div className="w-full max-w-xl overflow-hidden rounded-xl border border-edge bg-raised shadow-lg" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-xl overflow-hidden rounded-xl border border-edge bg-raised shadow-lg" data-pb-search-panel onMouseDown={(e) => e.stopPropagation()}>
         {stage === "search" && (
           <div className="flex items-center gap-2 border-b border-edge px-3 py-1.5 text-xs text-muted" data-pb-search-stage-label="">
             <button
@@ -301,7 +301,7 @@ function PaletteBody({
           onActivateBridge={activateBridge}
         />
         <div
-          className="pb-search-foot flex items-center gap-[18px] border-t border-edge px-4 py-2 font-mono text-[10.5px] text-faint"
+          className="pb-search-foot flex items-center gap-[18px] border-t border-edge px-4 py-2 font-sans text-xs text-faint"
           data-pb-search-foot=""
           aria-hidden="true"
         >
