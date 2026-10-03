@@ -9,8 +9,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Ordinary source builds may pass RELEASE_VERSION to stamp the binary; empty = dev SNAPSHOT.
-# CI/release shared images override this build stage with an already stamped runtime context.
+# C5: the release workflow passes the tag-derived version through so the image's binary
+# self-reports it too (root build.gradle.kts `-PreleaseVersion`, item 8); empty = dev SNAPSHOT.
 ARG RELEASE_VERSION=""
 
 # Warm the dependency cache first for better layer reuse.
