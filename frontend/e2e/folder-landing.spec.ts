@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { TreeFolder, TreeResponse } from "../src/api/types";
-import { expect, test } from "./smoke-fixtures";
+import { expect, test, type Page } from "./smoke-fixtures";
 import { expectNoReload, gotoExpectStatus, plantNoReloadMarker } from "./helpers";
 
 test("folder creation keeps the current location and page links keep native navigation", async ({ page, context }) => {
@@ -10,9 +10,33 @@ test("folder creation keeps the current location and page links keep native navi
   await expect(listing.getByRole("heading", { name: "Guides", exact: true })).toBeVisible();
   await plantNoReloadMarker(page);
   const pageLink = listing.getByRole("link", { name: "Deploy Guide", exact: true });
-  const [otherTab] = await Promise.all([context.waitForEvent("page"), pageLink.click({ modifiers: ["ControlOrMeta"] })]);
-  await expect(otherTab).toHaveURL(/\/docs\/guides\/deploy-guide$/);
-  await otherTab.close();
+  let release!: () => void;
+  let requested!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const requestSeen = new Promise<void>((resolve) => { requested = resolve; });
+  let otherTab: Page | undefined;
+  await context.route("**/ci-held-image", async (route) => {
+    requested();
+    await held;
+    await route.fulfill({ status: 204 });
+  });
+  await context.route("**/docs/guides/deploy-guide", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace("</body>", '<img src="/ci-held-image" alt=""></body>');
+    await route.fulfill({ response, body });
+  });
+  try {
+    [otherTab] = await Promise.all([context.waitForEvent("page"), pageLink.click({ modifiers: ["ControlOrMeta"] })]);
+    await otherTab.waitForURL(/\/docs\/guides\/deploy-guide$/, { waitUntil: "domcontentloaded" });
+    await expect(otherTab.getByRole("article").getByRole("heading", { name: /^Deploy Guide/, level: 1 })).toBeVisible();
+    await requestSeen;
+    expect(await otherTab.evaluate(() => document.readyState)).toBe("interactive");
+    expect(new URL(otherTab.url()).pathname).toBe("/docs/guides/deploy-guide");
+  } finally {
+    release();
+    await context.unrouteAll({ behavior: "wait" });
+    await otherTab?.close();
+  }
   await expect(page).toHaveURL(/\/docs\/guides$/);
   await listing.getByRole("link", { name: "New page here" }).focus();
   await page.keyboard.press("Enter");

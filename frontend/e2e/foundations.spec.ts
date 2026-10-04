@@ -5,6 +5,7 @@ import { gotoAndWaitForSearchReady, gotoExpectStatus } from "./helpers";
 
 async function measure(page: Page, selector: string, pseudo: string | null = null) {
   const elements = page.locator(selector);
+  await expect(elements.first(), selector).toBeVisible();
   expect(await elements.count(), selector).toBeGreaterThan(0);
   return elements.evaluateAll((elements, pseudo) => {
     type Color = [number, number, number, number];
@@ -78,6 +79,38 @@ const markdown = [
   "```javascript", '// comment old', 'const message = "old";', "```", "",
   "```mermaid", "flowchart LR", " A[Start] --> B[Finish]", "```", "",
 ].join("\n");
+
+test("contrast measurement waits for delayed page metadata", async ({ page, smokeServer }) => {
+  writeFileSync(path.join(smokeServer.contentDir, "delayed-foundations.md"), markdown);
+  const endpoint = "/api/v1/pages/by-path/docs/delayed-foundations";
+  await expect.poll(async () => (await page.request.get(endpoint)).status()).toBe(200);
+  let release!: () => void;
+  let requested!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const requestSeen = new Promise<void>((resolve) => { requested = resolve; });
+  await page.route(`**${endpoint}`, async (route) => {
+    requested();
+    await held;
+    await route.continue();
+  });
+  try {
+    await gotoExpectStatus(page, "/docs/delayed-foundations");
+    await requestSeen;
+    const selector = '[data-pb-chip-status="active"]';
+    expect(await page.locator(selector).count()).toBe(0);
+    const measurement = measure(page, selector).then((items) => ({ items, error: null }), (error: unknown) => ({ items: null, error }));
+    // Cross a browser roundtrip while the real metadata response is still held.
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    release();
+    const result = await measurement;
+    expect(result.error).toBeNull();
+    expect(result.items).toHaveLength(1);
+    expect(result.items![0].contrast).toBeGreaterThanOrEqual(4.5);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
 
 for (const theme of ["light", "dark"] as const) {
   test(`${theme} foundations chrome, reading, selection and search`, async ({ page, smokeServer }, testInfo) => {
