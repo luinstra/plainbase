@@ -426,6 +426,7 @@ body {
 .pb-prose .pb-callout > :last-child,
 .pb-prose .pb-callout pre,
 .pb-prose .pb-callout table,
+.pb-prose .pb-callout .pb-table-scroll,
 .pb-prose .pb-callout .pb-mermaid {
   margin-bottom: 0.75rem;
   max-width: 100%;
@@ -467,6 +468,19 @@ body {
   margin: 0 0 1.25rem;
   border-collapse: collapse;
   font-size: 0.9375rem;
+}
+
+.pb-prose .pb-table-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  margin-bottom: 1.25rem;
+}
+
+/* Preserve the table's intrinsic columns while containing its paint and scroll area. */
+.pb-prose .pb-table-scroll > table,
+.pb-prose .pb-callout .pb-table-scroll > table {
+  margin-bottom: 0;
 }
 
 .pb-prose th,

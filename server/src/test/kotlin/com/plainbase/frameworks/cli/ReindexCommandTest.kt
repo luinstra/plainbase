@@ -326,7 +326,7 @@ class ReindexCommandTest : FunSpec({
                     actual shouldBeSameInstanceAs decorationFailure
                     actual.suppressed.single() shouldBeSameInstanceAs closeFailure
                     fixture.clients.single().closeCount shouldBe 1
-                    fixture.clients.single().transportActive shouldBe false
+                    fixture.clients.single().assertTransportClosed()
                     fixture.connections.isNotEmpty() shouldBe true
                     fixture.connections.all { it.isClosed } shouldBe true
                     fixture.connections.all { it.closeCount == 1 } shouldBe true
@@ -337,7 +337,7 @@ class ReindexCommandTest : FunSpec({
                     probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
                 }
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
                 fixture.connections.all { it.closeCount == 1 } shouldBe true
             }
@@ -384,7 +384,7 @@ class ReindexCommandTest : FunSpec({
                     val event = appender.list.first { it.formattedMessage == "reindex failed" }
                     (event.throwableProxy as? ThrowableProxy)?.throwable shouldBeSameInstanceAs partialFailure
                     fixture.clients.single().closeCount shouldBe 1
-                    fixture.clients.single().transportActive shouldBe false
+                    fixture.clients.single().assertTransportClosed()
                     fixture.connections.isNotEmpty() shouldBe true
                     fixture.connections.all { it.isClosed } shouldBe true
                     fixture.drivers.single().closeCount shouldBe 1
@@ -397,7 +397,7 @@ class ReindexCommandTest : FunSpec({
                 }
             }
             fixture.clients.single().closeCount shouldBe 1
-            fixture.clients.single().transportActive shouldBe false
+            fixture.clients.single().assertTransportClosed()
             fixture.drivers.single().closeCount shouldBe 1
         }
     }
@@ -419,13 +419,13 @@ class ReindexCommandTest : FunSpec({
 
                     out shouldContain "reindex: rebuilt the search index for 0 page(s)"
                     fixture.clients.single().closeCount shouldBe 1
-                    fixture.clients.single().transportActive shouldBe false
+                    fixture.clients.single().assertTransportClosed()
                     fixture.connections.isNotEmpty() shouldBe true
                     fixture.connections.all { it.isClosed } shouldBe true
                     fixture.drivers.single().closeCount shouldBe 1
                 }
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
             }
         }
@@ -539,7 +539,7 @@ class ReindexCommandTest : FunSpec({
                         appender.list.any { it.formattedMessage == "reindex failed" } shouldBe true
                         (requests.get() > 0) shouldBe true
                         fixture.clients.single().closeCount shouldBe 1
-                        fixture.clients.single().transportActive shouldBe false
+                        fixture.clients.single().assertTransportClosed()
                         fixture.connections.isNotEmpty() shouldBe true
                         fixture.connections.all { it.isClosed } shouldBe true
                         fixture.drivers.single().closeCount shouldBe 1
@@ -548,7 +548,7 @@ class ReindexCommandTest : FunSpec({
                     }
                 }
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
             }
         }
@@ -590,7 +590,7 @@ class ReindexCommandTest : FunSpec({
                         (event.throwableProxy as? ThrowableProxy)?.throwable shouldBeSameInstanceAs closeFailure
                         out shouldNotContain "reindex: rebuilt the search index"
                         fixture.clients.single().closeCount shouldBe 1
-                        fixture.clients.single().transportActive shouldBe false
+                        fixture.clients.single().assertTransportClosed()
                         fixture.connections.isNotEmpty() shouldBe true
                         fixture.connections.all { it.isClosed } shouldBe true
                         fixture.drivers.single().closeCount shouldBe 1
@@ -603,7 +603,7 @@ class ReindexCommandTest : FunSpec({
                     }
                 }
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
             }
         }

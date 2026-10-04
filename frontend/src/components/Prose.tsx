@@ -35,7 +35,23 @@ export function Prose({ html, metadata, title, reading }: { html: string; metada
     if (!container) return;
     highlightCodeBlocks(container);
     injectHeadingAnchors(container);
-    return renderMermaidBlocks(container);
+    const tables = Array.from(container.querySelectorAll("table"), (table) => {
+      const scroll = document.createElement("div");
+      scroll.className = "pb-table-scroll";
+      scroll.setAttribute("role", "region");
+      scroll.setAttribute("aria-label", "Scrollable table");
+      scroll.tabIndex = 0;
+      table.before(scroll);
+      scroll.append(table);
+      return { table, scroll };
+    });
+    const cleanupMermaid = renderMermaidBlocks(container);
+    return () => {
+      cleanupMermaid();
+      for (const { table, scroll } of tables) {
+        if (table.parentElement === scroll) scroll.replaceWith(table);
+      }
+    };
   }, [html, parts?.title]);
 
   // `ready` is a synchronous derived value (NOT useState): the content for THIS html is
