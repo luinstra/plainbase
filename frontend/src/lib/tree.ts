@@ -29,11 +29,11 @@ export function pageHref(root: string, page: TreePage): string {
 
 /**
  * The folder paths that must be open to reveal [pathname] in one root's sidebar tree.
- * The synthetic root is never returned, and the active folder itself stays closed: only
- * its parents need opening to make its label visible.
+ * Includes an addressed folder so its contents are visible; the synthetic root has no row.
  */
 export function ancestorFolderPaths(tree: TreeFolder, root: string, pathname: string): string[] {
   const ancestors: string[] = [];
+  const normalizedPath = pathname.replace(/\/+$/, "");
   const parsedDiagram = parseDiagramPath(pathname);
   const activeDiagramPath = parsedDiagram?.root === root ? parsedDiagram.path : null;
 
@@ -47,7 +47,10 @@ export function ancestorFolderPaths(tree: TreeFolder, root: string, pathname: st
         if (child.path === activeDiagramPath) return true;
         continue;
       }
-      if (child.url === pathname) return true;
+      if (child.url?.replace(/\/+$/, "") === normalizedPath) {
+        ancestors.unshift(child.path);
+        return true;
+      }
       if (containsActivePath(child)) {
         ancestors.unshift(child.path);
         return true;
@@ -277,10 +280,13 @@ export function landingPage(folder: TreeFolder): TreePage | null {
 }
 
 /** A folder's human display title: an explicit _folder.yaml title wins, else the index/README child's
- *  (frontmatter) title, else the raw directory name. A created dir (no _folder.yaml) thus shows its
+ *  (frontmatter) title, else a humanized directory name. A created dir (no _folder.yaml) thus shows its
  *  index page's title. */
 export function folderTitle(folder: TreeFolder): string {
-  return folder.title ?? landingPage(folder)?.title ?? folder.name;
+  const authored = folder.title ?? landingPage(folder)?.title;
+  if (authored !== undefined && authored !== null) return authored;
+  const name = folder.name.replace(/[-_]+/g, " ");
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 /**

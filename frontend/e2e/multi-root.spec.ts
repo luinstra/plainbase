@@ -32,6 +32,53 @@ const MIN_MAIN_WIDTH = 900;
  */
 const LOSER = "01970000-0000-7000-8000-00000000f003";
 
+test("search scope separates real content hits with duplicated page IDs across spaces", async ({ page }) => {
+  await gotoExpectStatus(page, "/docs/welcome");
+  await expect(page.locator('[data-pb-root-selector]')).toHaveAttribute("data-pb-selected-root", "docs");
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.locator("[data-pb-search-input]").fill("rollback");
+  await expect(page.locator('[data-pb-search-group="docs"]')).toBeVisible();
+  await expect(page.locator('[data-pb-search-group="extra"]')).toBeVisible();
+  const response = page.waitForResponse((response) => response.url().includes("/api/v1/search") &&
+    new URL(response.url()).searchParams.get("root") === "extra");
+  await page.getByRole("group", { name: "Search scope" }).getByRole("button", { name: "extra", exact: true }).click();
+  const payload = await (await response).json();
+  expect(payload.hits.length).toBeGreaterThan(0);
+  expect(payload.hits.every((hit: { root: string }) => hit.root === "extra")).toBe(true);
+  await expect(page.locator('[data-pb-search-group="docs"]')).toHaveCount(0);
+  await expect(page.locator('[data-pb-search-item="hit"]').first()).toBeVisible();
+  await page.locator("[data-pb-search-input]").focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/extra\/guides\/deploy-guide#.+/);
+});
+
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme} space switcher keeps keyboard navigation and focus`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.emulateMedia({ colorScheme: theme });
+    await gotoExpectStatus(page, "/docs/welcome");
+    const selector = page.locator("[data-pb-root-selector]");
+    await expect(selector).toHaveText("docs");
+    await expect(selector.locator(".pb-space-letter")).toHaveCount(0);
+    await expect(selector).toHaveAttribute("data-pb-selected-root", "docs");
+    await page.screenshot({ path: testInfo.outputPath(`${theme}-space-switcher.png`), fullPage: true });
+    await selector.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(page.locator('[data-pb-root-option="docs"]')).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(page.locator('[data-pb-root-option="extra"]')).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(selector).toBeFocused();
+    await expect(selector).toHaveAttribute("data-pb-selected-root", "docs");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL("/extra");
+    await expect(selector).toHaveAttribute("data-pb-selected-root", "extra");
+    await expect(selector).toBeFocused();
+  });
+}
+
 test("one sidebar, one root selector, and one visible tree: <main> keeps its width", async ({ page }) => {
   await gotoExpectStatus(page, "/docs/welcome");
   await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
@@ -213,7 +260,7 @@ test("an ordinary root-qualified view of a duplicated id renders in BOTH roots",
   await expect(page.locator("[data-pb-editor]")).toBeVisible();
   await expect(page.locator("[data-pb-edit-page]")).toHaveCount(0);
   await expectNoReload(page);
-  await page.locator("[data-pb-header]").getByRole("button", { name: "View page" }).click();
+  await page.locator("[data-pb-editor]").getByRole("button", { name: "Done editing" }).click();
   await expect(page).toHaveURL("/extra/permalink/hub");
   await expect(page.locator("[data-pb-view-page]")).toHaveCount(0);
   await expectNoReload(page);

@@ -105,6 +105,7 @@
   /* surfaces */
   --pb-surface: var(--pb-warm-25);
   --pb-surface-raised: var(--pb-white);
+  --pb-search-scrim: color-mix(in srgb, var(--pb-gray-950) 48%, transparent);
   --pb-surface-hover: var(--pb-warm-150);
   --pb-surface-active: var(--pb-gray-200);
 
@@ -114,6 +115,8 @@
   --pb-primary-bg: var(--pb-accent);
   --pb-primary-border: var(--pb-accent);
   --pb-primary-text: var(--pb-accent-contrast);
+  --pb-discussion-highlight-bg: var(--pb-accent-soft);
+  --pb-discussion-highlight-edge: var(--pb-accent);
   --pb-selection-text: var(--pb-text);
   --pb-callout-note-bg: var(--pb-accent-soft);
   --pb-callout-warning-bg: var(--pb-warning-soft);
@@ -187,6 +190,7 @@
   /* surfaces */
   --pb-surface: var(--pb-gray-850);
   --pb-surface-raised: var(--pb-gray-800);
+  --pb-search-scrim: color-mix(in srgb, var(--pb-gray-950) 72%, transparent);
   --pb-surface-hover: var(--pb-gray-750);
   --pb-surface-active: var(--pb-gray-700);
 

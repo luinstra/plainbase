@@ -34,6 +34,7 @@ data class DiscussionItemDto(
     val starter: DiscussionActorDto?,
     val created: String?,
     val updated: String?,
+    @SerialName("range_content_hash") val rangeContentHash: String? = null,
 )
 
 @Serializable

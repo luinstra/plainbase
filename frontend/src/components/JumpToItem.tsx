@@ -1,17 +1,14 @@
 import type { QuickSwitchEntry } from "../lib/tree";
+import { titleHighlights } from "../lib/highlightSplit";
 import { RootBadge } from "./RootBadge";
 
-/**
- * One Stage-1 quick-switcher row: the page title + dimmed `page.path`, badged with the entry's root
- * when there are 2+ of them (`showRoot`) — the path is root-relative, so without the badge two roots
- * holding the same file render two identical rows. Presentation only: navigation uses
- * `pageHref` or the diagram URL verbatim, never a re-derived URL. No fuzzy highlighting markup is applied
- * to the title (kept plain to stay text-only).
- */
+/** A cached title match. Display trails are inert; activation keeps the server-issued destination. */
 export function JumpToItem({
   entry,
   showRoot,
   rootLabel,
+  trail,
+  query = "",
   id,
   active,
   onActivate,
@@ -20,6 +17,8 @@ export function JumpToItem({
   entry: QuickSwitchEntry;
   showRoot?: boolean;
   rootLabel?: string;
+  trail?: string;
+  query?: string;
   id: string;
   active: boolean;
   onActivate: () => void;
@@ -41,14 +40,17 @@ export function JumpToItem({
       onMouseMove={onHover}
       className={
         active
-          ? "flex cursor-pointer items-baseline justify-between gap-3 rounded px-3 py-2"
-          : "flex cursor-pointer items-baseline justify-between gap-3 rounded px-3 py-2 hover:bg-hovered"
+          ? "pb-search-row cursor-pointer rounded px-3 py-2"
+          : "pb-search-row cursor-pointer rounded px-3 py-2 hover:bg-hovered"
       }
     >
-      <span className="font-medium text-ink">{node.title}</span>
-      <span className="flex items-baseline gap-1.5 overflow-hidden">
+      {!showRoot && rootLabel && <span className="sr-only">{rootLabel}: </span>}
+      <span className="block truncate text-sm font-medium text-ink" title={node.title}>
+        {titleHighlights(node.title, query).map((part, index) => part.mark ? <mark key={index}>{part.text}</mark> : part.text)}
+      </span>
+      <span className="mt-0.5 flex items-baseline gap-1.5 overflow-hidden">
         {showRoot && <RootBadge root={entry.root} label={rootLabel} />}
-        <span className="truncate font-mono text-xs text-faint">{node.path}</span>
+        <span className="truncate font-mono text-xs text-faint" title={node.path}>{trail ?? node.path}</span>
       </span>
     </li>
   );

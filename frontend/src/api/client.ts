@@ -50,8 +50,8 @@ export function pageEndpoint(id: string): string {
   return `/api/v1/pages/${encodeURIComponent(id)}`;
 }
 
-export async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { headers: { accept: "application/json" } });
+export async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, { headers: { accept: "application/json" }, signal });
   if (!response.ok) throw await apiError(response);
   return response.json() as Promise<T>;
 }
@@ -242,13 +242,13 @@ function networkError(): ApiError {
  * against that root's pages, not the primary root's, or the preview quietly lies about where a link goes). The `html`
  * is best-effort presentation (rendered via `<Prose>`), never a byte-equal claim.
  */
-export async function previewRaw(body: string, path?: string, root?: string): Promise<PreviewResponse> {
+export async function previewRaw(body: string, path?: string, root?: string, signal?: AbortSignal): Promise<PreviewResponse> {
   const query = new URLSearchParams();
   if (path) query.set("path", path);
   if (root) query.set("root", root);
   const suffix = query.toString();
   const url = suffix ? `/api/v1/preview?${suffix}` : "/api/v1/preview";
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "text/markdown" }, body });
+  const response = await fetch(url, { method: "POST", headers: { "content-type": "text/markdown" }, body, signal });
   if (!response.ok) throw await apiError(response);
   return response.json() as Promise<PreviewResponse>;
 }

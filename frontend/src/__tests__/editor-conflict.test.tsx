@@ -120,7 +120,7 @@ describe("W6 conflict UX", () => {
     await editAndSave(view);
 
     await waitFor(() => expect(view.container.querySelector('[data-pb-conflict][data-pb-conflict-reason="page_moved"]')).not.toBeNull());
-    expect(view.container.querySelector("[data-pb-editor-path]")?.textContent).toBe("guides/renamed.md");
+    expect(view.container.querySelector("[data-pb-editor-path]")?.getAttribute("title")).toBe("docs/guides/renamed.md");
     expect(view.container.querySelector("[data-pb-codemirror]")?.textContent).toContain("# Deploy Guide");
   });
 

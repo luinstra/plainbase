@@ -233,6 +233,7 @@ private class ResolutionPass(
     private val allocator = HeadingIdAllocator()
     private val idByHeading = HashMap<FlexmarkHeading, String>()
     private val outcomeByNode = HashMap<Node, LinkOutcome>()
+    private val targetByNode = HashMap<Node, String>()
     private val sourceBlockByNode = HashMap<Node, SourceBlock>()
 
     val headings = mutableListOf<Heading>()
@@ -279,6 +280,7 @@ private class ResolutionPass(
 
     private fun visitLink(document: Document, node: Node) {
         val target = rawTarget(document, node)
+        targetByNode[node] = target
         val context = if (node is Image || node is ImageRef) LinkResolver.LinkContext.IMAGE else LinkResolver.LinkContext.ORDINARY
         val outcome = resolver.resolve(sourcePath, target, context)
         outcomeByNode[node] = outcome
@@ -308,7 +310,11 @@ private class ResolutionPass(
 
     fun outcomeOf(node: Node): LinkOutcome? = outcomeByNode[node]
 
+    fun targetOf(node: Node): String? = targetByNode[node]
+
     fun blockOf(node: Node): SourceBlock? = sourceBlockByNode[node]
+
+    fun linkRangeOf(node: Node): Pair<Int, Int>? = rangeMapper?.range(node.startOffset, node.endOffset)
 }
 
 /**
@@ -350,18 +356,18 @@ private class SourceRangeMapper(private val bodyStart: Int, private val body: St
             } else {
                 node.startOffset
             }
-        val endOffset = node.endOffset
+        val (start, end) = range(startOffset, node.endOffset) ?: return null
+        return SourceBlock(start = start, end = end, kind = kind)
+    }
+
+    fun range(startOffset: Int, endOffset: Int): Pair<Int, Int>? {
         if (startOffset < 0 || endOffset <= startOffset || endOffset > byteOffsetByCharOffset.lastIndex) return null
 
         val relativeStart = byteOffsetByCharOffset[startOffset]
         val relativeEnd = byteOffsetByCharOffset[endOffset]
         if (relativeStart < 0 || relativeEnd < 0) return null
 
-        return SourceBlock(
-            start = bodyStart + relativeStart,
-            end = bodyStart + relativeEnd,
-            kind = kind,
-        )
+        return (bodyStart + relativeStart) to (bodyStart + relativeEnd)
     }
 
     private fun physicalLineStart(offset: Int): Int {
@@ -508,6 +514,10 @@ private class LinkRewriteAttributeProvider(
             is LinkOutcome.Broken -> {
                 attributes.remove(urlAttribute)
                 attributes.replaceValue("data-pb-link-error", outcome.reason.wireValue)
+                pass.targetOf(node)?.let { attributes.replaceValue("data-pb-link-target", it) }
+                if (emitSourceRanges) {
+                    pass.linkRangeOf(node)?.let { (start, end) -> attributes.replaceValue("data-pb-link-src", "$start-$end") }
+                }
             }
             // Fail closed: an unrouted link node never keeps flexmark's default scheme — strip and tag.
             null -> {

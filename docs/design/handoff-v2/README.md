@@ -102,14 +102,16 @@ warming the gray ramp, and dark keeps today's tones.
   in the editor bar.
 
 ### 2. Sidebar (`Sidebar.tsx`, `RootSelector.tsx`)
-- **Space switcher**: the existing root selector restyled as a labelled control: a
-  letter tile, the space name, a one-line caption, and an up/down chevron. Same behavior
+- **Space switcher**: a compact labelled control with the space name and up/down chevron.
+  No letter tile or generic caption (owner refinement, 2026-10-03). Same behavior
   (only shown with 2+ roots).
 - Tree: carets and semibold folder labels as in v1; **faint file icon on page rows**;
   long titles truncate with an ellipsis (full title on hover).
 - **Folder names**: when a folder has no landing-page title, derive one from the slug
   (`release-notes` to "Release notes"). The slug remains visible in path chips.
 - Active row: the stronger tint from Tokens; never color alone (weight changes too).
+- Entering a folder landing opens that folder and its ancestors. Manual collapse stays
+  respected while remaining on the same route, including tree refreshes.
 
 ### 3. Reading view (`PageView.tsx`, `Toc.tsx`, `Prose.tsx`)
 - Breadcrumbs start with the space name.
@@ -117,25 +119,41 @@ warming the gray ramp, and dark keeps today's tones.
   empty fields render as dashed "+ Status" / "+ Owner" chips that open the editor's
   properties.
 - **Right rail**: "On this page" first, with an **active-section marker** (scroll-spy);
-  then a Discussions block with a count and a "Start a discussion" button.
+  show the outline only with two or more eligible headings. Then a Discussions block
+  with a count and a "Start a discussion" button.
 - **Broken links** (`data-pb-link-error`): dotted amber underline plus a small
   broken-link icon instead of the red wavy underline. Hover or focus opens a card:
-  "This page doesn't exist", one sentence naming the target, and **Create page** /
-  **Edit link** actions.
-- **Long unbroken inline code** (hashes) renders as a truncated chip with a copy button.
+  missing explicit Markdown targets offer **Create page** and **Edit link**. Missing
+  non-document targets and links outside the space explain that condition honestly
+  and offer only Edit link when editable.
+- Inline code containing a long unbroken token (including hashes within spaced text)
+  renders as a truncated chip that copies the full original code. Fenced and linked
+  code retain their existing behavior.
+  A Show full code / Collapse code control reveals the original code in place with
+  wrapping, without changing its text or discussion-selection source.
 
 ### 4. Search palette (`SearchPalette.tsx`, `SearchResultItem.tsx`)
 - Title matches appear instantly (the zero-network quick-switch stays). After the
   debounce, **full-text hits append below** in the same list with highlighted snippets
   and heading breadcrumbs. The bridge row is removed. Record this as an amendment to
   ADR-0005.
-- Results grouped by space; scope chips (All spaces / each root) above the list.
+- Results grouped by space; scope chips (All spaces / each root) above the list. Space scope applies on the server before result pagination and total counting, using optional `root`; filtering only an already truncated global hit window is insufficient.
+- Leave 12 px between the focused search field and the scope chips.
 - Breadcrumb trail instead of a truncated raw path; about 8 rows visible.
 - Stronger, blurred scrim. Footer keyboard hints stay.
+- Each page appears once per space: title matches take precedence, otherwise keep the
+  first ranked content section. Highlight literal query terms in result titles too.
+- Omit a leading section label equal to the page title. Content excerpts use actual
+  indexed body text; empty preambles may borrow the first nonempty body from the same
+  indexed page. Preserve genuine section navigation and honest highlight ranges.
+- Cmd/Ctrl+K belongs to global search, including while editing. Shift/Alt variants
+  and already handled events do not open search.
 
 ### 5. Folder landing
-- Folder cards in a **fluid** grid that fills the column (no fixed card width); folder
-  icon tile, title, `N pages` and a small mono path on **one line**.
+- Generated landings have no empty rail and fill a bounded approximately 1040 px
+  content area. Folder cards form a fluid grid, reaching three columns where space
+  permits. The icon tile sits beside the title, with `N pages · path` on a second
+  line; only the path is mono. Authored folder pages keep the normal reading layout.
 - Pages in one bordered panel of rows (title, chevron). **No file icons here**. A
   one-line summary per page is **deferred** until a summary field exists on the wire.
 - Header: title, `N folders · N pages`, and a secondary "New page here" button.
@@ -144,6 +162,9 @@ warming the gray ramp, and dark keeps today's tones.
 - Opens as a **dialog** over the current view instead of a separate page.
 - Location picker **prefilled with the current folder**; large title input; a live,
   editable URL preview instead of a Slug field up front.
+- Existing folders use display labels. Space home and an explicit Custom folder
+  option preserve root-level and arbitrary writable-folder creation. Unknown supplied
+  paths remain editable custom paths. Explanatory address hints use sans, paths use mono.
 - Templates (Blank, How-to, Reference, Meeting notes) as cards with a one-line purpose.
 - "More options" (custom slug, folder landing page) collapsed. No body field: the page
   opens in the editor after creation.
@@ -152,6 +173,9 @@ warming the gray ramp, and dark keeps today's tones.
 - Editor bar: breadcrumb, a **Write / Preview** segmented switch (replacing the eye
   button), an always-visible save state ("Unsaved changes", "Saving", "Saved"),
   Discard, and Save with the `⌘S` hint.
+- Breadcrumb labels match the reading view's space/folder display names. **Done**
+  exits editing at the far end of its own action group, separate from Write/Preview,
+  retaining unsaved-change confirmation. Link insertion uses Cmd/Ctrl+Shift+K.
 - Preview keeps today's overlay behavior: it covers the source in place so cursor,
   scroll and undo survive; the toolbar dims while previewing.
 - Source pane centered at a readable width with line numbers. **Table rows never wrap**
@@ -165,6 +189,9 @@ warming the gray ramp, and dark keeps today's tones.
 - Initials avatars on threads and comments.
 - **Open / Resolved** as a filter, with a status pill on each thread.
 - The quoted passage is highlighted in the page while its thread is open.
+- A confirmed empty page list has one Start action and no filters or redundant
+  introductory card. Cursor windows, failed refreshes and filtered-empty lists retain
+  their recovery and filtering controls.
 
 ---
 

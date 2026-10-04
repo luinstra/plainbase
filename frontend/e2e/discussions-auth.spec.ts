@@ -36,7 +36,7 @@ test("builtin cookie and CSRF allow page, passage and reply writes; expiry keeps
   await expect.poll(async () => (await page.request.get("/api/v1/pages/by-path/docs/c5-auth-write")).status()).toBe(200);
   await gotoExpectStatus(page, "/docs/c5-auth-write");
 
-  await page.getByRole("button", { name: "New discussion" }).click();
+  await page.getByRole("button", { name: "Start a discussion" }).click();
   await expect(page.getByRole("textbox", { name: "Comment" })).toBeFocused();
   await page.getByRole("textbox", { name: "Comment" }).fill("Cookie page start");
   const pagePost = page.waitForResponse((response) => response.url().includes(`/api/v1/pages/${pageId}/discussions?root=docs`) && response.request().method() === "POST");
@@ -62,10 +62,10 @@ test("builtin cookie and CSRF allow page, passage and reply writes; expiry keeps
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe("Coo");
   expect(await paragraph.evaluate((node) => node.closest("[contenteditable]"))).toBeNull();
   for (let index = 0; index < 20; index++) {
-    if (await page.getByRole("button", { name: "New discussion" }).evaluate((button) => button === document.activeElement)) break;
+    if (await page.getByRole("button", { name: "Start a discussion" }).evaluate((button) => button === document.activeElement)) break;
     await page.keyboard.press("Tab");
   }
-  await expect(page.getByRole("button", { name: "New discussion" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Start a discussion" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: "Confirm passage" })).toBeFocused();
   await page.getByRole("button", { name: "Confirm passage" }).click();
@@ -184,8 +184,7 @@ test("builtin lifecycle enforces authorship, starter and admin rights and preser
     await viewer.getByRole("region", { name: "Confirm retraction" }).getByRole("button", { name: "Retract comment" }).click();
     expect((await retracted).status()).toBe(200);
     await expect(viewer.getByRole("status", { name: "Comment retracted" })).toBeVisible();
-    await openDiscussionActions(page, "Refresh");
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     const tombstone = page.locator("article.pb-discussion-comment").filter({ hasText: "retracted by Lifecycle viewer" });
     await expect(tombstone).toBeVisible();
     await expect(tombstone.getByRole("button", { name: "Edit comment" })).toHaveCount(0);
@@ -209,7 +208,7 @@ test("builtin lifecycle enforces authorship, starter and admin rights and preser
     await page.locator("[data-pb-discussion-panel]").getByRole("button", { name: /Cookie lifecycle selection/ }).click();
     await openDiscussionActions(page, "Reattach");
     await page.getByRole("button", { name: "Reattach", exact: true }).click();
-    await expect(page.getByRole("button", { name: "New discussion" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Start a discussion" })).toBeDisabled();
     await page.getByRole("button", { name: "Hide discussions" }).click();
     await page.getByRole("button", { name: "Show discussions" }).click();
     await expect(page.getByRole("heading", { name: "Select a new passage in the displayed page" })).toBeFocused();

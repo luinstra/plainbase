@@ -14,6 +14,7 @@ data class SearchQuery(
     val limit: Int,
     val offset: Int,
     val statusFilter: Set<String>? = null,
+    val rootFilter: RootName? = null,
 )
 
 /**

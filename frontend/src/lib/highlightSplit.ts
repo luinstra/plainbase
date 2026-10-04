@@ -17,6 +17,15 @@ export interface Highlight {
   end: number;
 }
 
+/** Literal title terms are separate from the server's authoritative snippet offsets. */
+export function titleHighlights(title: string, query: string): SnippetFragment[] {
+  const terms = [...new Set(query.trim().split(/\s+/).filter(Boolean))].sort((a, b) => b.length - a.length);
+  if (!terms.length) return [{ text: title, mark: false }];
+  const pattern = new RegExp(terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "giu");
+  const ranges = [...title.matchAll(pattern)].map((match) => ({ start: match.index!, end: match.index! + match[0].length }));
+  return splitHighlights(title, ranges);
+}
+
 /**
  * Splits `snippet` into ordered fragments per §A3: ranges are UTF-16 code-unit offsets,
  * half-open `[start, end)`, ascending and non-overlapping (server-guaranteed). Returns the

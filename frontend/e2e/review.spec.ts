@@ -40,7 +40,7 @@ test("agent proposes → reviewer approves → applied; a drifted proposal block
 
   // 3. As the reviewer (browser): the queue lists the pending change; open it, see the diff, approve.
   await gotoExpectStatus(page, "/review");
-  await expect(page.locator("[data-pb-review-nav]")).toBeVisible(); // the session-gated chrome link
+  await expect(page.locator("[data-pb-sidebar] [data-pb-review-nav]")).toBeVisible(); // the session-gated workspace link
   await expect(page.locator(`[data-pb-review-row]`).first()).toBeVisible();
 
   await gotoExpectStatus(page, `/review/${changeA}`);

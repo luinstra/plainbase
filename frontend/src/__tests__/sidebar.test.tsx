@@ -75,6 +75,21 @@ const tree: TreeFolder = {
 };
 
 describe("SidebarNav", () => {
+  it("humanizes directory fallbacks without changing authored titles or navigation", () => {
+    const folder = tree.children[0] as TreeFolder;
+    const folders: TreeFolder[] = [
+      { ...folder, name: "release-notes", path: "release-notes", url: "/docs/release-notes", title: null, children: [] },
+      { ...folder, name: "api_guides", path: "api_guides", url: "/docs/api_guides", title: "API-guides", children: [] },
+      { ...folder, name: "team-notes", path: "team-notes", url: "/docs/team-notes", title: null,
+        children: [{ type: "page", id: "landing", title: "Team-notes as authored", slug: "index", path: "team-notes/index.md", url: "/docs/team-notes/index", status: "active", updated: null }] },
+    ];
+    const { container } = render(<SidebarNav tree={{ ...tree, children: folders }} root="docs" currentPathname="/docs/release-notes" />);
+    expect(container.querySelector('a[href="/docs/release-notes"]')?.textContent).toBe("Release notes");
+    expect(container.querySelector('a[href="/docs/api_guides"]')?.textContent).toBe("API-guides");
+    expect(container.querySelector('a[href="/docs/team-notes"]')?.textContent).toBe("Team-notes as authored");
+    expect(container.querySelector('[aria-current="page"]')?.getAttribute("href")).toBe("/docs/release-notes");
+  });
+
   it("emits the stable selectors and links from node urls", () => {
     const { container } = render(
       <SidebarNav
@@ -116,9 +131,9 @@ describe("SidebarNav", () => {
 
     // The loser folder (url null) renders its label as text, not a link.
     const loserItem = [...container.querySelectorAll('[data-pb-nav-item="folder"]')].find((li) =>
-      li.textContent?.includes("shadowed-folder"),
+      li.textContent?.includes("Shadowed folder"),
     );
-    expect(loserItem!.querySelector("a")?.textContent).not.toBe("shadowed-folder");
+    expect(loserItem!.querySelector("a")?.textContent).not.toBe("Shadowed folder");
   });
 
   it("toggles a folder's children via the disclosure button, independent of the label link", () => {
@@ -154,6 +169,25 @@ describe("SidebarNav", () => {
 
     rerender(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides/deploy-guide" />);
     await waitFor(() => expect(guidesToggle.getAttribute("aria-expanded")).toBe("true"));
+  });
+
+  it("opens an addressed folder but respects collapse across refreshed trees until the route changes", async () => {
+    const { container, rerender } = render(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides" />);
+    const toggle = container.querySelector<HTMLButtonElement>("[data-pb-folder-toggle]")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    rerender(<SidebarNav tree={structuredClone(tree)} root="docs" currentPathname="/docs/guides/" />);
+    await waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("false"));
+    rerender(<SidebarNav tree={tree} root="docs" currentPathname="/docs" />);
+    rerender(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides" />);
+    await waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("true"));
+  });
+
+  it("opens the current folder when its tree arrives after navigation", async () => {
+    const { container, rerender } = render(<SidebarNav tree={{ ...tree, children: [] }} root="docs" currentPathname="/docs/guides/" />);
+    rerender(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides/" />);
+    await waitFor(() => expect(container.querySelector("[data-pb-folder-toggle]")?.getAttribute("aria-expanded")).toBe("true"));
   });
 
   it("opens the ancestor of an active collision-loser permalink", () => {

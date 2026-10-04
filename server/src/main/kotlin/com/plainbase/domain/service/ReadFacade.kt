@@ -61,7 +61,7 @@ interface ReadFacade {
      */
     fun pageMetadata(principal: Principal, id: PageId, root: RootName? = null): IndexedPage?
 
-    fun search(principal: Principal, q: String?, limit: String?, offset: String?): SearchService.Outcome
+    fun search(principal: Principal, q: String?, limit: String?, offset: String?, root: RootName? = null): SearchService.Outcome
 
     /** The memoized `/api/v1/tree` JSON for the current published snapshot. */
     fun tree(principal: Principal): String

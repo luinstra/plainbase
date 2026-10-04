@@ -1,7 +1,8 @@
 import hljs from "highlight.js/lib/common";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useDeepLinkHighlight } from "../lib/deepLink";
 import { renderMermaidBlocks } from "../lib/mermaid";
+import { ReadingTools, type ReadingContext } from "./ReadingTools";
 
 /**
  * Server-rendered page HTML inside the stable `.pb-prose` selector. The server is the
@@ -14,8 +15,20 @@ import { renderMermaidBlocks } from "../lib/mermaid";
  *  - heading anchor links on the ids the server emitted
  *  - deep-link `#fragment` scroll + pulse once the content is in the DOM (Resolution 1)
  */
-export function Prose({ html }: { html: string }) {
+export function Prose({ html, metadata, title, reading }: { html: string; metadata?: ReactNode; title?: string; reading?: ReadingContext }) {
   const ref = useRef<HTMLElement>(null);
+  const parts = useMemo(() => {
+    if (!metadata) return null;
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const first = Array.from(template.content.childNodes).find((node) => node.nodeType !== Node.TEXT_NODE || node.textContent?.trim());
+    const matchesTitle = first instanceof HTMLElement && /^H[1-6]$/.test(first.tagName)
+      && first.textContent?.trim().toLowerCase() === title?.trim().toLowerCase();
+    if (!(first instanceof HTMLElement) || (first.tagName !== "H1" && !matchesTitle)) return { title: null, body: html };
+    const heading = first.outerHTML;
+    first.remove();
+    return { title: heading, body: template.innerHTML };
+  }, [html, title, !!metadata]);
 
   useEffect(() => {
     const container = ref.current;
@@ -23,7 +36,7 @@ export function Prose({ html }: { html: string }) {
     highlightCodeBlocks(container);
     injectHeadingAnchors(container);
     return renderMermaidBlocks(container);
-  }, [html]);
+  }, [html, parts?.title]);
 
   // `ready` is a synchronous derived value (NOT useState): the content for THIS html is
   // committed by the time the hook's own effect runs, so the scroll lands on first commit.
@@ -31,7 +44,14 @@ export function Prose({ html }: { html: string }) {
   useDeepLinkHighlight(html.length > 0, html);
 
   // dangerouslySetInnerHTML is safe here: the html is server-sanitized (§C3, escapeHtml)
-  return <article ref={ref} className="pb-prose" data-pb-prose dangerouslySetInnerHTML={{ __html: html }} />;
+  if (parts) return <><article ref={ref} data-pb-selection-surface className="pb-reading-article">
+    {parts.title ? <div className="pb-prose pb-title-prose" dangerouslySetInnerHTML={{ __html: parts.title }} /> :
+      <h1 className="pb-reading-title" data-pb-selection-chrome>{title}</h1>}
+    {metadata}
+    <div className="pb-prose" data-pb-prose dangerouslySetInnerHTML={{ __html: parts.body }} />
+  </article>{reading && <ReadingTools key={parts.title ? "titled" : "untitled"} article={ref} context={reading} html={html} />}</>;
+  return <><article ref={ref} className="pb-prose" data-pb-prose data-pb-selection-surface dangerouslySetInnerHTML={{ __html: html }} />
+    {reading && <ReadingTools article={ref} context={reading} html={html} />}</>;
 }
 
 export function highlightCodeBlocks(container: HTMLElement): void {

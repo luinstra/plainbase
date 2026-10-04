@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sessionQuery, treeQuery } from "../api/queries";
+import { pageByPathQuery, pageQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { TreeResponse } from "../api/types";
 import { ROOT_UNAVAILABLE } from "../components/ErrorView";
 import { createAppRouter } from "../router";
@@ -45,6 +45,14 @@ function renderShell(primeTree: boolean, seeded: TreeResponse = tree, at: string
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(sessionQuery.queryKey, AUTHED);
   if (primeTree) queryClient.setQueryData(treeQuery.queryKey, seeded);
+  if (primeTree && [HANDBOOK_PAGE, HANDBOOK_PERMALINK, `/p/${PAGE_ID}`].includes(at)) {
+    const resolved = { id: PAGE_ID, root: "handbook", path: "guides/onboarding.md", title: "Onboarding", slug: "onboarding",
+      url: at.startsWith("/p/") ? null : HANDBOOK_PAGE, markdown: "# Onboarding", frontmatter: {}, content_hash: "hash", commit: null,
+      id_materialized: true, citation: { page_id: PAGE_ID, heading_id: null, path: "guides/onboarding.md", content_hash: "hash", commit: null, uri: "plainbase://onboarding" } };
+    queryClient.setQueryData(pageByPathQuery("handbook/guides/onboarding").queryKey, resolved);
+    queryClient.setQueryData(pageQuery(PAGE_ID, "handbook").queryKey, resolved);
+    queryClient.setQueryData(pageQuery(PAGE_ID, null).queryKey, resolved);
+  }
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -65,6 +73,17 @@ function renderShell(primeTree: boolean, seeded: TreeResponse = tree, at: string
 afterEach(() => vi.unstubAllGlobals());
 
 describe("the chrome New action", () => {
+  it("keeps the authenticated Review queue reachable in the sidebar", async () => {
+    const view = renderShell(true);
+    const review = await waitFor(() => {
+      const link = view.container.querySelector('[data-pb-sidebar] [data-pb-review-nav]');
+      expect(link).not.toBeNull();
+      return link!;
+    });
+    expect(review.getAttribute("href")).toBe("/review");
+    expect(review.getAttribute("aria-label")).toBe("Review queue");
+  });
+
   it("keeps the discussion chooser rootless", async () => {
     const view = renderShell(true, tree, "/discussions");
     const action = await waitFor(() => {
@@ -72,7 +91,7 @@ describe("the chrome New action", () => {
       expect(el).not.toBeNull();
       return el!;
     });
-    expect(action.getAttribute("href")).toBe("/new");
+    expect(action.getAttribute("href")).toBe("/new?root=docs");
     expect(view.container.querySelector("[data-pb-discussions-nav]")).toBeNull();
   });
 
@@ -140,7 +159,7 @@ describe("the chrome New action", () => {
       expect(el).not.toBeNull();
       return el!;
     });
-    expect(action.getAttribute("href")).toBe("/new?root=handbook");
+    expect(action.getAttribute("href")).toBe("/new?root=handbook&folder=guides");
   });
 
   it("is DISABLED while the tree is still in flight, never a link that would create in the primary root", async () => {
@@ -181,20 +200,18 @@ describe("the chrome New action", () => {
       expect(el).not.toBeNull();
       return el!;
     });
-    expect(action.getAttribute("href")).toBe("/new?root=handbook");
+    expect(action.getAttribute("href")).toBe("/new?root=handbook&folder=guides");
   });
 
-  it("keeps a BARE permalink's New link rootless", async () => {
-    // This row observes only the Shell navigation: a bare `/p/{id}` carries no root, so its New link stays
-    // `/new`. The create form resolves the destination from the primary wire entry; the outside-root row in
-    // `editor-create.test.tsx` owns the POST-root assertion.
+  it("uses a resolved bare permalink's own root and folder", async () => {
+    // A resolved bare permalink supplies its own root and raw path; creation must not fall back to primary.
     const view = renderShell(true, tree, `/p/${PAGE_ID}`);
     const action = await waitFor(() => {
       const el = view.container.querySelector("[data-pb-new-page]");
       expect(el).not.toBeNull();
       return el!;
     });
-    expect(action.getAttribute("href")).toBe("/new");
+    expect(action.getAttribute("href")).toBe("/new?root=handbook&folder=guides");
   });
 
   it("is DISABLED on a permalink naming a root the tree does not carry - unknown is not writable", async () => {

@@ -1,140 +1,47 @@
-import type { RootTree, SearchHit } from "../api/types";
-import { rootLabelFor, type QuickSwitchEntry } from "../lib/tree";
+import { Fragment } from "react";
+import type { RootTree } from "../api/types";
+import { searchSpaceLabel, searchTrail, type SearchRow } from "../lib/searchResults";
 import { JumpToItem } from "./JumpToItem";
 import { SearchResultItem } from "./SearchResultItem";
 
 export const LISTBOX_ID = "pb-search-listbox";
-
-/** A row's real DOM id — `aria-activedescendant` must point at one of these (Resolution 4). */
-export function optionId(stage: "jump" | "search", index: number): string {
-  return `pb-search-opt-${stage}-${index}`;
+export function optionId(key: string): string {
+  return `pb-search-opt-${encodeURIComponent(key)}`;
 }
 
-/**
- * The single visible list for the active stage (`role="listbox"`). Stage 1 renders jump
- * rows + the bridge; Stage 2 renders hit rows + non-selectable status rows. Only one list
- * exists at a time, so selection is a plain per-stage integer (ADR-0005).
- *
- * `showRoots` (2+ configured roots) badges both kinds of row with their root — one gate, so the two
- * stages can never disagree about whether the corpus is multi-root.
- */
-export function SearchList({
-  stage,
-  // Stage 1
-  jumpPages,
-  query,
-  bridgeEnabled,
-  bridgeIndex,
-  // Stage 2
-  hits,
-  status,
-  searchedQuery,
-  errorMessage,
-  // shared
-  showRoots,
-  roots,
-  selectedIndex,
-  onSelect,
-  onActivate,
-  onActivateBridge,
-}: {
-  stage: "jump" | "search";
-  jumpPages?: QuickSwitchEntry[];
-  query?: string;
-  bridgeEnabled?: boolean;
-  bridgeIndex?: number;
-  hits?: SearchHit[];
-  status?: "loading" | "empty" | "error" | "ready";
-  /** The query the current Stage-2 results are FOR (the server's echoed query) — not the live
-   *  input, which can run ahead during the debounce window. Used only for the no-match copy. */
-  searchedQuery?: string;
+export function SearchList({ rows, roots, query, selectedKey, onSelect, onActivate, status, errorMessage, showSpaceGroups = true }: {
+  rows: SearchRow[];
+  roots: RootTree[];
+  query: string;
+  selectedKey: string | null;
+  onSelect: (key: string) => void;
+  onActivate: (row: SearchRow) => void;
+  status: "idle" | "loading" | "empty" | "error" | "ready";
   errorMessage?: string;
-  showRoots?: boolean;
-  roots?: RootTree[];
-  selectedIndex: number;
-  onSelect: (index: number) => void;
-  onActivate: (index: number) => void;
-  onActivateBridge: () => void;
+  showSpaceGroups?: boolean;
 }) {
   return (
-    <ul id={LISTBOX_ID} role="listbox" aria-label="Search results" className="max-h-80 overflow-y-auto p-1.5" data-pb-search-list>
-      {stage === "jump" ? (
-        <>
-          {/* Presentational framing only — the rows below are the existing jumpPages slice,
-              not a recency store. The label appears for the empty-query (Recent) framing. */}
-          {!query && (jumpPages?.length ?? 0) > 0 && (
-            <li className="pb-search-grouplabel" aria-hidden="true">
-              Recent
-            </li>
-          )}
-          {(jumpPages ?? []).map((entry, index) => (
-            <JumpToItem
-              key={`${entry.root}:${"page" in entry ? entry.page.id : entry.diagram.path}`}
-              entry={entry}
-              rootLabel={rootLabelFor(roots, entry.root)}
-              showRoot={showRoots}
-              id={optionId("jump", index)}
-              active={index === selectedIndex}
-              onActivate={() => onActivate(index)}
-              onHover={() => onSelect(index)}
-            />
-          ))}
-          <li
-            id={optionId("jump", bridgeIndex ?? 0)}
-            role="option"
-            aria-selected={(bridgeIndex ?? -1) === selectedIndex}
-            aria-disabled={bridgeEnabled ? undefined : true}
-            data-pb-search-bridge=""
-            data-pb-search-active={(bridgeIndex ?? -1) === selectedIndex ? "" : undefined}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              onActivateBridge();
-            }}
-            onMouseMove={() => onSelect(bridgeIndex ?? 0)}
-            className={
-              (bridgeIndex ?? -1) === selectedIndex
-                ? "mt-1.5 flex cursor-pointer items-center gap-2 rounded border-t border-edge px-3 py-2 pt-3 text-sm text-ink"
-                : "mt-1.5 flex cursor-pointer items-center gap-2 rounded border-t border-edge px-3 py-2 pt-3 text-sm text-muted hover:bg-hovered"
-            }
-          >
-            <span aria-hidden="true" className="text-faint">
-              ⌕
-            </span>
-            <span>{query ? <>Search all docs for “{query}” ↵</> : <>Search all docs…</>}</span>
-          </li>
-        </>
-      ) : (
-        <>
-          {status === "loading" && (
-            <li data-pb-search-loading="" className="flex items-center gap-2 px-3 py-2 text-sm text-muted" aria-live="polite">
-              <span aria-hidden="true" className="pb-search-spinner" />
-              Searching…
-            </li>
-          )}
-          {status === "empty" && (
-            <li data-pb-search-empty="" className="px-5 py-[34px] text-center text-sm text-muted">
-              {searchedQuery ? <>No matches for “{searchedQuery}”</> : <>No matches</>}
-            </li>
-          )}
-          {status === "error" && (
-            <li data-pb-search-error="" className="px-3 py-2 text-sm text-link-broken">
-              {errorMessage}
-            </li>
-          )}
-          {(hits ?? []).map((hit, index) => (
-            <SearchResultItem
-              key={`${hit.page_id}:${hit.heading_id ?? ""}:${index}`}
-              hit={hit}
-              rootLabel={rootLabelFor(roots, hit.root)}
-              showRoot={showRoots}
-              id={optionId("search", index)}
-              active={index === selectedIndex}
-              onActivate={() => onActivate(index)}
-              onHover={() => onSelect(index)}
-            />
-          ))}
-        </>
-      )}
+    <ul id={LISTBOX_ID} role="listbox" aria-label="Search results" className="pb-search-results overflow-y-auto p-2" data-pb-search-list>
+      {rows.map((row, index) => {
+        const previous = rows[index - 1];
+        const newSection = previous?.kind !== row.kind;
+        const newSpace = newSection || previous?.root !== row.root;
+        const node = row.kind === "jump" ? ("page" in row.entry ? row.entry.page : row.entry.diagram) : row.hit;
+        const props = { id: optionId(row.key), active: row.key === selectedKey, query,
+          onActivate: () => onActivate(row), onHover: () => onSelect(row.key),
+          trail: searchTrail(roots, row.root, node.path), rootLabel: searchSpaceLabel(roots, row.root), showRoot: false };
+        return (
+          <Fragment key={row.key}>
+            {newSection && <li role="presentation" className="pb-search-section">{row.kind === "hit" ? "Content matches" : query ? "Title matches" : "Suggestions"}</li>}
+            {newSpace && showSpaceGroups && <li role="presentation" className="pb-search-grouplabel" data-pb-search-group={row.root}>{searchSpaceLabel(roots, row.root)}</li>}
+            {row.kind === "jump" ? <JumpToItem entry={row.entry} {...props} /> : <SearchResultItem hit={row.hit} {...props} />}
+          </Fragment>
+        );
+      })}
+      {status === "loading" && <li role="presentation" data-pb-search-loading className="px-3 py-3 text-sm text-muted" aria-live="polite">Searching content…</li>}
+      {status === "error" && <li role="presentation" data-pb-search-error className="px-3 py-3 text-sm text-link-broken" aria-live="polite">{errorMessage}</li>}
+      {status === "empty" && <li role="presentation" data-pb-search-empty className="px-3 py-5 text-sm text-muted">{rows.length ? "No content matches" : "No matches"} for “{query}”</li>}
+      {status === "idle" && rows.length === 0 && <li role="presentation" className="px-3 py-5 text-sm text-muted">Type to search your docs</li>}
     </ul>
   );
 }

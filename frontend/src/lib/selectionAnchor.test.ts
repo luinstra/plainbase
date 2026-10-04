@@ -1,6 +1,19 @@
 import { expect, it } from "vitest";
 import { captureSelectionAnchor } from "./selectionAnchor";
 
+it("keeps source ranges across prose fragments and refuses property or copy chrome", () => {
+  const article = document.createElement("article");
+  article.innerHTML = '<div class="pb-prose"><h1 data-pb-src="0-10">Title</h1></div><div data-pb-selection-chrome>Owner</div><div class="pb-prose"><p data-pb-src="20-90"><code>abcdef</code><button data-pb-selection-chrome></button> end</p></div>';
+  document.body.append(article);
+  const title = article.querySelector("h1")!.firstChild!;
+  const code = article.querySelector("code")!.firstChild!;
+  expect(select(article, title, 0, title, 5)).toMatchObject({ selected_text: "Title", block_start: 0, block_end: 10 });
+  expect(select(article, code, 0, code, 6)).toMatchObject({ selected_text: "abcdef", block_start: 20, block_end: 90 });
+  expect(select(article, title, 0, code, 6)).toMatchObject({ reason: expect.any(String) });
+  expect(select(article, code, 0, article.querySelector("p")!.lastChild!, 4)).toMatchObject({ reason: expect.any(String) });
+  article.remove();
+});
+
 function select(article: HTMLElement, start: Node, startOffset: number, end: Node, endOffset: number) {
   const range = document.createRange();
   range.setStart(start, startOffset);

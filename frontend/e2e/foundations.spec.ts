@@ -73,6 +73,7 @@ async function selected(page: Page, selector: string) {
 const markdown = [
   "---", "title: Foundations fixture", "owner: Ada Lovelace", "status: active", "---", "",
   "# Foundations fixture", "", "Inline `code` and normal text.", "",
+  "[Missing editor guide](missing-editor-foundations.md)", "",
   ...["NOTE", "WARNING", "CAUTION"].flatMap((kind) => [`> [!${kind}]`, "> [Readable link](https://example.com)", ">", `> > [!${kind}]`, "> > [Nested link](https://example.com)", ""]),
   "```javascript", '// comment old', 'const message = "old";', "```", "",
   "```mermaid", "flowchart LR", " A[Start] --> B[Finish]", "```", "",
@@ -108,7 +109,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.locator(".pb-callout a").first().hover();
     await readable(page, ".pb-callout a");
     await page.screenshot({ path: testInfo.outputPath(`${theme}-reading-mermaid-avatar.png`), fullPage: true });
-    await selected(page, ".pb-meta-key");
+    await selected(page, ".pb-breadcrumbs .text-faint");
     await page.screenshot({ path: testInfo.outputPath(`${theme}-selected-faint.png`), fullPage: true });
     await selected(page, ".hljs-comment");
     await page.screenshot({ path: testInfo.outputPath(`${theme}-selected-comment.png`), fullPage: true });
@@ -131,10 +132,14 @@ for (const theme of ["light", "dark"] as const) {
       await readable(page, `[data-pb-chip-status="${status}"]`);
     }
     await gotoExpectStatus(page, "/docs/foundation-states");
+    await expect(page.locator(".pb-page-row .pb-pdot")).toHaveCount(0);
     for (const status of statuses) {
-      for (const item of await measure(page, `.pb-pdot[data-pb-status="${status}"]`)) expect.soft(item.fillContrast).toBeGreaterThanOrEqual(3);
-      await page.locator(`.pb-page-row[data-pb-status="${status}"]`).hover();
-      for (const item of await measure(page, `.pb-pdot[data-pb-status="${status}"]`)) expect.soft(item.fillContrast).toBeGreaterThanOrEqual(3);
+      const row = `.pb-page-row[data-pb-status="${status}"]`;
+      await readable(page, `${row} .pt`);
+      await readable(page, `${row} [data-pb-row-chevron]`, null, 3);
+      await page.locator(row).hover();
+      await readable(page, `${row} .pt`);
+      await readable(page, `${row} [data-pb-row-chevron]`, null, 3);
     }
     for (const item of await measure(page, ".pb-listing-label")) { expect.soft(item.fontSize).toBe(13); expect.soft(item.weight).toBe("600"); expect.soft(item.family).toContain("IBM Plex Sans"); }
     await page.screenshot({ path: testInfo.outputPath(`${theme}-statuses.png`), fullPage: true });
@@ -155,6 +160,10 @@ for (const theme of ["light", "dark"] as const) {
     await save(markdown.replaceAll("old", "new"));
     await gotoExpectStatus(page, "/docs/scratch/todo?mode=edit");
     await expect(page.locator("[data-pb-editor]")).toBeVisible();
+    await expect(page.locator(".pb-editor-link-mark")).toBeVisible();
+    await readable(page, ".pb-editor-property summary span, .pb-editor-toolbar button, .pb-editor-modes button, .cm-lineNumbers .cm-gutterElement:not(:empty)");
+    await readable(page, ".pb-editor-link-mark", null, 3);
+    await page.locator(".pb-editor-property summary").filter({ hasText: "Owner" }).click();
     await page.locator("[data-pb-field-owner]").fill("");
     await readable(page, "[data-pb-field-owner]", "::placeholder");
     for (const item of await measure(page, "[data-pb-field-owner]", "::placeholder")) { expect.soft(item.ink).toEqual(item.tokens["text-muted"]); expect.soft(item.opacity).toBe("1"); }
@@ -183,12 +192,14 @@ for (const theme of ["light", "dark"] as const) {
     await gotoExpectStatus(page, "/new");
     await expect(page.locator("[data-pb-new-title]")).toBeVisible();
     await readable(page, "[data-pb-new-title]", "::placeholder");
+    await readable(page, ".pb-template-card strong, .pb-template-card .text-faint");
     for (const item of await measure(page, "[data-pb-new-title]", "::placeholder")) { expect.soft(item.ink).toEqual(item.tokens["text-muted"]); expect.soft(item.opacity).toBe("1"); }
     await page.locator("[data-pb-new-title]").fill("Foundations new page");
     await readable(page, "[data-pb-new-create]");
     await page.screenshot({ path: testInfo.outputPath(`${theme}-new-page.png`), fullPage: true });
     await gotoExpectStatus(page, "/docs/scratch/todo?mode=edit");
     await expect(page.locator("[data-pb-editor]")).toBeVisible();
+    await page.locator(".pb-editor-property summary").filter({ hasText: "Owner" }).click();
     await page.locator("[data-pb-field-owner]").fill("Missing page draft");
     // Exercise the conflict presentation with the same wire fixture as editor-conflict.test.tsx.
     await page.route(`**/api/v1/pages/${id}?*`, async (route) => {

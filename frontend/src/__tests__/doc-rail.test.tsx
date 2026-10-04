@@ -3,9 +3,10 @@ import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, pageQuery, sessionQuery, treeQuery } from "../api/queries";
-import type { PageHtmlResponse, PageResponse } from "../api/types";
+import type { DiscussionItem, PageHtmlResponse, PageResponse } from "../api/types";
 import { createAppRouter } from "../router";
 import { primePageDiscussionLists, emptyDiscussionList } from "./pageDiscussionFixture";
+import { pageDiscussionsQuery } from "../api/discussions";
 
 /**
  * Chunk-4 doc reading metadata Rail / footer (addendum §6 acceptance). The Rail renders one
@@ -73,7 +74,7 @@ function renderRail(frontmatter: Record<string, unknown> | null, headings: PageH
 
 /** Reads each Rail row as [KEY-label, value-text] so absence/presence is asserted by label. */
 function railRows(container: HTMLElement): Record<string, string> {
-  const rows = [...container.querySelectorAll("[data-pb-rail] .pb-meta-row")];
+  const rows = [...container.querySelectorAll("[data-pb-rail-meta] .pb-meta-row")];
   return Object.fromEntries(
     rows.map((row) => [row.querySelector(".pb-meta-key")?.textContent ?? "", row.querySelector(".pb-meta-val")?.textContent?.trim() ?? ""]),
   );
@@ -84,6 +85,40 @@ function railRows(container: HTMLElement): Record<string, string> {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("doc reading metadata rail (chunk-4)", () => {
+  it("counts unique loaded discussions, signals pagination and drops the count after a failed refresh", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const item: DiscussionItem = { id: "thread", page: { id: PAGE_ID, path: "infra/kubernetes.md", resolution: "by_id" },
+      status: "open", state: "page_level", reason: null, range: null, candidates: null, placement: null,
+      quote: null, comment_count: 0, starter: null, created: null, updated: null };
+    client.setQueryData(pageQuery(PAGE_ID, null).queryKey, pageResponse(PAGE_ID, {}));
+    client.setQueryData(pageHtmlQuery(PAGE_ID, null).queryKey, htmlResponse(PAGE_ID, []));
+    client.setQueryData(treeQuery.queryKey, { roots: [] });
+    client.setQueryData(sessionQuery.queryKey, { authenticated: false, auth_mode: "off", username: null, csrf_token: null });
+    const queryKey = pageDiscussionsQuery("docs", PAGE_ID).queryKey;
+    client.setQueryData(queryKey, { pages: [
+      { ...emptyDiscussionList, discussions: [item], next: "page-two" },
+      { ...emptyDiscussionList, discussions: [item, { ...item, id: "second" }], next: "page-three" },
+    ], pageParams: [null, "page-two"] });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "temporarily_unavailable" }, { status: 503 })));
+    const router = createAppRouter(client, createMemoryHistory({ initialEntries: [`/p/${PAGE_ID}`] }));
+    const { container } = render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
+    expect((await screen.findByLabelText("2 or more discussions")).textContent).toBe("2+");
+    await act(async () => { await client.refetchQueries({ queryKey }); });
+    await waitFor(() => expect(container.querySelector(".pb-discussion-count")).toBeNull());
+  });
+  it("places copyable metadata after the title outside prose, before body and outline-first rail", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const { container } = renderRail({ owner: "Ada Lovelace", status: "active" }, [
+      { id: "section", level: 2, text: "Section" }, { id: "second", level: 2, text: "Second" },
+    ]);
+    const strip = await screen.findByRole("group", { name: "Page properties" });
+    expect(strip.closest(".pb-prose")).toBeNull();
+    expect(container.querySelector("h1")!.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(within(strip).getByRole("button", { name: "Copy file path" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("infra/kubernetes.md"));
+    expect(container.querySelector("[data-pb-rail]")!.firstElementChild?.getAttribute("data-pb-toc")).not.toBeNull();
+  });
   it("keeps Page Info and TOC beside the default loading, list, detail and hidden workspace", async () => {
     let finish!: (response: Response) => void;
     const pending = new Promise<Response>((resolve) => { finish = resolve; });
@@ -110,13 +145,15 @@ describe("doc reading metadata rail (chunk-4)", () => {
     const { container } = render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
     await screen.findByText("Loading page discussions…");
     const rail = container.querySelector("[data-pb-rail]")!;
-    const info = rail.querySelector("[data-pb-rail-meta]")!;
+    const info = container.querySelector("[data-pb-rail-meta]")!;
     const toc = rail.querySelector("[data-pb-toc]")!;
     expect(container.querySelector("[data-pb-discussions-nav]")).toBeNull();
     expect(container.querySelector(".pb-reading-column [data-pb-discussions-toggle]")).toBeNull();
     expect(info.closest(".pb-prose")).toBeNull();
     expect(router.history.location.pathname).toBe(`/p/${PAGE_ID}`);
     await act(async () => { finish(Response.json({ ...emptyDiscussionList, discussions: [item] })); });
+    expect(await screen.findByLabelText("1 discussion")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start a discussion" })).toBeTruthy();
     const panel = screen.getByRole("region", { name: "Page discussions" });
     const card = await within(panel).findByRole("button", { name: /About this page/ });
     expect(info.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -125,7 +162,7 @@ describe("doc reading metadata rail (chunk-4)", () => {
     expect(within(panel).queryByRole("link", { name: /Discussions in|All discussions/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Hide discussions" }));
     expect(screen.queryByRole("region", { name: "Page discussions" })).toBeNull();
-    expect(rail.querySelector("[data-pb-rail-meta]")).toBe(info);
+    expect(container.querySelector("[data-pb-rail-meta]")).toBe(info);
     expect(rail.querySelector("[data-pb-toc]")).toBe(toc);
     fireEvent.click(screen.getByRole("button", { name: "Show discussions" }));
     expect(screen.getByRole("button", { name: "Close discussion" })).toBeTruthy();

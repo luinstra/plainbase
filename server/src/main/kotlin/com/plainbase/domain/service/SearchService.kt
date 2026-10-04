@@ -50,10 +50,12 @@ class SearchService(
 
         /** An §A1 grammar violation; [message] names the violated rule (the route's 400 `invalid_query`). */
         data class InvalidQuery(val message: String) : Outcome
+
+        data class InvalidRoot(val message: String) : Outcome
     }
 
     /** Runs the frozen §A1 grammar over the raw parameters, then queries and assembles (§B7). */
-    fun search(q: String?, limit: String? = null, offset: String? = null): Outcome {
+    fun search(q: String?, limit: String? = null, offset: String? = null, root: RootName? = null): Outcome {
         val query = q?.trim().orEmpty()
         val limitValue = limit.boundedInt(MIN_LIMIT, MAX_LIMIT, DEFAULT_LIMIT)
         val offsetValue = offset.boundedInt(MIN_OFFSET, MAX_OFFSET, DEFAULT_OFFSET)
@@ -65,12 +67,12 @@ class SearchService(
                 Outcome.InvalidQuery("limit must be an integer between $MIN_LIMIT and $MAX_LIMIT")
             offsetValue == null ->
                 Outcome.InvalidQuery("offset must be an integer between $MIN_OFFSET and $MAX_OFFSET")
-            else -> executeSearch(query, limitValue, offsetValue)
+            else -> executeSearch(query, limitValue, offsetValue, root)
         }
     }
 
-    private fun executeSearch(query: String, limit: Int, offset: Int): Outcome.Results {
-        val results = provider.search(SearchQuery(text = query, limit = limit, offset = offset))
+    private fun executeSearch(query: String, limit: Int, offset: Int, root: RootName?): Outcome.Results {
+        val results = provider.search(SearchQuery(text = query, limit = limit, offset = offset, rootFilter = root))
         val snapshot = indexBuilder.current
         // ONE availability snapshot per request, threaded - the same discipline as the page snapshot beside it.
         // A hit whose root is not serving is DROPPED here: a vanished root's section is carried forward, so its

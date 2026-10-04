@@ -79,7 +79,7 @@ class DiscussionWireGoldenTest : FunSpec({
                   "id":"${id.value}",
                   "page":{"id":"${world.page.pageId.value}","path":"${world.page.path.value}","resolution":"by_id"},
                   "status":"open","state":"page_level","reason":null,"range":null,"candidates":null,
-                  "placement":null,"quote":null,"comment_count":1,
+                  "placement":null,"quote":null,"comment_count":1,"range_content_hash":null,
                   "starter":{"key":"$key","kind":"human","label":"World writer"},
                   "created":"2026-09-26T10:00:00.000Z","updated":"2026-09-26T10:00:00.000Z"
                 }],"next":null,"discussions_available":true,"reason":null}

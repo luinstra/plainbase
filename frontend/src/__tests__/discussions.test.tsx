@@ -94,7 +94,7 @@ describe("discussion reads", () => {
     failNext = false;
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     await waitFor(() => expect(urls.some((url) => url.includes("root=extra") && url.includes("cursor=two") && url.includes("state=exact"))).toBe(true));
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent(window, new Event("focus"));
     await waitFor(() => expect(urls.filter((url) => url.includes("root=extra") && !url.includes("cursor=")).length).toBeGreaterThan(1));
   });
 
@@ -226,4 +226,26 @@ it("settles a denied reply and one successful retry under StrictMode", async () 
   expect(screen.queryByRole("status", { name: /Reply posted/ })).toBeNull();
   expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", "");
   expect(posts).toBe(2);
+});
+
+it("filters loaded lifecycle status without losing unknown rows or later cursor matches", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const later = String(input).includes("cursor=");
+    return Response.json({ discussions: later ? [{ ...item("exact", "resolved"), status: "resolved", page: { ...item("exact").page, path: "resolved.md" } }] :
+      [{ ...item("exact", "open"), page: { ...item("exact").page, path: "open.md" } }, item("unreadable", "unknown")],
+    next: later ? null : "more", discussions_available: true, reason: null });
+  }));
+  mount("/discussions/docs");
+  expect(await screen.findByRole("link", { name: "open.md" })).toBeTruthy();
+  const filters = screen.getByRole("group", { name: "Discussion status" });
+  fireEvent.click(within(filters).getByRole("button", { name: "Resolved" }));
+  expect(screen.queryByRole("link", { name: "open.md" })).toBeNull();
+  expect(screen.getByText("No resolved discussions in the loaded results.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  expect(await screen.findByRole("link", { name: "resolved.md" })).toBeTruthy();
+  fireEvent.click(within(filters).getByRole("button", { name: "All" }));
+  expect(screen.getByRole("link", { name: "open.md" })).toBeTruthy();
+  expect(screen.getByText("Status unavailable")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+  expect(document.querySelector('[data-pb-discussion-avatar]')?.textContent).toBe("H");
 });

@@ -132,8 +132,7 @@ describe("C3 formatting toolbar + keymap", () => {
     }
     // The icon buttons carry an accessible label (no visible text label any more).
     expect(view.container.querySelector("[data-pb-fmt-bold]")?.getAttribute("aria-label")).toBe("Bold");
-    // The ⌘S hint lives on the toolbar row, pushed to the far right.
-    expect(view.container.querySelector("[data-pb-save-hint]")?.textContent).toContain("to save");
+    expect(view.container.querySelector("[data-pb-save] [data-pb-save-hint]")?.textContent).toBe("⌘S");
   });
 
   it("offers five callout types, keeps chooser changes non-mutating, and inserts the chosen type", async () => {
@@ -334,7 +333,7 @@ describe("C3 formatting toolbar + keymap", () => {
     expect(putBody!).toContain("> [!NOTE]");
   });
 
-  it("the toolbar is hidden while the preview overlay is open", async () => {
+  it("the toolbar stays disabled while the preview overlay is open", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "<p>rendered</p>", headings: [] })));
     const { view } = renderSeeded();
 
@@ -347,9 +346,9 @@ describe("C3 formatting toolbar + keymap", () => {
 
     fireEvent.click(toggle);
     await waitFor(() => expect(view.container.querySelector("[data-pb-preview]")).not.toBeNull());
-    expect(view.container.querySelector("[data-pb-toolbar]")).toBeNull();
+    expect(view.container.querySelector<HTMLButtonElement>("[data-pb-fmt-bold]")?.disabled).toBe(true);
 
-    fireEvent.click(toggle);
+    fireEvent.click(view.getByRole("button", { name: "Write" }));
     await waitFor(() => expect(view.container.querySelector("[data-pb-preview]")).toBeNull());
     expect(view.container.querySelector("[data-pb-toolbar]")).not.toBeNull();
   });

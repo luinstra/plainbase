@@ -18,8 +18,8 @@ test("edit a fixture page: preview updates, save persists, the reading view refl
   await gotoExpectStatus(page, `${PAGE}?mode=edit`);
   const editor = page.locator("[data-pb-editor]");
   await expect(editor).toBeVisible();
-  const view = page.locator("[data-pb-header]").getByRole("button", { name: "View page" });
-  await expect(view).toHaveText("View");
+  const view = page.locator("[data-pb-editor]").getByRole("button", { name: "Done editing" });
+  await expect(view).toHaveText("Done");
 
   // Type into CodeMirror's contenteditable, open the on-demand preview, then assert the debounced server
   // preview re-renders. (Preview is hidden by default — the form rail owns the right pane until toggled.)
@@ -28,7 +28,7 @@ test("edit a fixture page: preview updates, save persists, the reading view refl
   await page.keyboard.press("End");
   await content.pressSequentially(`\n\n${marker}\n`);
 
-  // Canceling View keeps the unsaved buffer and mode intact.
+  // Canceling Done keeps the unsaved buffer and mode intact.
   page.once("dialog", async (dialog) => {
     expect(dialog.type()).toBe("confirm");
     expect(dialog.message()).toContain("Discard unsaved changes");
@@ -51,7 +51,7 @@ test("edit a fixture page: preview updates, save persists, the reading view refl
   await plantNoReloadMarker(page);
   await view.click();
   await expect(page).toHaveURL(PAGE);
-  await expect(page.locator(".pb-prose")).toContainText(marker);
+  await expect(page.locator("[data-pb-selection-surface]")).toContainText(marker);
   await expect(page.locator("[data-pb-header] [data-pb-edit-page]")).toBeVisible();
   await expect(page.locator("[data-pb-view-page]")).toHaveCount(0);
   await expectNoReload(page);
@@ -90,13 +90,15 @@ test("edit a metadata field via the rail form: save persists, the read view's ra
 
   // A tag commits on blur, immediately before View's click. That fresh edit must
   // participate in the discard check even if no render happened between the events.
+  await page.locator(".pb-editor-property summary").filter({ hasText: "Tags" }).click();
   await page.getByRole("textbox", { name: "Add tag" }).fill("view-guard");
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.locator("[data-pb-view-page]").click();
   await expect(page).toHaveURL(`${PAGE}?mode=edit`);
-  await expect(page.locator("[data-pb-field-tags]")).toContainText("view-guard");
+  await expect(page.locator(".pb-editor-property summary").filter({ hasText: "Tags" })).toContainText("view-guard");
 
   // Change the status via the rail form's dropdown (a surgical frontmatter edit, not a body edit).
+  await page.locator(".pb-editor-property summary").filter({ hasText: "Status" }).click();
   const status = page.locator("[data-pb-field-status]");
   await status.selectOption("review");
 
@@ -108,7 +110,7 @@ test("edit a metadata field via the rail form: save persists, the read view's ra
   // The read view's rail shows the new status chip.
   await page.locator("[data-pb-view-page]").click();
   await expect(page).toHaveURL(PAGE);
-  await expect(page.locator('[data-pb-rail] [data-pb-chip-status="review"]')).toBeVisible();
+  await expect(page.locator('[data-pb-rail-meta] [data-pb-chip-status="review"]')).toBeVisible();
   await expect(page.locator("[data-pb-rail-meta]")).toContainText("view-guard");
 });
 
@@ -148,6 +150,6 @@ test("a concurrent edit shows the content_changed conflict and keeps the buffer"
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator("[data-pb-view-page]").click();
   await expect(page).toHaveURL(PAGE);
-  await expect(page.locator(".pb-prose")).not.toContainText(myEdit);
-  await expect(page.locator(".pb-prose")).toContainText("out-of-band landed.");
+  await expect(page.locator("[data-pb-selection-surface]")).not.toContainText(myEdit);
+  await expect(page.locator("[data-pb-selection-surface]")).toContainText("out-of-band landed.");
 });

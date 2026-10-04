@@ -1,21 +1,21 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
-import { EditorState } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { Annotation, EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, createPage, putPageRaw, type SaveResult } from "../api/client";
 import { byPathKeyForUrl, encodeTreePath, invalidateAfterWrite, pageByPathQuery, previewQuery, treeQuery } from "../api/queries";
 import type { WriteConflictReason } from "../api/types";
 import { frontmatterValue, splitFrontmatter } from "../lib/frontmatter";
+import { checkPreviewLinks } from "../lib/editorDiagnostics";
+import { linkDiagnosticGutter, setLinkDiagnostics, tableSourceLayout } from "../lib/editorExtensions";
 import { insertLink, toggleBold, toggleCode, toggleItalic } from "../lib/markdownCommands";
-import { PAGE_TEMPLATES } from "../lib/pageTemplates";
 import { permalinkOf } from "../lib/permalink";
-import { previewPath } from "../lib/slugPreview";
-import { primaryEntry } from "../lib/tree";
+import { breadcrumbTrail } from "../lib/breadcrumbs";
 import { useDebounced } from "../lib/useDebounced";
 import { EditorToolbar } from "./EditorToolbar";
 import { isRootUnavailable, QueryErrorView } from "./ErrorView";
@@ -23,6 +23,7 @@ import { MetaForm } from "./MetaForm";
 import { NotFoundView } from "./NotFound";
 import { PageViewAction } from "./PageActions";
 import { Prose } from "./Prose";
+import { useCreationLeaveGuard } from "./NewPageFlow";
 
 /**
  * The `?mode=edit` editor surface (W6, D-1/D-4): a CodeMirror 6 Markdown editor over the FULL document
@@ -33,7 +34,7 @@ import { Prose } from "./Prose";
  * the initial buffer (component-level data-fetching — no route loader). The server is the identity
  * authority: a tampered id/slug surfaces the 422 refusal, never a silent save (D-4).
  */
-export function EditorPage({ path }: { path: string }) {
+export function EditorPage({ path, property }: { path: string; property?: "status" | "owner" }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const page = useQuery(pageByPathQuery(path));
@@ -82,6 +83,8 @@ export function EditorPage({ path }: { path: string }) {
       initialUrl={page.data.url}
       initialBuffer={page.data.markdown}
       initialHash={page.data.content_hash}
+      title={page.data.title}
+      property={property}
     />
   );
 }
@@ -109,6 +112,8 @@ function Editor({
   initialUrl,
   initialBuffer,
   initialHash,
+  property,
+  title,
 }: {
   id: string;
   /** The page's OWN root. The preview must resolve its links against that root's space, never the primary root's. */
@@ -117,6 +122,8 @@ function Editor({
   initialUrl: string | null;
   initialBuffer: string;
   initialHash: string;
+  property?: "status" | "owner";
+  title: string;
 }) {
   const queryClient = useQueryClient();
   const router = useRouter();
@@ -139,13 +146,15 @@ function Editor({
   // successful save, so a saved buffer reads clean (Save disabled, no redundant PUT) until the user
   // edits again. Tracked separately from `baseHash` (the CAS token), which advances independently.
   const [savedBuffer, setSavedBuffer] = useState(initialBuffer);
+  const [savedHash, setSavedHash] = useState(initialHash);
+  const savePending = useRef(false);
+  const editorRoot = useRef<HTMLDivElement>(null);
+  const [metadataReset, setMetadataReset] = useState(0);
+  const [metadataDraft, setMetadataDraft] = useState(false);
   const dirty = buffer !== savedBuffer;
 
   const [outcome, setOutcome] = useState<SaveOutcome | null>(null);
-  // The preview OVERLAYS the body editor (it's a preview *of the body*): the Page-info form rail stays
-  // visible the whole time, and CodeMirror stays mounted underneath the overlay (toggling off reveals it
-  // with cursor/scroll/undo intact). Preview off by default also gates its server fetch (below), so a
-  // normal edit session never POSTs `/api/v1/preview`.
+  // Keeping the source mounted preserves its selection and undo while Preview covers it.
   const [showPreview, setShowPreview] = useState(false);
   // The live body `EditorView`, lifted out of `CodeMirrorEditor` (private there) so the formatting
   // toolbar can run commands against it (D-3). A callback prop (not a forwarded ref) so this `useState`
@@ -162,12 +171,17 @@ function Editor({
   const editable = useEditableGuard(initialBuffer, initialHash);
 
   const debounced = useDebounced(buffer, 300);
-  // Gate the preview fetch on the pane being open: AND `showPreview` into the query's own `enabled`
-  // (text-non-empty) so a hidden preview never POSTs `/api/v1/preview`.
-  // The page's OWN root: link resolution is per-root, so previewing an extra root's page against the primary root's
-  // link space would render `[[other page]]` as a broken (or, worse, a WRONG) link.
+  // Diagnostics and Preview share the server's root-scoped link resolver and one request.
   const previewOptions = previewQuery(debounced, docPath, root);
-  const preview = useQuery({ ...previewOptions, enabled: showPreview && previewOptions.enabled });
+  const preview = useQuery(previewOptions);
+  const previewCurrent = buffer === debounced && preview.isSuccess;
+  const check = useMemo(() => previewCurrent ? checkPreviewLinks(buffer, preview.data.html) : { markers: [], unmapped: false }, [buffer, previewCurrent, preview.data]);
+  const diagnostics = check.markers;
+  const linkStatus = buffer !== debounced || preview.isFetching ? "Checking links…"
+    : preview.isError ? "Link checks unavailable" : check.unmapped ? "Some broken links could not be located" : diagnostics.length ? `${diagnostics.length} ${diagnostics.length === 1 ? "line needs" : "lines need"} attention` : "No broken links";
+  useEffect(() => {
+    editorView?.dispatch({ effects: setLinkDiagnostics.of(diagnostics) });
+  }, [editorView, diagnostics]);
 
   // Split-view (C2/D-3): the body CodeMirror holds the BODY SLICE only — the `---` fence and metadata
   // lines never enter the CM doc, so the body editor shows prose only and the metadata form owns the
@@ -191,6 +205,7 @@ function Editor({
       return putPageRaw(id, root, sent, baseHash).then((result) => ({ result, sent }));
     },
     onSuccess: ({ result, sent }) => applySaveResult(result, sent),
+    onSettled: () => { savePending.current = false; },
   });
 
   function applySaveResult(result: SaveResult, sent: string) {
@@ -200,6 +215,7 @@ function Editor({
         // Advance the dirty baseline to the saved bytes — the editor reads clean (Save disabled, no
         // redundant PUT) until the user edits again.
         setSavedBuffer(sent);
+        setSavedHash(result.written.content_hash);
         setOutcome({ kind: "notice", message: "warning" in result.written ? result.written.warning.message : "Saved." });
         // ONE invalidation point (queries.ts): tree, search (full-text goes stale on any edit), this page's
         // id-keyed + by-path reads. The by-path leg uses the mounted URL splat (NOT the `.md` file path); a
@@ -252,6 +268,9 @@ function Editor({
     }
   }
 
+  useCreationLeaveGuard(() => !save.isPending && (bufferRef.current === savedBuffer
+    || window.confirm("Discard unsaved changes and create another page?")));
+
   function viewPage() {
     if (save.isPending) return;
     // Metadata inputs can commit on blur immediately before this click. Read the live
@@ -260,34 +279,67 @@ function Editor({
     router.history.push(initialUrl ?? permalinkOf(root, id));
   }
 
+  function flushMetadata() {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest("[data-pb-meta-form]")) active.blur();
+  }
+  function requestSave() {
+    flushMetadata();
+    if (savePending.current || save.isPending || !editable || bufferRef.current === savedBuffer) return;
+    savePending.current = true;
+    save.mutate();
+  }
+  function discard() {
+    flushMetadata();
+    if (savePending.current || save.isPending || bufferRef.current === savedBuffer) return;
+    if (!window.confirm("Discard unsaved changes?")) return;
+    commitBuffer(() => savedBuffer);
+    setBaseHash(savedHash);
+    setOutcome(null);
+    setMetadataReset((value) => value + 1);
+    setMetadataDraft(false);
+  }
+
   return (
-    <div className="pb-editor flex min-w-0 flex-1 gap-8" data-pb-editor>
-      <PageViewAction onView={viewPage} disabled={save.isPending} />
+    <div ref={editorRoot} className="pb-editor flex min-w-0 flex-1" data-pb-editor onKeyDownCapture={(event) => {
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "s"
+        && !(event.target as HTMLElement).closest("dialog")) {
+        event.preventDefault(); event.stopPropagation(); requestSave();
+      }
+    }}>
       <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <Breadcrumb path={docPath} />
+        <div className="pb-editor-bar flex items-center justify-between gap-3">
+          <Breadcrumb root={root} path={docPath} title={title} />
           <div className="flex items-center gap-2">
+            <span className="text-xs text-muted" role="status" aria-label="Save state" aria-live="polite" data-pb-save-state>{save.isPending ? "Saving" : dirty || metadataDraft ? "Unsaved changes" : "Saved"}</span>
+            <div className="pb-editor-modes" role="group" aria-label="Editor mode">
+            <button type="button" aria-pressed={!showPreview} onClick={() => { setShowPreview(false); requestAnimationFrame(() => editorView?.focus()); }}>Write</button>
             <button
               type="button"
-              className="inline-flex items-center gap-1.5 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm font-medium text-muted hover:text-ink aria-pressed:bg-hovered aria-pressed:text-ink"
               data-pb-preview-toggle
               aria-pressed={showPreview}
-              onClick={() => setShowPreview((shown) => !shown)}
+              onClick={() => setShowPreview(true)}
             >
-              <EyeIcon />
               Preview
             </button>
+            </div>
+            <button type="button" className="pb-editor-discard text-sm text-muted" disabled={save.isPending || (!dirty && !metadataDraft)} onClick={discard}>Discard</button>
             <button
               type="button"
-              className="pb-editor-save rounded-md border border-primary-edge bg-primary px-3 py-1.5 text-sm font-medium text-primary-ink disabled:opacity-50"
+              className="pb-editor-save rounded-md border border-primary-edge bg-primary px-3 py-1.5 text-sm font-medium text-primary-ink"
               data-pb-save
-              disabled={save.isPending || !dirty || !editable}
-              onClick={() => save.mutate()}
+              disabled={save.isPending || (!dirty && !metadataDraft) || !editable}
+              onClick={requestSave}
             >
-              {save.isPending ? "Saving…" : "Save"}
+              {save.isPending ? "Saving…" : "Save"}<kbd className="ml-2 font-mono text-xs" aria-hidden="true" data-pb-save-hint>⌘S</kbd>
             </button>
+            <div role="group" aria-label="Finish editing" className="ml-2 border-l border-edge pl-3">
+              <PageViewAction onView={viewPage} disabled={save.isPending} />
+            </div>
           </div>
         </div>
+
+        <MetaForm key={metadataReset} buffer={buffer} onChange={commitBuffer} focusProperty={property} onDraftChange={setMetadataDraft} />
 
         {!editable && <UneditableBanner />}
         {outcome?.kind === "conflict" && <ConflictBanner conflict={outcome.conflict} />}
@@ -301,25 +353,21 @@ function Editor({
           </p>
         )}
 
-        {/* Formatting toolbar (C3): body-only, edit-mode only; hidden while the preview overlay covers the
-            editing surface. Acts on the SAME body view the keymap binds, via CM dispatch → recombineBody. */}
         <EditorToolbar view={editorView} disabled={showPreview} />
+        <p className="pb-editor-link-status text-xs text-muted" role="status" aria-label="Link checks" aria-live="polite">{linkStatus}</p>
 
         {/* The CodeMirror region is the positioning context for the preview overlay: CM stays mounted
             (preserving cursor/scroll/undo) and the preview, when shown, covers it with an opaque surface. */}
         <div className="relative min-h-0 flex-1">
-          <CodeMirrorEditor value={body} onChange={recombineBody} onViewChange={setEditorView} />
+          <div inert={showPreview}><CodeMirrorEditor value={body} onChange={recombineBody} onViewChange={setEditorView} /></div>
           {showPreview && (
             <div className="absolute inset-0 overflow-y-auto rounded-md bg-surface" data-pb-preview>
-              {preview.data ? <Prose html={preview.data.html} /> : <p className="text-sm text-faint">Preview appears as you type.</p>}
+              {previewCurrent ? <Prose html={preview.data.html} /> : <p className="text-sm text-muted">{preview.isError && buffer === debounced ? "Preview unavailable. Your draft is kept." : buffer.length ? "Preparing preview…" : "Your page is empty."}</p>}
             </div>
           )}
         </div>
       </div>
 
-      <aside className="pb-rail hidden w-[clamp(14rem,18vw,20rem)] shrink-0 overflow-y-auto xl:block" data-pb-edit-rail>
-        <MetaForm buffer={buffer} onChange={commitBuffer} />
-      </aside>
     </div>
   );
 }
@@ -330,32 +378,21 @@ function Editor({
  * `infra / kubernetes.md`). Monospace, matching the C2 bare-path look; `data-pb-editor-path` is preserved
  * as the stable hook (now wrapping the breadcrumb rather than the bare string).
  */
-function Breadcrumb({ path }: { path: string }) {
-  const segments = path.split("/");
-  const file = segments[segments.length - 1];
-  const folders = segments.slice(0, -1);
+function Breadcrumb({ root, path, title }: { root: string; path: string; title: string }) {
+  const tree = useQuery(treeQuery);
+  const folders = breadcrumbTrail(tree.data?.roots ?? [], root, path);
   return (
-    <span className="flex min-w-0 items-center font-mono text-sm" data-pb-editor-path>
+    <span className="flex min-w-0 items-center text-sm" data-pb-editor-path title={`${root}/${path}`}>
       {folders.map((folder, index) => (
         <span key={index} className="flex items-center text-muted">
-          {folder}
+          {folder.label}
           <span className="px-1.5 text-faint" aria-hidden="true">
             /
           </span>
         </span>
       ))}
-      <span className="truncate text-ink">{file}</span>
+      <span className="truncate text-ink">{title}</span>
     </span>
-  );
-}
-
-/** A minimal outline eye icon (currentColor) for the Preview toggle. */
-function EyeIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth={1.6}>
-      <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="8" cy="8" r="2" />
-    </svg>
   );
 }
 
@@ -501,191 +538,6 @@ function DeletedBanner({ buffer, root, initialPath }: { buffer: string; root: st
   );
 }
 
-/**
- * The `/new` route body (D-2/D-3): title (+ optional folder/slug) → `POST /api/v1/pages` → navigate
- * DIRECTLY to the server-returned canonical `url` (no tree re-resolve, no client slug derivation).
- *
- * [root] is the document root the page lands in (multi-root C4), carried from the root-qualified location
- * the "New" action was started from (the route's `?root=` search param). It is absent for a create started
- * outside any root's URL space (`/new` from the home view), and THIS component resolves that from the primary
- * wire entry. The wire has no default, because a server-side one would let any client's omission decide whose tree
- * a page joins.
- */
-export function NewPage({ root }: { root?: string }) {
-  const router = useRouter();
-  const queryClient = useQueryClient();
-  const tree = useQuery(treeQuery);
-  const [title, setTitle] = useState("");
-  const [folder, setFolder] = useState("");
-  const [slug, setSlug] = useState("");
-  const [section, setSection] = useState(false);
-  const [templateId, setTemplateId] = useState("blank");
-  const [body, setBody] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  // Normalize the folder ONCE — trim, then strip trailing slash(es) (the SAME normalization
-  // `previewPath` applies) — so the advisory preview and the POST agree: `guides/` previews
-  // `guides/<slug>.md` AND submits `folder: "guides"` (the server rejects the empty trailing segment).
-  const folderPath = folder.trim().replace(/\/+$/, "");
-  // In section mode the Folder field IS the new section's path; a section needs a non-blank path
-  // (its `<folder>/index.md` has nowhere to land otherwise), so creation is gated on it.
-  const sectionReady = !section || folderPath !== "";
-  const targetRoot = root ?? primaryEntry(tree.data?.roots ?? [])?.root;
-
-  const create = useMutation({
-    mutationFn: () => {
-      if (targetRoot === undefined) throw new Error("Cannot create a page before the target root is known");
-      return createPage({
-        root: targetRoot,
-        folder: folderPath || undefined,
-        title: title.trim(),
-        // Section forces `index`; else forward the user's slug VERBATIM (case-preserving — the server is the
-        // slug authority and slugifies it). Blank → undefined → the server slugifies the title.
-        slug: section ? "index" : slug.trim() || undefined,
-        body: body || undefined,
-      });
-    },
-    onSuccess: (result) => {
-      if (result.kind === "created") {
-        invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });
-        if (result.created.warning || !result.created.url) {
-          // Created-but-unindexed: the bytes are on disk but NOT yet in the published snapshot, so there
-          // is no reliable canonical url (the server returns `url: null`) until reconciliation. Surface
-          // the warning and stay put rather than navigate into a possibly-not-found route.
-          setNotice(`${(result.created.warning ?? { message: "Saved, but not yet indexed." }).message} It will appear after reconciliation.`);
-          return;
-        }
-        void router.navigate({ to: result.created.url });
-        return;
-      }
-      if (result.kind === "degraded") {
-        // P5: an agent CREATE outside `agentDirectCommit.globs` was filed as a proposal, not applied — there
-        // is no page to navigate to. Unreachable from the Human/cookie-auth SPA, but the kind is exhaustive.
-        setNotice("Submitted as a proposal for review.");
-        return;
-      }
-      setError(result.kind === "exists" ? `A page already exists at ${result.exists.path}.` : result.error.message);
-    },
-  });
-
-  return (
-    <div className="mx-auto max-w-[40rem]" data-pb-new-page-form>
-      <h1 className="text-2xl font-bold text-ink">New page</h1>
-      <form
-        className="mt-6 flex flex-col gap-4"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setError(null);
-          setNotice(null);
-          // Guard the blank-section case explicitly so a section create never POSTs without a path.
-          if (title.trim() && sectionReady && targetRoot) create.mutate();
-        }}
-      >
-        <label className="flex flex-col gap-1 text-sm text-muted">
-          Title
-          <input
-            className="rounded-md border border-edge bg-surface px-3 py-2 text-ink"
-            data-pb-new-title
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Page title"
-            autoFocus
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm text-muted">
-          {section ? "Section folder path" : "Folder (optional)"}
-          <input
-            className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
-            data-pb-new-folder
-            value={folder}
-            onChange={(event) => setFolder(event.target.value)}
-            placeholder="guides"
-          />
-          {section && <span className="text-xs text-faint">Creates {folderPath ? `${folderPath}/index.md` : "<folder>/index.md"}</span>}
-        </label>
-        {/* Slug + advisory path preview: NON-section only (section forces slug "index", so a typed slug would
-            be silently overridden). The preview is ADVISORY — it lowercases via approxSlug, but the POST
-            forwards the slug verbatim and navigation stays on the server-returned url. */}
-        {!section && (
-          <label className="flex flex-col gap-1 text-sm text-muted">
-            Slug (optional)
-            <input
-              className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
-              data-pb-new-slug
-              value={slug}
-              onChange={(event) => setSlug(event.target.value)}
-              placeholder="my-page"
-            />
-            {(title.trim() || slug.trim()) && (
-              <span className="text-xs text-faint" data-pb-new-preview>
-                approx. ≈ {previewPath(folderPath, slug.trim() || title.trim())}
-              </span>
-            )}
-          </label>
-        )}
-        <label className="flex flex-col gap-1 text-sm text-muted">
-          Template
-          <select
-            className="rounded-md border border-edge bg-surface px-3 py-2 text-ink"
-            data-pb-new-template
-            value={templateId}
-            onChange={(event) => {
-              const next = event.target.value;
-              // Guard the no-op re-select so a manual body edit survives re-picking the same template.
-              if (next === templateId) return;
-              const template = PAGE_TEMPLATES.find((t) => t.id === next);
-              setTemplateId(next);
-              // Selecting a template is an explicit action: replace the body with its scaffold (Blank → "").
-              setBody(template?.body ?? "");
-            }}
-          >
-            {PAGE_TEMPLATES.map((template) => (
-              <option key={template.id} value={template.id}>
-                {template.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm text-muted">
-          Body
-          <textarea
-            className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
-            data-pb-new-body
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            placeholder="Page body (Markdown)"
-            rows={8}
-          />
-        </label>
-        <label className="flex items-start gap-2 text-sm text-muted">
-          <input
-            type="checkbox"
-            className="mt-0.5 rounded border border-edge bg-surface text-accent"
-            data-pb-new-section
-            checked={section}
-            onChange={(event) => setSection(event.target.checked)}
-          />
-          <span>Create a new section (this page becomes its landing page)</span>
-        </label>
-        <button
-          type="submit"
-          className="self-start rounded-md border border-primary-edge bg-primary px-4 py-2 text-sm font-medium text-primary-ink disabled:opacity-50"
-          data-pb-new-create
-          disabled={create.isPending || !title.trim() || !sectionReady || !targetRoot}
-        >
-          {create.isPending ? "Creating…" : "Create page"}
-        </button>
-        {error && <p className="text-sm text-muted">{error}</p>}
-        {notice && (
-          <p className="pb-create-notice text-sm" data-pb-create-notice>
-            {notice}
-          </p>
-        )}
-      </form>
-    </div>
-  );
-}
-
 /** The §5.9-token Markdown highlight style — only `var(--pb-*)` references, so dark mode swaps for free. */
 const pbHighlightStyle = HighlightStyle.define([
   { tag: tags.heading, color: "var(--pb-syntax-title)", fontWeight: "bold" },
@@ -711,22 +563,26 @@ const pbEditorTheme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": { backgroundColor: "var(--pb-selection-bg)" },
   ".cm-content ::selection": { backgroundColor: "var(--pb-selection-bg)", color: "var(--pb-selection-text)" },
   ".cm-scroller": { fontFamily: "var(--font-mono)" },
+  ".cm-gutters": { backgroundColor: "var(--pb-surface)", color: "var(--pb-text-faint)", borderRight: "1px solid var(--pb-border)" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px" },
 });
 
 /**
  * The C3 formatting keymap (D-2). PREPENDED before `defaultKeymap` in the extensions array so CM6's
  * `runFor` reaches these first: `Mod-i` IS bound by default to `selectParentSyntax`, so the prepend plus
  * `toggleItalic` returning `true` whenever it acts is what stops the default from clobbering italic.
- * `Mod-b`/`Mod-k`/`Mod-e` are free. `Mod-` resolves to Cmd on macOS, Ctrl elsewhere (no branching).
+ * Link precedes the default Shift-Mod-k delete-line binding. `Mod-` resolves to Cmd on macOS, Ctrl elsewhere.
  */
 const formattingKeymap = keymap.of([
   { key: "Mod-b", run: toggleBold },
   { key: "Mod-i", run: toggleItalic },
   { key: "Mod-e", run: toggleCode },
-  { key: "Mod-k", run: insertLink },
+  { key: "Mod-Shift-k", run: insertLink },
 ]);
 
 /** Mounts a CodeMirror 6 Markdown EditorView over a ref; the React state is the source of truth for the buffer. */
+const externalReconcile = Annotation.define<boolean>();
+
 function CodeMirrorEditor({
   value,
   onChange,
@@ -755,16 +611,24 @@ function CodeMirrorEditor({
           history(),
           formattingKeymap,
           keymap.of([...defaultKeymap, ...historyKeymap]),
-          markdown(),
+          markdown({ base: markdownLanguage }),
+          lineNumbers(),
+          linkDiagnosticGutter,
+          tableSourceLayout,
           syntaxHighlighting(pbHighlightStyle),
           pbEditorTheme,
           EditorView.lineWrapping,
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+            if (update.docChanged && !update.transactions.some((transaction) => transaction.annotation(externalReconcile))) {
+              onChangeRef.current(update.state.doc.toString());
+            }
           }),
         ],
       }),
     });
+    // CodeMirror hides its decorative gutters; link marks are interactive diagnostics.
+    editor.dom.querySelector(".pb-editor-link-gutter")?.parentElement?.removeAttribute("aria-hidden");
+    editor.dom.querySelector(".cm-lineNumbers")?.setAttribute("aria-hidden", "true");
     view.current = editor;
     onViewChangeRef.current?.(editor);
     return () => {
@@ -779,8 +643,8 @@ function CodeMirrorEditor({
   // Reconcile an EXTERNAL value change (e.g. a programmatic reset) without clobbering local typing.
   useEffect(() => {
     const editor = view.current;
-    if (editor && value !== editor.state.doc.toString()) {
-      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value } });
+    if (editor && !editor.state.doc.eq(editor.state.toText(value))) {
+      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value }, annotations: externalReconcile.of(true) });
     }
   }, [value]);
 

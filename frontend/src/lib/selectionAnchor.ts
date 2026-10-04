@@ -8,6 +8,9 @@ export function captureSelectionAnchor(article: HTMLElement, selection: Selectio
   if (!selection || selection.rangeCount !== 1 || selection.isCollapsed || !selection.toString().trim()) return unavailable;
   const range = selection.getRangeAt(0);
   if (!article.contains(range.startContainer) || !article.contains(range.endContainer)) return unavailable;
+  for (const chrome of article.querySelectorAll("[data-pb-selection-chrome]")) {
+    if (range.intersectsNode(chrome)) return { reason: "Select only page text, without page properties or controls, and try again." };
+  }
   if (rangeIntersectsChrome(range, article, selection.toString()))
     return { reason: "Reselect the page text without the heading link, or discuss the whole page." };
   const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);

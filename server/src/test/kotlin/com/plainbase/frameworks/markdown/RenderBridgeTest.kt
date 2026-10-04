@@ -23,6 +23,17 @@ class RenderBridgeTest : FunSpec({
     val renderer = FlexmarkRenderer(FixtureIndexStub(Fixtures.demoDocs))
     val sourcePath = TreePath.require("guides/deploy-guide.md")
 
+    test("reference destinations remain inert and escaped without changing source markers") {
+        val target = "missing\"<draft>&.md"
+        val markdown = "[Missing][target]\n\n[target]: <$target>\n"
+        val page = renderer.render(sourcePath, markdown.toByteArray())
+        errorClass(page.html) shouldBe "broken_missing"
+        attrValue(page.html, "data-pb-link-target") shouldBe "missing&quot;&lt;draft&gt;&amp;.md"
+        page.html.containsAttribute("href") shouldBe false
+        page.html.containsAttribute("onclick") shouldBe false
+        page.html.containsAttribute("data-pb-src") shouldBe true
+    }
+
     // ---- Heading-id bridge: one page per allocator group, ids must match in document order --------
 
     val headingRows = GoldenTsv.load("/golden/heading-ids.tsv")
@@ -75,6 +86,8 @@ class RenderBridgeTest : FunSpec({
                     errorClass(page.html) shouldBe outcomeClass
                     page.html.containsAttribute("href") shouldBe false
                     page.html.containsAttribute("src") shouldBe false
+                    attrValue(page.html, "data-pb-link-target") shouldBe
+                        link.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")
                 }
             }
         }

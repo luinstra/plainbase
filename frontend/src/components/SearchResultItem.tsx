@@ -1,20 +1,14 @@
 import type { SearchHit } from "../api/types";
-import { splitHighlights } from "../lib/highlightSplit";
+import { splitHighlights, titleHighlights } from "../lib/highlightSplit";
 import { RootBadge } from "./RootBadge";
 
-/**
- * One Stage-2 full-text hit (PB-SEARCH-1). Title, the `heading_path` breadcrumb joined
- * verbatim, and the snippet rendered from `snippet` + `highlights` via `splitHighlights`:
- * each fragment is a bare text node or a `<mark>` through React interpolation — never
- * `innerHTML`, never client re-derivation (§A3/§A4).
- *
- * `showRoot` badges `hit.root`: a corpus-wide search is the one query that routinely returns two
- * roots at once, so it is where an unqualified hit misleads most.
- */
+/** A content hit. Snippets and heading paths remain server-owned text; highlights never use HTML injection. */
 export function SearchResultItem({
   hit,
   showRoot,
   rootLabel,
+  trail,
+  query = "",
   id,
   active,
   onActivate,
@@ -23,13 +17,17 @@ export function SearchResultItem({
   hit: SearchHit;
   showRoot?: boolean;
   rootLabel?: string;
+  trail?: string;
+  query?: string;
   id: string;
   active: boolean;
   onActivate: () => void;
   onHover: () => void;
 }) {
   const fragments = splitHighlights(hit.snippet, hit.highlights);
-  const breadcrumb = hit.heading_path.join(" › ");
+  const headings = hit.heading_path[0]?.trim().toLowerCase() === hit.title.trim().toLowerCase()
+    ? hit.heading_path.slice(1) : hit.heading_path;
+  const breadcrumb = headings.join(" › ");
   return (
     <li
       id={id}
@@ -42,16 +40,22 @@ export function SearchResultItem({
         onActivate();
       }}
       onMouseMove={onHover}
-      className={active ? "cursor-pointer rounded px-3 py-2" : "cursor-pointer rounded px-3 py-2 hover:bg-hovered"}
+      className={active ? "pb-search-row cursor-pointer rounded px-3 py-2" : "pb-search-row cursor-pointer rounded px-3 py-2 hover:bg-hovered"}
     >
+      {!showRoot && rootLabel && <span className="sr-only">{rootLabel}: </span>}
       <div className="flex items-baseline gap-2">
-        <span className="font-medium text-ink">{hit.title}</span>
+        <span className="truncate text-sm font-medium text-ink" title={hit.title}>
+          {titleHighlights(hit.title, query).map((part, index) => part.mark ? <mark key={index}>{part.text}</mark> : part.text)}
+        </span>
         {showRoot && <RootBadge root={hit.root} label={rootLabel} />}
-        {breadcrumb && <span className="truncate font-mono text-xs text-muted">{breadcrumb}</span>}
       </div>
-      <p className="mt-0.5 text-sm text-muted" data-pb-search-snippet>
-        {fragments.map((frag, i) => (frag.mark ? <mark key={i}>{frag.text}</mark> : <span key={i}>{frag.text}</span>))}
+      <p className="mt-0.5 truncate text-xs text-faint" data-pb-search-trail title={[hit.path, breadcrumb].filter(Boolean).join(" · ")}>
+        <span className="font-mono">{trail ?? hit.path}</span>
+        {breadcrumb && <> · <span className="font-sans text-muted">{breadcrumb}</span></>}
       </p>
+      {hit.snippet && <p className="pb-search-snippet mt-0.5 text-sm text-muted" data-pb-search-snippet title={hit.snippet}>
+        {fragments.map((frag, i) => (frag.mark ? <mark key={i}>{frag.text}</mark> : <span key={i}>{frag.text}</span>))}
+      </p>}
     </li>
   );
 }

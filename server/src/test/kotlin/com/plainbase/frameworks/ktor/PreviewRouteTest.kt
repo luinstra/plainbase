@@ -37,6 +37,24 @@ class PreviewRouteTest : FunSpec({
     suspend fun HttpResponse.obj(): JsonObject = Json.parseToJsonElement(bodyAsText()).jsonObject
     suspend fun HttpResponse.errorJson(): JsonObject = obj().getValue("error").jsonObject
 
+    test("preview carries absolute occurrence ranges for broken reference links without changing source blocks") {
+        writeRestTest(Fixtures.demoDocs) { _ ->
+            val source = "\uFEFF---\r\ntitle: Café\r\n---\r\n😀\r[first][missing]\n\n[missing]: not-present.md\n"
+            val response = client.post("/api/v1/preview?path=guides/preview.md") {
+                contentType(markdown())
+                setBody(source)
+            }
+            response.status shouldBe HttpStatusCode.OK
+            val html = response.obj().getValue("html").jsonPrimitive.content
+            val match = Regex("data-pb-link-src=\"(\\d+)-(\\d+)\"").find(html)!!
+            val start = match.groupValues[1].toInt()
+            val end = match.groupValues[2].toInt()
+            String(source.toByteArray(), start, end - start, Charsets.UTF_8) shouldBe "[first][missing]"
+            html shouldContain "data-pb-src="
+            html shouldContain "data-pb-link-target=\"not-present.md\""
+        }
+    }
+
     // 1. Renders + sanitizes: a heading gets a PB-SLUG-1 id; a raw <script> renders as ESCAPED text.
     test("preview renders the body, allocates heading ids, and escapes raw HTML (§C3 sanitization)") {
         writeRestTest(Fixtures.demoDocs) { _ ->

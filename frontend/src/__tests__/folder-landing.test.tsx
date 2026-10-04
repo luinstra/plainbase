@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, pageQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeFolder, TreePage, TreeResponse } from "../api/types";
@@ -120,6 +120,60 @@ function renderAt(initialPath: string, treeData: TreeResponse, prime: (qc: Query
 afterEach(() => vi.unstubAllGlobals());
 
 describe("folder landing views (ADR-0003)", () => {
+  it("counts only direct children in the header and preserves diagram navigation", async () => {
+    stubNotFound();
+    const data = tree([
+      { type: "folder", name: "nested", title: "API", description: null, path: "guides/nested", url: null, page_count: 9, children: [] },
+      pageNode(PAGE_ID, "guides/one.md", "One", "/docs/guides/one"),
+      { type: "diagram", title: "Flow", path: "guides/flow.mmd", url: "/browse/docs/guides/flow.mmd", source_url: "/assets/docs/guides/flow.mmd" },
+    ]);
+    const { view } = renderAt("/docs/guides", data);
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder-counts]")?.textContent).toBe("1 folder · 1 page · 1 diagram"));
+    const listing = view.container.querySelector("[data-pb-folder]")!;
+    expect(listing.querySelector('[data-pb-folder-child="folder"]')?.tagName).toBe("DIV");
+    expect(listing.querySelector(".fn")?.textContent).toBe("API");
+    const diagram = listing.querySelector('[data-pb-folder-child="diagram"]')!;
+    expect(diagram.getAttribute("href")).toBe("/browse/docs/guides/flow.mmd");
+    expect(diagram.querySelector(".pb-pdot")).toBeNull();
+    expect(diagram.querySelector('[data-pb-row-chevron][aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it.each([
+    { root: "docs", folder: "guides", url: "/docs/guides" },
+    { root: "extra", folder: "guides/Deep & Exact", url: "/extra/guides/deep-exact" },
+    { root: "extra", folder: "", url: "/extra" },
+  ])("starts creation in the exact $root folder '$folder'", async ({ root, folder, url }) => {
+    stubNotFound();
+    const data: TreeResponse = { roots: [{ root, primary: true, available: true, editable: true,
+      tree: { type: "folder", name: "", title: null, description: null, path: "", url: `/${root}`, page_count: 0,
+        children: folder ? [{ type: "folder", name: "exact", title: "Exact", description: null, path: folder, url, page_count: 0, children: [] }] : [] },
+    }] };
+    const { view, history } = renderAt(url, data);
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    const listing = within(view.container.querySelector("[data-pb-folder]") as HTMLElement);
+    expect(listing.getByText("0 folders · 0 pages")).toBeTruthy();
+    fireEvent.click(listing.getByRole("link", { name: "New page here" }));
+    await waitFor(() => expect(view.getByRole("dialog", { name: "New page" })).toBeTruthy());
+    expect(history.location.pathname).toBe(url);
+    expect(history.location.state.pbNewPage?.root).toBe(root);
+    expect(history.location.state.pbNewPage?.folder).toBe(folder);
+    expect((view.getByLabelText("Folder") as HTMLSelectElement).value).toBe(JSON.stringify(["folder", folder]));
+  });
+
+  it("shows a disabled, explained create action for a read-only root", async () => {
+    stubNotFound();
+    const data = tree([]);
+    data.roots[0].editable = false;
+    const { view } = renderAt("/docs/guides", data);
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    const listing = within(view.container.querySelector("[data-pb-folder]") as HTMLElement);
+    expect(listing.queryByRole("link", { name: "New page here" })).toBeNull();
+    const action = listing.getByRole("button", { name: "New page here" });
+    expect((action as HTMLButtonElement).disabled).toBe(true);
+    const description = document.getElementById(action.getAttribute("aria-describedby") ?? "");
+    expect(description?.textContent).toBe("This space is read-only.");
+  });
+
   it("renders a README child's content at the folder URL — address bar unchanged, fetched by id", async () => {
     stubNotFound();
     const readmeTree = tree([
@@ -298,7 +352,7 @@ describe("folder landing views (ADR-0003)", () => {
     expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("Guides"); // _folder.yaml title
     // Read each child's primary label (folder name `.fn`, page title `.pt`), not the full card text.
     const items = [...view.container.querySelectorAll("[data-pb-folder-child]")];
-    expect(items.map((li) => li.querySelector(".fn, .pt")?.textContent?.trim())).toEqual(["advanced", "Zeta Page", "Shadowed Page"]);
+    expect(items.map((li) => li.querySelector(".fn, .pt")?.textContent?.trim())).toEqual(["Advanced", "Zeta Page", "Shadowed Page"]);
     expect(view.container.querySelector('a[href="/docs/guides/zeta"]')).not.toBeNull();
     expect(view.container.querySelector('a[href="/docs/guides/advanced"]')).not.toBeNull();
     expect(view.container.querySelector(`a[href="/p/docs/${LOSER_ID}"]`)).not.toBeNull(); // loser via its ROOTED permalink
@@ -308,7 +362,7 @@ describe("folder landing views (ADR-0003)", () => {
     expect(view.container.querySelector('.pb-breadcrumbs a[href="/docs"]')?.textContent).toBe("docs");
   });
 
-  it("renders a folder card's description + `path · N pages` meta, and a page row's date only when present", async () => {
+  it("renders compact folder title, direct count and path with plain title and chevron page rows", async () => {
     stubNotFound();
     const richTree = tree([
       { type: "folder", name: "advanced", title: "Advanced", description: "Deep operational topics.", path: "guides/advanced", url: "/docs/guides/advanced", page_count: 3, children: [] },
@@ -320,14 +374,16 @@ describe("folder landing views (ADR-0003)", () => {
     await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
     // Scope to the listing — the sidebar nav renders the same page links without listing markup.
     const listing = view.container.querySelector("[data-pb-folder]")!;
-    // Folder card: description line + the page_count-driven meta.
     const card = listing.querySelector('[data-pb-folder-child="folder"]')!;
-    expect(card.querySelector(".fm")?.textContent).toContain("Deep operational topics.");
-    expect(card.querySelector(".fc")?.textContent).toContain("guides/advanced");
-    expect(card.querySelector(".fc")?.textContent).toContain("3 pages");
-    // Page rows: the dated row shows its verbatim date; the undated row has no date element.
+    expect(card.querySelector(".fn")?.textContent).toBe("Advanced");
+    expect(card.querySelector(".fm")).toBeNull();
+    expect(card.querySelector(".fp")?.textContent).toBe("guides/advanced/");
+    expect(card.querySelector(".fp")?.getAttribute("title")).toBe("guides/advanced/");
+    expect(card.querySelector(".fc")?.textContent).toBe("3 pages");
     const dated = listing.querySelector(`a[href="/docs/guides/dated"]`)!;
-    expect(dated.querySelector(".pdate")?.textContent).toBe("2026-05-30");
+    expect(dated.querySelector(".pdate, .pb-pdot")).toBeNull();
+    expect(dated.getAttribute("data-pb-status")).toBe("active");
+    expect(dated.querySelector('[data-pb-row-chevron][aria-hidden="true"]')).not.toBeNull();
     const undated = listing.querySelector(`a[href="/docs/guides/undated"]`)!;
     expect(undated.querySelector(".pdate")).toBeNull();
   });
@@ -409,7 +465,8 @@ describe("folder landing views (ADR-0003)", () => {
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
     const card = view.container.querySelector('[data-pb-folder-child="folder"]')!;
-    expect(card.querySelector(".fc")?.textContent).toContain("guides/advanced/ · 0 pages");
+    expect(card.querySelector(".fc")?.textContent).toBe("0 pages");
+    expect(card.querySelector(".fp")?.textContent).toBe("guides/advanced/");
   });
 
   it("an UNAVAILABLE root's folder URL renders the outage state, never an empty listing (D5)", async () => {

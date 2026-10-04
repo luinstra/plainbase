@@ -4611,6 +4611,7 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "SearchIndexer.kt|SearchIndexer", "SearchIndexer.kt|SearchIndexer.Companion", "SearchService.kt|SearchService",
     "SearchService.kt|SearchService.Outcome", "SearchService.kt|SearchService.Outcome.Results",
     "SearchService.kt|SearchService.Outcome.InvalidQuery",
+    "SearchService.kt|SearchService.Outcome.InvalidRoot",
     "SearchService.kt|SearchPayload", "SearchService.kt|SearchHitPayload", "SearchService.kt|SearchService.Companion",
     "SectionSplitter.kt|SectionSplitter", "SectionSplitter.kt|SectionSplitter.Companion", "SessionService.kt|SessionService",
     "SessionService.kt|SessionService.Authenticated", "SessionService.kt|SessionService.Companion", "SetupService.kt|SetupService",

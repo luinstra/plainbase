@@ -93,7 +93,7 @@ describe("semantic alias and consumer wiring", () => {
     for (const broken of ["@theme inline { --color-other: var(--pb-surface); }", valid.replace("@theme inline", ":root"), valid.replace("surface-chrome", "surface-raised")]) expect(() => alias(broken, "chrome", "surface-chrome")).toThrow();
   });
   const primary = ["border-primary-edge", "bg-primary", "text-primary-ink"];
-  it.each(["data-pb-save", "data-pb-save-as-new", "data-pb-new-create"])("wires %s primary styles", (hook) => classes(read("EditorPage"), hook, primary, ["border-edge", "border-accent", "bg-accent", "text-accent-contrast"]));
+  it.each([["EditorPage", "data-pb-save"], ["EditorPage", "data-pb-save-as-new"], ["NewPageDialog", "data-pb-new-create"]])("wires %s %s primary styles", (owner, hook) => classes(read(owner), hook, primary, ["border-edge", "border-accent", "bg-accent", "text-accent-contrast"]));
   it("detects every wrong primary class and missing controls", () => {
     const valid = '<button data-pb-save className="border-primary-edge bg-primary text-primary-ink" />';
     classes(valid, "data-pb-save", primary);

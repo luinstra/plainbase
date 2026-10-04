@@ -3,6 +3,8 @@ import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import { ApiError } from "../api/client";
+import { useDiscussionHighlight } from "../lib/useDiscussionHighlight";
+import type { DiscussionDetail } from "../api/types";
 import { pageDiscussionsQuery } from "../api/discussions";
 import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlKey, pageHtmlQuery, pageKey, pageQuery, treeQuery } from "../api/queries";
 import type { DiscussionQuoteRequestAnchor, PageHtmlResponse, PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
@@ -27,7 +29,9 @@ import { NotFoundView } from "./NotFound";
 import { PageEditAction } from "./PageActions";
 import { Prose } from "./Prose";
 import { Toc } from "./Toc";
+import { NewPageLink } from "./NewPageFlow";
 import { DiscussionPanel, type PassageRequest } from "./DiscussionPanel";
+import { uniqueDiscussionItems } from "./DiscussionRead";
 
 /**
  * The `/$` canonical route body: resolve the splat through `by-path` (canonical or
@@ -132,29 +136,50 @@ export function FolderLanding({ url }: { url?: string }) {
  * The purely-generated directory view (no index/README): `_folder.yaml` title (else name) as
  * heading, then the generated listing. `data-pb-folder` marks this rail-less generated view.
  *
- * It has no rail or TOC, but mirrors PageContent's column shell — reading column left aligned at at most 72ch,
- * an (empty) rail column held open beside it — so the content lands at the same width as a page.
- * Without that spacer the listing would bleed full-bleed and jar against every page view.
+ * Generated listings use the available content area; authored landing pages retain the reading layout.
  */
 function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
   const tree = useQuery(treeQuery);
   const entry = tree.data ? entryFor(tree.data.roots, root) : null;
   const title = folderTitle(folder) || (entry ? rootLabel(entry) : root);
+  const readOnlyId = useId();
+  const canCreate = rootAcceptsWrites(tree.data?.roots, root);
+  const folderCount = folder.children.filter((child) => child.type === "folder").length;
+  const pageCount = folder.children.filter((child) => child.type === "page").length;
+  const diagramCount = folder.children.filter((child) => child.type === "diagram").length;
+  const counts = [
+    `${folderCount} ${folderCount === 1 ? "folder" : "folders"}`,
+    `${pageCount} ${pageCount === 1 ? "page" : "pages"}`,
+    ...(diagramCount ? [`${diagramCount} ${diagramCount === 1 ? "diagram" : "diagrams"}`] : []),
+  ];
   useEffect(() => {
     document.title = `${title} · Plainbase`;
   }, [title]);
 
   return (
-    <div className="pb-folder pb-reading-layout" data-pb-folder>
+    <div className="pb-folder" data-pb-folder>
       <div className="min-w-0">
-        <div className="pb-reading-column">
+        <div>
           <Breadcrumbs root={root} path={folder.path} title={title} />
-          <h1 className="text-3xl font-bold text-ink">{title}</h1>
+          <header className="pb-folder-header">
+            <div className="min-w-0">
+              <h1 className="text-3xl font-bold text-ink">{title}</h1>
+              <p className="pb-folder-counts" data-pb-folder-counts>{counts.join(" · ")}</p>
+            </div>
+            {canCreate ? (
+              <NewPageLink className="pb-folder-create" root={root} folder={folder.path}>New page here</NewPageLink>
+            ) : (
+              <>
+                <button className="pb-folder-create" disabled title="This space is read-only." aria-describedby={readOnlyId}>
+                  New page here
+                </button>
+                <span id={readOnlyId} className="sr-only">This space is read-only.</span>
+              </>
+            )}
+          </header>
           <FolderListingGroups root={root} folder={folder} />
         </div>
       </div>
-      {/* Rail column reserved (empty) — no rail/TOC here, but the reading column keeps a page's width. */}
-      <div className="hidden xl:block" aria-hidden="true" />
     </div>
   );
 }
@@ -195,9 +220,8 @@ function FolderListingGroups({ root, folder }: { root: string; folder: TreeFolde
                   data-pb-status={child.status}
                   className="pb-page-row"
                 >
-                  <span className="pb-pdot" data-pb-status={child.status} aria-hidden="true" />
-                  <span className="pt">{child.title}</span>
-                  {child.updated && <span className="pdate">{child.updated}</span>}
+                  <span className="pt" title={child.title}>{child.title}</span>
+                  <RowChevron />
                 </a>
               ))}
             </div>
@@ -209,8 +233,8 @@ function FolderListingGroups({ root, folder }: { root: string; folder: TreeFolde
             <div className="pb-page-grid">
               {diagrams.map((child) => (
                 <a key={child.path} href={child.url} data-pb-folder-child="diagram" className="pb-page-row">
-                  <span className="pb-pdot" aria-hidden="true" />
-                  <span className="pt">{child.title}</span>
+                  <span className="pt" title={child.title}>{child.title}</span>
+                  <RowChevron />
                 </a>
               ))}
             </div>
@@ -220,8 +244,7 @@ function FolderListingGroups({ root, folder }: { root: string; folder: TreeFolde
   );
 }
 
-/** A subfolder landing card: icon + name + optional description + recursive content counts. A
- * collision-loser subfolder has `url === null` and renders inert (no link). */
+/** Page counts are direct; diagram counts include descendants. Collision losers remain inert. */
 function FolderCard({ folder }: { folder: TreeFolder }) {
   const name = folderTitle(folder);
   const diagramCount = folderDiagramCount(folder);
@@ -234,11 +257,11 @@ function FolderCard({ folder }: { folder: TreeFolder }) {
       <span className="ficon" aria-hidden="true">
         <FolderIcon />
       </span>
-      <span>
-        <span className="fn">{name}</span>
-        {folder.description && <span className="fm">{folder.description}</span>}
-        <span className="fc">
-          {folder.path}/ · {labels.join(" · ")}
+      <span className="min-w-0 flex-1">
+        <span className="fn" title={name}>{name}</span>
+        <span className="mt-1 flex min-w-0 items-baseline gap-1 text-xs text-faint">
+          <span className="fc">{labels.join(" · ")}</span><span aria-hidden="true">·</span>
+          <span className="fp" title={`${folder.path}/`}>{folder.path}/</span>
         </span>
       </span>
     </>
@@ -261,8 +284,14 @@ function folderDiagramCount(folder: TreeFolder): number {
   }, 0);
 }
 
-/** The landing-card folder icon — `currentColor` stroke SVG (the design accepts this icon, unlike
- * the sidebar's rejected ones); matches the ThemeToggle icon idiom. */
+function RowChevron() {
+  return (
+    <svg data-pb-row-chevron aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <path d="m9 5 7 7-7 7" />
+    </svg>
+  );
+}
+
 function FolderIcon() {
   return (
     <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -354,6 +383,7 @@ function PermalinkError({ error, id, root }: { error: Error; id: string; root: s
  * server would refuse to serve on reload.
  */
 function PageContent({ id, root, page: seeded }: { id: string; root: string | null; page?: PageResponse }) {
+  const [passage, setPassage] = useState<{ workspace: string; detail: DiscussionDetail } | null>(null);
   const [discussionOpen, setDiscussionOpen] = useState(true);
   const discussionBodyId = `pb-page-discussions-${useId()}`;
   const [passageRequest, setPassageRequest] = useState<PassageRequest | null>(null);
@@ -373,6 +403,9 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   const displayedRoot = railSource?.root ?? root;
   const workspaceId = JSON.stringify([displayedRoot, id]);
   const [presentationWorkspace, setPresentationWorkspace] = useState(workspaceId);
+  useDiscussionHighlight(articleWrapper, { root: displayedRoot, id, path: html.data?.path ?? "", hash: html.data?.content_hash ?? null,
+    html: html.data?.html ?? "", ready: discussionOpen && html.isSuccess && !html.isFetching },
+  passage?.workspace === workspaceId ? passage.detail : null);
   // A bare permalink keeps its unqualified query keys even when fresh HTML resolves another root.
   // Reset before rendering the new keyed panel so old requests cannot activate it or steal focus.
   if (presentationWorkspace !== workspaceId) {
@@ -397,6 +430,9 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   // Observe an existing page-list answer without fetching solely to decide whether to offer creation.
   const discussions = useInfiniteQuery({ ...pageDiscussionsQuery(displayedRoot ?? "", id), enabled: false });
   const canStartDiscussion = !knownUnsupported && discussions.data?.pages[0]?.discussions_available !== false;
+  const discussionCount = discussions.data?.pages[0]?.discussions_available && !discussions.isError
+    ? uniqueDiscussionItems(discussions.data.pages).length : null;
+  const moreDiscussions = discussions.data?.pages.at(-1)?.next != null;
 
   const title = html.data?.title;
   useEffect(() => {
@@ -465,10 +501,12 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   const retainedPanel = sourceHash !== null && displayedRoot !== null;
   const frontmatter = page?.frontmatter;
   const rail = <aside className="pb-rail pb-reading-rail" data-pb-rail>
-    {railSource && <DocRail frontmatter={frontmatter} path={railSource.path} />}
+    {railSource && <Toc headings={railSource.headings} />}
     {retainedPanel && <section className="pb-margin-discussions" aria-label="Discussions">
       <div className="pb-discussion-margin-header">
-        <h2 className="pb-rail-head">Discussions</h2>
+        <h2 className="pb-rail-head">Discussions {discussionCount !== null && <span className="pb-discussion-count"
+          aria-label={`${discussionCount}${moreDiscussions ? " or more" : ""} ${discussionCount === 1 ? "discussion" : "discussions"}`}>
+          {discussionCount}{moreDiscussions ? "+" : ""}</span>}</h2>
         <button ref={discussionTrigger} type="button" className="pb-discussion-action pb-discussion-quiet" data-pb-discussions-toggle
           aria-label={discussionOpen ? "Hide discussions" : "Show discussions"}
           aria-expanded={discussionOpen} aria-controls={discussionBodyId} onClick={() => {
@@ -482,7 +520,8 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
             disabled={posting || activeAction || !html.isSuccess || html.isFetching}
             onClick={discussWholePage}>Discuss the whole page instead</button>
         </p>}
-        <DiscussionPanel key={workspaceId} root={displayedRoot} pageId={id}
+        <DiscussionPanel key={workspaceId} root={displayedRoot} pageId={id} active={discussionOpen}
+          onPassageChange={(detail) => setPassage(detail ? { workspace: workspaceId, detail } : null)}
           onStart={() => startDiscussion()}
           startDisabled={posting || activeAction || !html.isSuccess || html.isFetching || !canStartDiscussion}
           sourceHash={sourceHash} sourceReady={html.isSuccess} sourceBusy={html.isFetching}
@@ -498,17 +537,21 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
         />
       </div>
     </section>}
-    {railSource && <div className="hidden xl:block"><Toc headings={railSource.headings} /></div>}
   </aside>;
 
   return (
     <div className="pb-reading-layout">
       <div className="min-w-0">
         <div className="pb-reading-column">
-          {html.isPending ? <PagePending /> : html.isError ? <PageError error={html.error} root={root} /> : <>
+          {html.isPending ? <PagePending /> : html.isError ? <>
+            {railSource && <DocRail frontmatter={frontmatter} path={railSource.path} />}
+            <PageError error={html.error} root={root} />
+          </> : <>
             <PageEditAction url={page?.url ?? null} editable={editable} />
             <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
-            <div ref={articleWrapper} data-pb-page-article><Prose html={html.data.html} /></div>
+            <div ref={articleWrapper} data-pb-page-article><Prose html={html.data.html} title={html.data.title}
+              reading={{ root: html.data.root, path: html.data.path, url: page?.url ?? null, editable }}
+              metadata={<DocRail frontmatter={frontmatter} path={html.data.path} editUrl={editable ? page?.url : null} />} /></div>
             <DocFooter
               frontmatter={frontmatter}
               url={page?.url ?? null}
@@ -544,13 +587,9 @@ function ownerInitials(owner: string): string {
   return initials.toUpperCase();
 }
 
-/**
- * The right-rail metadata list — a de-chromed quiet list of frontmatter fields (owner /
- * status / tags / updated / review) plus the always-present source File path. Missing keys
- * drop their row. This is app chrome: it renders in the rail `<aside>`, never inside
- * `.pb-prose`.
- */
-function DocRail({ frontmatter, path }: { frontmatter?: Record<string, unknown>; path: string }) {
+/** Properties stay outside the rendered source so selection quotes contain only authored text. */
+function DocRail({ frontmatter, path, editUrl }: { frontmatter?: Record<string, unknown>; path: string; editUrl?: string | null }) {
+  const splat = byPathKeyForUrl(editUrl ?? null);
   const owner = asString(frontmatter?.owner);
   const status = asString(frontmatter?.status);
   const tags = asTags(frontmatter?.tags);
@@ -558,9 +597,8 @@ function DocRail({ frontmatter, path }: { frontmatter?: Record<string, unknown>;
   const review = asString(frontmatter?.review);
 
   return (
-    <div className="pb-rail-card" data-pb-rail-meta>
-      <div className="pb-rail-head">Page info</div>
-      <div className="pb-meta">
+    <div className="pb-property-strip" data-pb-rail-meta data-pb-selection-chrome role="group" aria-label="Page properties">
+      <div className="pb-property-items">
         {owner && (
           <MetaRow label="Owner">
             <span className="pb-avatar" aria-hidden="true">
@@ -599,6 +637,8 @@ function DocRail({ frontmatter, path }: { frontmatter?: Record<string, unknown>;
         <MetaRow label="File">
           <FilePath path={path} />
         </MetaRow>
+        {splat && !status && <Link className="pb-property-add" to="/$" params={{ _splat: splat }} search={{ mode: "edit", property: "status" }}>+ Status</Link>}
+        {splat && !owner && <Link className="pb-property-add" to="/$" params={{ _splat: splat }} search={{ mode: "edit", property: "owner" }}>+ Owner</Link>}
       </div>
     </div>
   );
@@ -611,7 +651,8 @@ function DocRail({ frontmatter, path }: { frontmatter?: Record<string, unknown>;
  */
 function FilePath({ path }: { path: string }) {
   const [expanded, setExpanded] = useState(false);
-  return (
+  const [copyState, setCopyState] = useState("");
+  return <>
     <button
       type="button"
       className={expanded ? "pb-path-val pb-path-val-full" : "pb-path-val"}
@@ -622,7 +663,12 @@ function FilePath({ path }: { path: string }) {
     >
       {path}
     </button>
-  );
+    <button type="button" className="pb-copy-path" aria-label="Copy file path" title="Copy file path" onClick={() => {
+      void navigator.clipboard?.writeText(path).then(() => setCopyState("Path copied"), () => setCopyState("Could not copy path"));
+      if (!navigator.clipboard) setCopyState("Could not copy path");
+    }}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V4H4v12h4" /></svg></button>
+    <span className="sr-only" role="status">{copyState}</span>
+  </>;
 }
 
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {

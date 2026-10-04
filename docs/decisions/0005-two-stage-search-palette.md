@@ -1,4 +1,4 @@
-# 5. Two-stage search palette (jump-to first, full-text on demand)
+# 5. Search palette: instant titles and automatic content matches
 
 - **Status:** Accepted
 - **Date:** 2026-06-13
@@ -9,6 +9,20 @@
   (`.crew/plans/tighten-phase-2-chunk-s7-spa-search-ui-quick-switc.md`) is amended to match this ADR.
   Touches no frozen surface: PB-SEARCH-1 is unchanged, this is UI behavior only (§A4 — the
   quick-switcher and palette UX are explicitly "freely evolvable, no contract surface").
+
+## Amendment: 2026-10-03
+
+The owner-approved UI handoff replaces the historical two-stage interaction below. The current palette keeps cached title/path matches instant and appends server full-text matches automatically after a 150 ms debounce. The bridge and Back step are removed; Escape closes the palette in one step.
+
+Quick matches remain capped at eight and precede content matches. Each section groups its results by configured space order; results retain fuzzy or server rank within a space. Scope chips select All spaces or one configured available space. A root-scoped request includes optional `root` on `GET /api/v1/search`; the engine applies that bound root predicate to both hits and total before pagination. Omitted root retains the existing global behavior and response shape. Invalid/repeated root grammar returns `invalid_root`; unregistered scope returns that error after the read authorization gate; a configured unavailable scope returns `root_unavailable`. The MCP search schema stays unchanged.
+
+Selection is tracked by root-qualified result identity, including result kind and content heading. Arriving results cannot replace the selected destination by shifting array indices. Query or scope changes clear selection, and content hits for the previous query are immediately hidden during the next debounce. Enter opens the selected row, or the first current result when no selection was made; with no result it does nothing. Status and group labels are never selectable. Tab cycles the input and scope buttons; arrows navigate results only from the input. Opening the palette reads the existing tree cache without starting a tree request.
+
+This amendment intentionally accepts the richer combined list requested by the owner, with the identity and async-state safeguards the original debate identified. Title navigation remains usable when full-text search fails. Server snippets, highlight offsets, canonical URLs and rooted permalink fallbacks remain authoritative. No schema, dependency or index-format change is required.
+
+## Historical decision (2026-06-13)
+
+The context, decision and consequences below record the original reasoning. They are superseded by the amendment above where they describe stages or the bridge.
 
 ## Context
 

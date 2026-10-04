@@ -42,5 +42,5 @@ test("editing a page grows its history without a server restart", async ({ page 
 
   // 3b. The read view reflects the edited content (the watcher reindexed; the UI shows it).
   await gotoExpectStatus(page, PATH);
-  await expect(page.locator(".pb-prose")).toContainText(marker);
+  await expect(page.locator("[data-pb-selection-surface]")).toContainText(marker);
 });

@@ -162,15 +162,17 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
     }
 
     /** One fts table + its bm25 weight vector (positionally matching the table's columns). */
-    private class FtsIndex(val table: String, val weights: String)
+    private class FtsIndex(val table: String, val weights: String, val bodyColumn: Int)
 
     private fun Connection.runQuery(index: FtsIndex, match: String, query: SearchQuery): SearchResults {
         val statusPredicate = query.statusFilter?.let { "AND d.status IN (${it.joinToString(", ") { "?" }})" }.orEmpty()
+        val rootPredicate = if (query.rootFilter == null) "" else "AND d.root = ?"
         val from = "FROM ${index.table} JOIN section_doc d ON d.doc_id = ${index.table}.rowid"
         val where = """
             WHERE ${index.table} MATCH ?
               AND d.generation = (SELECT CAST(value AS INTEGER) FROM search_meta WHERE key = 'active_generation')
               $statusPredicate
+              $rootPredicate
         """.trimIndent()
 
         // `d.root` is part of the hit, not decoration: the row says which root's bytes produced this snippet, and
@@ -179,7 +181,7 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             """
             SELECT d.page_id, d.heading_id,
                    -bm25(${index.table}, ${index.weights}) AS score,
-                   snippet(${index.table}, -1, char(1), char(2), '…', $SNIPPET_TOKENS) AS snip,
+                   snippet(${index.table}, ${index.bodyColumn}, char(1), char(2), '…', $SNIPPET_TOKENS) AS snip,
                    d.root
             $from
             $where
@@ -187,7 +189,7 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             LIMIT ? OFFSET ?
             """.trimIndent(),
         ).use { statement ->
-            var p = bindMatchAndStatus(statement, match, query)
+            var p = bindPredicates(statement, match, query)
             statement.setInt(p++, query.limit)
             statement.setInt(p, query.offset)
             statement.executeQuery().use { rows ->
@@ -212,20 +214,53 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         // Same transaction, same WAL snapshot, same generation subselect: total can never come
         // from a different generation than the hits above (§B5 / Iteration-2 BLOCKING-1).
         val total = prepareStatement("SELECT count(*) $from\n$where").use { statement ->
-            bindMatchAndStatus(statement, match, query)
+            bindPredicates(statement, match, query)
             statement.executeQuery().use { rows ->
                 rows.next()
                 rows.getLong(1)
             }
         }
-        return SearchResults(total = total, hits = hits)
+        return SearchResults(total = total, hits = withBodyFallbacks(index, hits))
+    }
+
+    /** Empty preambles borrow bounded body text from the same indexed page and read snapshot, never another root. */
+    private fun Connection.withBodyFallbacks(index: FtsIndex, hits: List<SearchHit>): List<SearchHit> {
+        if (hits.none { it.snippet.isBlank() }) return hits
+        val generation = activeGeneration()
+        val prefixes = mutableMapOf<RootedPageId, String>()
+        return prepareStatement(
+            """
+            SELECT substr(f.body, 1, $FALLBACK_CHARACTERS), length(f.body) > $FALLBACK_CHARACTERS
+            FROM section_doc d JOIN ${index.table} f ON f.rowid = d.doc_id
+            WHERE d.generation = ? AND d.root = ? AND d.page_id = ?
+              AND length(trim(f.body, char(9) || char(10) || ' ')) > 0
+            ORDER BY d.doc_id LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            hits.map { hit ->
+                if (hit.snippet.isNotBlank()) {
+                    hit
+                } else {
+                    val prefix = prefixes.getOrPut(RootedPageId(hit.root, hit.pageId)) {
+                        statement.setLong(1, generation)
+                        statement.setString(2, hit.root.value)
+                        statement.setBytes(3, hit.pageId.toByteArray())
+                        statement.executeQuery().use { rows ->
+                            if (rows.next()) rows.getString(1) + if (rows.getBoolean(2)) "…" else "" else ""
+                        }
+                    }
+                    hit.copy(snippet = prefix, highlights = emptyList())
+                }
+            }
+        }
     }
 
     /** Binds the shared predicate parameters; returns the next free parameter index. */
-    private fun bindMatchAndStatus(statement: PreparedStatement, match: String, query: SearchQuery): Int {
+    private fun bindPredicates(statement: PreparedStatement, match: String, query: SearchQuery): Int {
         var p = 1
         statement.setString(p++, match)
         query.statusFilter?.forEach { statement.setString(p++, it) }
+        query.rootFilter?.let { statement.setString(p++, it.value) }
         return p
     }
 
@@ -393,12 +428,13 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         const val WEIGHT_TRIGRAM_TITLE: Double = 5.0
         const val WEIGHT_TRIGRAM_BODY: Double = 1.0
 
-        /** §B5's snippet window: `snippet(…, -1, …)` auto-picks the best column, 12 tokens. */
+        /** Body-only excerpts avoid repeating a title already displayed above the result. */
         const val SNIPPET_TOKENS: Int = 12
+        private const val FALLBACK_CHARACTERS: Int = 240
 
         private val PRIMARY_INDEX =
-            FtsIndex("section_fts", "$WEIGHT_TITLE, $WEIGHT_HEADING, $WEIGHT_BODY, $WEIGHT_TAGS, $WEIGHT_ALIASES, $WEIGHT_OWNER")
-        private val TRIGRAM_INDEX = FtsIndex("section_trigram", "$WEIGHT_TRIGRAM_TITLE, $WEIGHT_TRIGRAM_BODY")
+            FtsIndex("section_fts", "$WEIGHT_TITLE, $WEIGHT_HEADING, $WEIGHT_BODY, $WEIGHT_TAGS, $WEIGHT_ALIASES, $WEIGHT_OWNER", 2)
+        private val TRIGRAM_INDEX = FtsIndex("section_trigram", "$WEIGHT_TRIGRAM_TITLE, $WEIGHT_TRIGRAM_BODY", 1)
 
         private val logger = KotlinLogging.logger {}
     }

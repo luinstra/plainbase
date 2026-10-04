@@ -43,6 +43,21 @@ class SourceRangesTest : FunSpec({
     val renderer = FlexmarkRenderer(FixtureIndexStub(Fixtures.demoDocs))
     val sourcePath = TreePath.require("discussions/source-ranges.md")
 
+    test("broken link occurrence ranges identify exact bytes instead of the paragraph or reference definition") {
+        val occurrences = listOf("[first](missing.md)", "[again][missing]", "![image](absent.png)")
+        val source = "\uFEFF---\r\ntitle: Links\r\n---\r\nUnicode 😀 漢字\r\n" +
+            "${occurrences[0]} and\r${occurrences[1]}\n${occurrences[2]}\n\n[missing]: missing.md\n"
+        val bytes = source.toByteArray(Charsets.UTF_8)
+        val page = renderer.render(sourcePath, bytes)
+        val ranges = Regex("data-pb-link-src=\"(\\d+)-(\\d+)\"").findAll(page.html).toList()
+        ranges.map { match ->
+            bytes.copyOfRange(match.groupValues[1].toInt(), match.groupValues[2].toInt()).toString(Charsets.UTF_8)
+        }.shouldContainExactly(occurrences)
+        page.html shouldContain "data-pb-src="
+        renderer.renderFragment(sourcePath, occurrences.first()) shouldNotContain "data-pb-link-src"
+        renderer.render(sourcePath, byteArrayOf(0xFF.toByte()) + bytes).html shouldNotContain "data-pb-link-src"
+    }
+
     test("source ranges map rendered blocks and headings to raw UTF-8 bytes") {
         val body = buildString {
             append("# First 😀\r\n\r\n")

@@ -89,6 +89,7 @@ fun buildPlainbaseMcpServer(
             when (val outcome = read.search(principal, args?.stringArg("q"), args?.stringArg("limit"), args?.stringArg("offset"))) {
                 is SearchService.Outcome.Results -> jsonResult(SearchResponse.serializer(), outcome.payload.toDto())
                 is SearchService.Outcome.InvalidQuery -> errorResult("invalid_query", outcome.message)
+                is SearchService.Outcome.InvalidRoot -> errorResult("invalid_root", outcome.message)
             }
         }
     }

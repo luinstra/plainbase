@@ -1028,6 +1028,11 @@ class DiscussionRoutesTest : FunSpec({
                         ).jsonObject.getValue("discussions").jsonArray
                         exact.size shouldBe 1
                         exact.single().jsonObject.getValue("id").jsonPrimitive.content shouldBe quoted
+                        exact.single().jsonObject.getValue("range_content_hash").jsonPrimitive.content shouldBe page.contentHash
+                        pageLevel.forEach { it.jsonObject.getValue("range_content_hash").toString() shouldBe "null" }
+                        val quotedDetail = Json.parseToJsonElement(client.get("/api/v1/discussions/$quoted").bodyAsText()).jsonObject
+                        quotedDetail.getValue("discussion").jsonObject.getValue("range_content_hash").jsonPrimitive.content shouldBe
+                            page.contentHash
                         val range = exact.single().jsonObject.getValue("range").jsonObject
                         range.getValue("byte_start") shouldBe previewBody.getValue("byte_start")
                         range.getValue("byte_end") shouldBe previewBody.getValue("byte_end")

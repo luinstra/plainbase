@@ -2,6 +2,12 @@ import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { clearCsrfToken } from "./api/csrf";
 
+// jsdom has no top layer. Browser smoke tests verify actual modality and focus containment.
+if (typeof HTMLDialogElement !== "undefined" && typeof HTMLDialogElement.prototype.showModal !== "function") {
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; };
+}
+
 // Raise the Testing-Library async-util ceiling above the 1000ms default. Our `waitFor`s poll for
 // async UI (router transitions, debounced search, query settles); on a slow/contended CI runner (30
 // jsdom test files in one process) a correct assertion can need >1s to settle, and the default ceiling

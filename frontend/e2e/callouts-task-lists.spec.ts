@@ -115,7 +115,7 @@ test("renders inline callouts and tasks, then inserts callouts through the exist
   const cautionPreview = preview.locator('.pb-callout[data-pb-callout="caution"]').filter({ hasText: "===" });
   await expect(cautionPreview).toHaveCount(1);
   await expect(cautionPreview).toContainText("===");
-  await page.locator("[data-pb-preview-toggle]").click();
+  await page.getByRole("button", { name: "Write", exact: true }).click();
   await page.locator("[data-pb-save]").click();
   await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
 

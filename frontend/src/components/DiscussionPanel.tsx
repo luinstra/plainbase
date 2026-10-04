@@ -4,17 +4,19 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { pageDiscussionsQuery, previewDiscussionAnchor, refreshDiscussionViews, startDiscussion } from "../api/discussions";
 import { sessionQuery } from "../api/queries";
+import { useDiscussionRefresh } from "../lib/useDiscussionRefresh";
 import { focusDiscussionElement } from "../lib/discussionFocus";
-import type { DiscussionPreviewResponse, DiscussionQuoteRequestAnchor, DiscussionRequestAnchor } from "../api/types";
+import type { DiscussionDetail, DiscussionPreviewResponse, DiscussionQuoteRequestAnchor, DiscussionRequestAnchor } from "../api/types";
 import { DiscussionComposer, commentValidation, discussionPreviewError, discussionWriteError, discussionWriteRecovery } from "./DiscussionComposer";
-import { DiscussionAvailability, DiscussionListRows, DiscussionReadError, uniqueDiscussionItems } from "./DiscussionRead";
+import { DiscussionAvailability, DiscussionFilters, type DiscussionStatusFilter, DiscussionListRows, DiscussionReadError, uniqueDiscussionItems } from "./DiscussionRead";
 import { DiscussionThread } from "./DiscussionThread";
 import type { DiscussionSourceConnection } from "./DiscussionReattach";
 
 export interface PassageRequest { nonce: number; root: string; pageId: string; anchor: DiscussionQuoteRequestAnchor }
 
 export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceBusy, request, pageRequestNonce,
-  onReselect, onReload, onPostingChange, source, onActionChange, onStart, startDisabled }: {
+  onReselect, onReload, onPostingChange, source, onActionChange, onStart, startDisabled, active = true, onPassageChange }: {
+  active?: boolean; onPassageChange?: (detail: DiscussionDetail | null) => void;
   root: string; pageId: string; sourceHash: string | null; sourceReady: boolean; sourceBusy: boolean;
   request: PassageRequest | null; pageRequestNonce: number; onReselect: () => void; onReload: () => Promise<boolean>;
   onPostingChange: (busy: boolean, owner: string) => void;
@@ -39,6 +41,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
     setThreadActive(active); setThreadWriting(busy); threadAction.current = active; threadBusy.current = busy;
     publishActivity();
   }, [publishActivity]);
+  const [statusFilter, setStatusFilter] = useState<DiscussionStatusFilter>("all");
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<"page" | "quote" | null>(null);
   const [body, setBody] = useState("");
@@ -64,11 +67,16 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
   const preparedNonce = useRef<number | null>(null);
   const pageModeNonce = useRef(0);
   const client = useQueryClient();
-  const query = useInfiniteQuery(pageDiscussionsQuery(root, pageId));
+  const query = useInfiniteQuery({ ...pageDiscussionsQuery(root, pageId), enabled: active });
+  const inspection = useRef(false);
+  inspection.current = creationRecovery === "inspect";
+  useDiscussionRefresh(query, active && query.data?.pages[0]?.discussions_available !== false,
+    () => posting.current || threadBusy.current || inspection.current || threadAction.current);
   const session = useQuery(sessionQuery);
   const first = query.data?.pages[0];
   const latest = query.data?.pages.at(-1);
   const items = uniqueDiscussionItems(query.data?.pages ?? []);
+  const visibleItems = items.filter((item) => creationRecovery === "inspect" || statusFilter === "all" || item.status === statusFilter);
   const previewMutation = useMutation({ mutationFn: (anchor: DiscussionQuoteRequestAnchor) => previewDiscussionAnchor(root, pageId, anchor), retry: false });
   const startMutation = useMutation({ mutationFn: (input: { anchor: DiscussionRequestAnchor; body: string }) =>
     startDiscussion(root, pageId, input.anchor, input.body), retry: false });
@@ -158,7 +166,6 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
     setCreationRecovery(null);
     requestAnimationFrame(() => {
       if (focusDiscussionElement(panel.current?.querySelector<HTMLElement>("[data-pb-new-discussion]"))) return;
-      if (focusDiscussionElement(panel.current?.querySelector<HTMLElement>(".pb-discussion-list-toolbar .pb-discussion-refresh"))) return;
       focusDiscussionElement(panel.current);
     });
   }
@@ -205,6 +212,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
     } catch (failure) {
       if (alive.current) {
         setStatus(null); setError(discussionWriteError(failure));
+        inspection.current = discussionWriteRecovery(failure) === "inspect";
         setCreationRecovery(discussionWriteRecovery(failure));
         setPassageFallback(mode === "quote" && failure instanceof ApiError &&
           ["anchor_too_large", "anchor_not_found", "invalid_anchor"].includes(failure.code));
@@ -220,6 +228,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
   }
 
   const knownSignIn = session.data?.auth_mode !== "off" && session.data?.authenticated === false;
+  const confirmedEmpty = first?.discussions_available && items.length === 0 && !query.hasNextPage && !query.isRefetchError && !creationRecovery;
   const disabled = pageChanged ? "Reload the page and review it before posting." :
     !sourceReady ? (sourceBusy ? "The page is loading. Wait before posting." : "The page could not be read. Reload it before posting.") :
     query.isPending ? "Checking whether discussions are available…" :
@@ -232,9 +241,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
       {!mode && <div className="pb-discussion-list-toolbar">
         <div className="pb-discussion-toolbar">
           {first?.discussions_available && <button type="button" className="pb-discussion-action pb-discussion-primary"
-            data-pb-new-discussion disabled={startDisabled} onClick={onStart}>New discussion</button>}
-          <button type="button" className="pb-discussion-action pb-discussion-quiet pb-discussion-refresh"
-            disabled={query.isRefetching} onClick={() => void query.refetch()}>Refresh</button>
+            data-pb-new-discussion disabled={startDisabled} onClick={onStart}>Start a discussion</button>}
         </div>
       </div>}
       {mode && <section className="space-y-3" aria-label={mode === "page" ? "New page discussion" : "New passage discussion"}>
@@ -287,31 +294,26 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
         const id = selected;
         setSelected(null);
         requestAnimationFrame(() => focusDiscussionElement(Array.from(panel.current?.querySelectorAll<HTMLButtonElement>("[data-pb-discussion-id]") ?? [])
-          .find((button) => button.dataset.pbDiscussionId === id)));
+          .find((button) => button.dataset.pbDiscussionId === id) ?? panel.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]') ?? panel.current));
       }}>← All discussions</button>
-      <DiscussionThread key={`${root}/${selected}`} root={root} id={selected} inPanel source={source} creationPending={writing} onActionChange={threadActivity} />
+      <DiscussionThread key={`${root}/${selected}`} root={root} id={selected} inPanel source={source} active={active} onPassageChange={onPassageChange} creationPending={writing} onActionChange={threadActivity} />
       {threadActive && <p className="pb-discussion-hint">Finish this action before returning to the list.</p>}
       {first?.discussions_available && <button type="button" className="pb-discussion-action pb-discussion-quiet"
-        data-pb-new-discussion disabled={startDisabled} onClick={onStart}>New discussion</button>}
+        data-pb-new-discussion disabled={startDisabled} onClick={onStart}>Start a discussion</button>}
     </> : <>
       {query.isPending && <p role="status">Loading page discussions…</p>}
       {query.isError && !query.data && <DiscussionReadError error={query.error} retry={() => void query.refetch()} />}
       {first && !first.discussions_available && <DiscussionAvailability reason={first.reason} />}
       {first?.discussions_available && <>
+        {!mode && !confirmedEmpty && <DiscussionFilters value={statusFilter} onChange={setStatusFilter} more={!!query.hasNextPage} />}
         {query.isRefetchError && <p role="alert">Refresh failed. Showing earlier discussions.
-          {mode && <button type="button" className="pb-discussion-action" disabled={query.isRefetching} onClick={() => void query.refetch()}>Refresh</button>}</p>}
-        {!mode && items.length === 0 && !query.hasNextPage && !query.isRefetchError && <div className="pb-discussion-empty">
-          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <path d="M5 5h14v11H9l-4 3V5Z" /><path d="M8 9h8M8 12h5" />
-          </svg>
-          <p className="pb-discussion-heading">Start the conversation</p>
-          <p>Discuss the page or a passage that stands out.</p>
-        </div>}
+          <button type="button" className="pb-discussion-action" disabled={query.isRefetching} onClick={() => void query.refetch()}>Retry</button></p>}
         {latest?.discussions.length === 0 && query.hasNextPage && <p>No discussions in this window. Load more to continue.</p>}
         {mode && creationRecovery === "inspect" && items.length > 0 && <p className="pb-discussion-eyebrow">Existing discussions</p>}
-        {(!mode || creationRecovery === "inspect") && <DiscussionListRows root={root} items={items} pageLocal onSelect={(id) => { if (!posting.current) setSelected(id); }} />}
+        {!mode && !confirmedEmpty && statusFilter !== "all" && visibleItems.length === 0 && <p>No {statusFilter} discussions in the loaded results.</p>}
+        {(!mode || creationRecovery === "inspect") && <DiscussionListRows root={root} items={visibleItems} pageLocal onSelect={(id) => { if (!posting.current) setSelected(id); }} />}
         {query.isFetchNextPageError && <p role="alert">Could not load more discussions. Earlier rows remain available.</p>}
-        {query.hasNextPage && (!mode || creationRecovery === "inspect") && <button type="button" className="pb-discussion-action" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
+        {query.hasNextPage && (!mode || creationRecovery === "inspect") && <button type="button" className="pb-discussion-action" disabled={query.isFetching} onClick={() => void query.fetchNextPage({ cancelRefetch: false })}>
           {query.isFetchingNextPage ? "Loading…" : "Load more"}
         </button>}
       </>}

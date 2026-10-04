@@ -57,6 +57,21 @@ function fixture(response = envelope(), post?: (url: string, init: RequestInit) 
 }
 afterEach(() => { vi.unstubAllGlobals(); clearCsrfToken(); window.getSelection()?.removeAllRanges(); });
 
+it.each([null, "next"])("simplifies only a confirmed empty page discussion list with cursor %s", async (next) => {
+  const base = fixture().fetcher;
+  mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).includes("/pages/page/discussions")
+    ? Response.json({ discussions: [], next, discussions_available: true, reason: null }) : base(input, init)) as typeof fetch, "/extra/note");
+  expect(await screen.findByRole("button", { name: "Start a discussion" })).toBeTruthy();
+  expect(screen.getAllByRole("button", { name: "Start a discussion" })).toHaveLength(1);
+  if (next) {
+    expect(screen.getByRole("group", { name: "Discussion status" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+  } else {
+    expect(screen.queryByRole("group", { name: "Discussion status" })).toBeNull();
+    expect(screen.queryByText("Start the conversation")).toBeNull();
+  }
+});
+
 it("expands and collapses the full immutable original passage without substituting the latest attachment", async () => {
   const quote = "Before the release, confirm the rollback owner and the last known good version. ".repeat(8);
   const data = envelope();
@@ -287,7 +302,7 @@ it("edits returned Markdown on a resolved thread, retains a dirty buffer on refr
   expect(text).toBe(document.activeElement);
   fireEvent.change(text, { target: { value: "  **My dirty edit** 😀  " } });
   data.comments[0].markdown = "Someone else's edit";
-  fireEvent.click(discussionButton({ name: "Refresh" }));
+  fireEvent(window, new Event("focus"));
   await waitFor(() => expect(text).toHaveProperty("value", "  **My dirty edit** 😀  "));
   expect(discussionButton({ name: "Reopen discussion" })).toHaveProperty("disabled", true);
   fireEvent.keyDown(text, { key: "Escape" });
@@ -403,7 +418,7 @@ it.each([{ kind: "retract", removed: false }, { kind: "retract", removed: true }
     expect(f.calls).toHaveLength(0);
   });
 
-it("uses the ordinary refresh error for a later manual failure after the confirmed edit refreshed successfully", async () => {
+it("uses the ordinary refresh error for a later automatic failure after the confirmed edit refreshed successfully", async () => {
   let failDetail = false;
   const f = fixture();
   const view = mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => failDetail && init?.method !== "POST" && String(input).includes("/discussions/thread?")
@@ -415,7 +430,7 @@ it("uses the ordinary refresh error for a later manual failure after the confirm
   await waitFor(() => expect(discussionButton({ name: "Edit comment" })).toHaveProperty("disabled", false));
   expect(screen.queryByText(/but the view could not refresh/)).toBeNull();
   failDetail = true;
-  fireEvent.click(discussionButton({ name: "Refresh" }));
+  fireEvent(window, new Event("focus"));
   await screen.findByText(/Refresh failed. Showing earlier discussion content/);
   await waitFor(() => expect(view.client.isFetching()).toBe(0));
   expect(screen.queryByText(/but the view could not refresh/)).toBeNull();
@@ -490,7 +505,7 @@ it("retains a panel edit through Hide/reopen and blocks competing creation and C
   fireEvent.click(await within(await screen.findByRole("region", { name: "Page discussions" })).findByRole("button", { name: /Original evidence|Saved quote/ }));
   fireEvent.click(await findDiscussionButton({ name: "Edit comment" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Retain through Hide" } });
-  expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", true);
+  expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", true);
   expect(screen.getByRole("button", { name: "Close discussion" })).toHaveProperty("disabled", true);
   fireEvent.click(screen.getByRole("button", { name: "Hide discussions" }));
   fireEvent.click(screen.getByRole("button", { name: "Show discussions" }));
@@ -712,9 +727,9 @@ it.each([false, true])("releases a mounted panel's active action on warm A→B�
   fireEvent.click(await within(await screen.findByRole("region", { name: "Page discussions" })).findByRole("button", { name: /Original evidence|Saved quote/ }));
   fireEvent.click(await findDiscussionButton({ name: "Edit comment" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Old page draft" } });
-  expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", true);
+  expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", true);
   await warmRoundTrip(view);
-  await waitFor(() => expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", false));
+  await waitFor(() => expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", false));
   expect(screen.queryByRole("button", { name: "Save comment" })).toBeNull();
   expect(f.calls).toHaveLength(0);
 });
@@ -726,12 +741,12 @@ it("keeps creation busy through refresh when the newly created thread mounts", a
     if (init?.method !== "POST" && String(input).includes("/pages/page/discussions") && ++reads > 1) return pending;
     return f.fetcher(input, init);
   }) as typeof fetch, "/extra/note", true);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "New thread" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   const resolve = await findDiscussionButton({ name: "Resolve discussion" });
   await waitFor(() => expect(reads).toBe(2));
-  expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", true);
+  expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", true);
   expect(resolve).toHaveProperty("disabled", true);
   expect(screen.getByRole("button", { name: "Reply" })).toHaveProperty("disabled", true);
   expect(screen.getByRole("button", { name: "Close discussion" })).toHaveProperty("disabled", true);
@@ -739,26 +754,26 @@ it("keeps creation busy through refresh when the newly created thread mounts", a
   expect(f.calls).toHaveLength(1);
   await act(async () => { finish(Response.json({ discussions: [envelope().discussion], next: null, discussions_available: true, reason: null })); });
   await waitFor(() => expect(resolve).toHaveProperty("disabled", false));
-  expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", false);
+  expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", false);
 });
 
 it("ignores an unmounted creation's late completion while a new same-page writer is pending", async () => {
   const finishes: ((response: Response) => void)[] = [];
   const f = fixture(envelope(), async () => new Promise<Response>((resolve) => finishes.push(resolve)));
   const view = mount(f.fetcher, "/extra/note", true);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Old creation" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   await waitFor(() => expect(finishes).toHaveLength(1));
   await warmRoundTrip(view);
-  await waitFor(() => expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", false));
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  await waitFor(() => expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", false));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "New same-page creation" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   await waitFor(() => expect(finishes).toHaveLength(2));
   await act(async () => { finishes[0](Response.json({ id: "thread", comment_id: null, commit: null }, { status: 201 })); });
   await waitFor(() => expect(view.client.isFetching()).toBe(0));
-  expect(screen.queryByRole("button", { name: "New discussion" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Start a discussion" })).toBeNull();
   expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", "New same-page creation");
   expect(screen.getByRole("button", { name: "Create discussion" })).toHaveProperty("disabled", true);
   await act(async () => { finishes[1](Response.json({ id: "thread", comment_id: null, commit: null }, { status: 201 })); });
@@ -773,14 +788,14 @@ it("releases a thread writer on warm navigation and keeps a new panel's edit aft
   fireEvent.click(await findDiscussionButton({ name: "Resolve discussion" }));
   await waitFor(() => expect(f.calls).toHaveLength(1));
   await warmRoundTrip(view);
-  await waitFor(() => expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", false));
+  await waitFor(() => expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", false));
   fireEvent.click(await within(await screen.findByRole("region", { name: "Page discussions" })).findByRole("button", { name: /Original evidence|Saved quote/ }));
   fireEvent.click(await findDiscussionButton({ name: "Edit comment" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "New mounted draft" } });
   await act(async () => { finish(Response.json({ id: "thread", comment_id: null, commit: null })); });
   await waitFor(() => expect(view.client.isFetching()).toBe(0));
   expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", "New mounted draft");
-  expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", true);
+  expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", true);
   expect(screen.queryByRole("status", { name: "Discussion resolved" })).toBeNull();
 });
 
@@ -846,41 +861,45 @@ it("keeps panel creation and Close discussion blocked after canceling an uncerta
   await screen.findByText(/outcome is unclear/i);
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.getByRole("button", { name: "Close discussion" })).toHaveProperty("disabled", true);
-  expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", true);
+  expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", true);
   expect(screen.getAllByText("Finish this action before returning to the list.")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Hide discussions" }));
   fireEvent.click(screen.getByRole("button", { name: "Show discussions" }));
   expect(screen.getByText("Refresh and inspect whether the change happened before trying again.", { selector: "p" })).toBeTruthy();
   fireEvent.click(discussionButton({ name: "Refresh" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Close discussion" })).toHaveProperty("disabled", false));
-  expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", false);
+  expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", false);
   expect(f.calls).toHaveLength(1);
 });
 
 it("does not count a canceled full Refresh followed by Load more as inspecting an uncertain write", async () => {
   const data = envelope(); data.next = "next-window";
-  let detailReads = 0; let listReads = 0;
+  let detailReads = 0; let listReads = 0; let hold = false;
   let finishDetail!: (response: Response) => void; let finishList!: (response: Response) => void;
   const pendingDetail = new Promise<Response>((resolve) => { finishDetail = resolve; });
   const pendingList = new Promise<Response>((resolve) => { finishList = resolve; });
   const f = fixture(data, async () => Response.json({ error: { code: "content_unreadable", message: "uncertain" } }, { status: 503 }));
   const view = mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (init?.method !== "POST" && url.includes("/pages/page/discussions") && ++listReads === 2) return pendingList;
+    if (init?.method !== "POST" && url.includes("/pages/page/discussions") && hold && ++listReads === 2) return pendingList;
     if (init?.method !== "POST" && url.includes("/discussions/thread?")) {
       if (url.includes("cursor=next-window")) return Response.json({ ...data, comments: [{ ...data.comments[0], id: "later-comment",
         markdown: "Later Markdown", html: "<p>Later comment</p>" }], next: null });
-      if (++detailReads === 2) return pendingDetail;
+      if (hold && ++detailReads === 2) return pendingDetail;
     }
     return f.fetcher(input, init);
   }) as typeof fetch, "/extra/note", true);
   fireEvent.click(await within(await screen.findByRole("region", { name: "Page discussions" })).findByRole("button", { name: /Original evidence|Saved quote/ }));
   fireEvent.click(await findDiscussionButton({ name: "Edit comment" }));
+  hold = true; detailReads = 1; listReads = 1;
   fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   await screen.findByText(/outcome is unclear/i);
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   fireEvent.click(discussionButton({ name: "Refresh" }));
   await waitFor(() => expect(detailReads).toBe(2));
+  expect(screen.getByRole("button", { name: "Load more" })).toHaveProperty("disabled", true);
+  await act(async () => { await view.client.cancelQueries({ queryKey: discussionDetailQuery("extra", "thread").queryKey }); });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Load more" })).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", { name: "Load more" }));
   await screen.findByText("Later comment");
   await act(async () => { finishList(Response.json({ discussions: [data.discussion], next: null, discussions_available: true, reason: null })); });
@@ -964,26 +983,27 @@ it("retains a saved edit notice when Load more succeeds without refreshing its e
 });
 
 it("keeps a reply writer busy until its detail refresh settles", async () => {
-  let reads = 0; let finish!: (response: Response) => void;
+  let hold = false; let finish!: (response: Response) => void;
   const pending = new Promise<Response>((resolve) => { finish = resolve; });
   const f = fixture(envelope(), async () => Response.json({ id: "thread", comment_id: "reply", commit: null }, { status: 201 }));
   mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (init?.method !== "POST" && String(input).includes("/discussions/thread?") && ++reads > 1) return pending;
+    if (init?.method !== "POST" && String(input).includes("/discussions/thread?") && hold) return pending;
     return f.fetcher(input, init);
   }) as typeof fetch, "/extra/note", true);
   fireEvent.click(await within(await screen.findByRole("region", { name: "Page discussions" })).findByRole("button", { name: /Original evidence|Saved quote/ }));
   fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "New reply" } });
+  hold = true;
   fireEvent.click(screen.getByRole("button", { name: "Post reply" }));
   await screen.findByRole("status", { name: "Reply posted" });
   expect(discussionButton({ name: "Resolve discussion" })).toHaveProperty("disabled", true);
   expect(screen.getByRole("button", { name: "Close discussion" })).toHaveProperty("disabled", true);
-  expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", true);
+  expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", true);
   fireEvent.click(discussionButton({ name: "Resolve discussion" }));
   expect(f.calls).toHaveLength(1);
   await act(async () => { finish(Response.json(envelope())); });
   await waitFor(() => expect(discussionButton({ name: "Resolve discussion" })).toHaveProperty("disabled", false));
-  expect(discussionButton({ name: "New discussion" })).toHaveProperty("disabled", false);
+  expect(discussionButton({ name: "Start a discussion" })).toHaveProperty("disabled", false);
 });
 
 it.each(["resolve", "reopen", "reattach"] as const)("uses an accurate %s refresh-failure verb", async (kind) => {
@@ -1062,7 +1082,7 @@ it("releases uncertain-write inspection after a fresh full detail read even if t
   expect(f.calls).toHaveLength(1);
 });
 
-it("disables Refresh while loading another window and retains a saved-action notice if that load cancels full Refresh", async () => {
+it("disables Refresh while loading another window and retains a saved-action notice after externally canceled full Refresh", async () => {
   const data = envelope(); data.next = "next-window";
   let failDetail = false; let detailReads = 0;
   let finishDetail!: (response: Response) => void; let finishWindow!: (response: Response) => void;
@@ -1083,6 +1103,9 @@ it("disables Refresh while loading another window and retains a saved-action not
   await screen.findByText(/Saved, but the view could not refresh/);
   fireEvent.click(screen.getAllByRole("button", { name: "Refresh" })[0]);
   await waitFor(() => expect(detailReads).toBe(3));
+  expect(screen.getByRole("button", { name: "Load more" })).toHaveProperty("disabled", true);
+  await act(async () => { await view.client.cancelQueries({ queryKey: discussionDetailQuery("extra", "thread").queryKey }); });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Load more" })).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", { name: "Load more" }));
   await waitFor(() => expect(screen.getAllByRole("button", { name: "Refresh" }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true));
   await act(async () => { finishWindow(Response.json({ ...data, comments: [{ ...data.comments[0], id: "later-comment", html: "<p>Later comment</p>" }], next: null })); });
@@ -1204,4 +1227,107 @@ it("keeps the active edit visible when a refreshed envelope becomes unsupported,
   fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   expect(await screen.findByText(/character that cannot be saved/)).toBeTruthy();
   expect(f.calls).toHaveLength(0);
+});
+
+it.each(['root', 'page', 'thread'] as const)('does not cancel a held two-window automatic refresh through %s Load more', async (kind) => {
+  const data = envelope();
+  let hold = false; let started = false; let aborted = false;
+  let generation = 'before';
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  const cursors: Array<string | null> = [];
+  const base = fixture(data).fetcher;
+  mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const target = kind === 'root' ? '/api/v1/discussions?' : kind === 'page' ? '/api/v1/pages/page/discussions?' : '/api/v1/discussions/thread?';
+    if (!url.startsWith(target)) return base(input, init);
+    const cursor = new URL(url, 'http://local').searchParams.get('cursor');
+    cursors.push(cursor);
+    if (hold && cursor === null) {
+      started = true;
+      init?.signal?.addEventListener('abort', () => { aborted = true; });
+      await pending;
+    }
+    const position = cursor === null ? 'first' : cursor;
+    const label = `${position} ${generation}`;
+    const next = cursor === null ? 'second' : cursor === 'second' ? 'third' : null;
+    return Response.json(kind === 'thread'
+      ? { ...data, comments: [{ ...data.comments[0], id: position, markdown: label, html: `<p>${label}</p>` }], next }
+      : { discussions: [{ ...data.discussion, id: position, quote: label }], next, discussions_available: true, reason: null });
+  }) as typeof fetch, kind === 'root' ? '/discussions/extra' : kind === 'page' ? '/extra/note' : '/discussions/extra/thread');
+  await screen.findByText('first before');
+  fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+  await screen.findByText('second before');
+  hold = true; generation = 'after';
+  fireEvent(window, new Event('focus'));
+  await waitFor(() => expect(started).toBe(true));
+  const more = screen.getByRole('button', { name: 'Load more' });
+  try {
+    expect(more).toHaveProperty('disabled', true);
+    fireEvent.click(more);
+    expect(aborted).toBe(false);
+    expect(cursors).toEqual([null, 'second', null]);
+  } finally { hold = false; await act(async () => finish()); }
+  await screen.findByText('first after');
+  await screen.findByText('second after');
+  expect(screen.queryByText('first before')).toBeNull();
+  expect(screen.queryByText('second before')).toBeNull();
+  expect(aborted).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+  await screen.findByText('third after');
+  expect(cursors).toEqual([null, 'second', null, 'second', 'third']);
+});
+
+it('returns Close discussion focus to the retained filter after resolution removes its row', async () => {
+  const data = envelope();
+  const f = fixture(data, async () => {
+    data.discussion!.status = 'resolved';
+    return Response.json({ id: 'thread', comment_id: null, commit: null });
+  });
+  mount(f.fetcher, '/extra/note');
+  const filter = await screen.findByRole('group', { name: 'Discussion status' });
+  fireEvent.click(within(filter).getByRole('button', { name: 'Open' }));
+  fireEvent.click(document.querySelector('[data-pb-discussion-id="thread"]')!);
+  fireEvent.click(await findDiscussionButton({ name: 'Resolve discussion' }));
+  await screen.findByRole('status', { name: 'Discussion resolved' });
+  const close = screen.getByRole('button', { name: 'Close discussion' }); close.focus();
+  fireEvent.click(close);
+  await screen.findByText('No open discussions in the loaded results.');
+  const selected = within(screen.getByRole('group', { name: 'Discussion status' })).getByRole('button', { name: 'Open' });
+  await waitFor(() => expect(document.activeElement).toBe(selected));
+  expect(selected.getAttribute('aria-pressed')).toBe('true');
+});
+
+it.each(['root', 'page'] as const)('clears a visible passage and aborts held old detail on a %s workspace change', async (change) => {
+  const data = envelope();
+  data.discussion!.range = { byte_start: 0, byte_end: 14 };
+  data.discussion!.range_content_hash = source.content_hash;
+  let hold = false; let started = false; let aborted = false;
+  let release!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => { release = resolve; });
+  const base = fixture(data).fetcher;
+  const next = change === 'root' ? { ...page, root: 'docs', url: '/docs/note' } : { ...page, id: 'other', path: 'other.md', url: '/extra/other' };
+  const view = mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes(`/pages/by-path/${next.url.slice(1)}`)) return Response.json(next);
+    if (url.includes(`/pages/${next.id}/html`) && (change === 'page' || url.includes('root=docs'))) return Response.json({ ...source, ...next });
+    if (url.includes('/discussions/thread?') && hold) {
+      started = true; init?.signal?.addEventListener('abort', () => { aborted = true; }); return pending;
+    }
+    return base(input, init);
+  }) as typeof fetch, '/extra/note');
+  fireEvent.click(await within(await screen.findByRole('region', { name: 'Page discussions' })).findByRole('button', { name: /Original evidence|Saved quote/ }));
+  await waitFor(() => expect(document.querySelector('.pb-discussion-passage')?.textContent).toBe('banana 😀'));
+  const old = document.querySelector('.pb-discussion-passage')!;
+  hold = true;
+  fireEvent(window, new Event('focus'));
+  await waitFor(() => expect(started).toBe(true));
+  act(() => view.history.push(next.url));
+  await waitFor(() => expect(aborted).toBe(true));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Close discussion' })).toBeNull());
+  expect(old.classList.contains('pb-discussion-passage')).toBe(false);
+  expect(document.querySelector('.pb-discussion-passage')).toBeNull();
+  await act(async () => release(Response.json(data)));
+  expect(document.querySelector('.pb-discussion-passage')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Close discussion' })).toBeNull();
 });

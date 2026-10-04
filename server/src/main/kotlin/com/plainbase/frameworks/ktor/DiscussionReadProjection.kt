@@ -24,6 +24,7 @@ import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AnchorMatches
 import com.plainbase.domain.service.DetailPage
+import com.plainbase.domain.service.DiscussionAnchorMatch
 import com.plainbase.domain.service.DiscussionPageResolution
 import com.plainbase.domain.service.DiscussionPageResolver
 import com.plainbase.domain.service.DiscussionReadFailed
@@ -156,6 +157,7 @@ class DiscussionReadProjection(
             state = location.state,
             reason = publicReason(summary, location),
             range = matchRange(location.match),
+            rangeContentHash = if (matchRange(location.match) != null) location.pageHash else null,
             candidates = candidate?.let { DiscussionCandidatesDto(it.count, it.candidates.take(20).map(::range), it.truncated) },
             placement = placementDto(location.match),
             quote = if (masked) null else summary.quotePreview,
@@ -172,7 +174,13 @@ class DiscussionReadProjection(
         )
     }
 
-    private data class Location(val state: String, val resolution: String, val path: String?, val match: AnchorMatch? = null)
+    private data class Location(
+        val state: String,
+        val resolution: String,
+        val path: String?,
+        val match: AnchorMatch? = null,
+        val pageHash: String? = null,
+    )
 
     private data class CachedPage(val id: PageId, val bytes: PageBytes)
 
@@ -194,13 +202,13 @@ class DiscussionReadProjection(
             DiscussionPageResolution.Unavailable -> Location("unavailable", "unavailable", summary.pagePath?.value)
             is DiscussionPageResolution.Found -> {
                 val matched = match(root, summary, found.page, cache)
-                val state = matchState(matched)
+                val state = matchState(matched?.match)
                 if (state == "unreadable") {
                     Location(state, "unknown", summary.pagePath?.value)
                 } else {
                     Location(
                         state, if (found.match == DiscussionPageResolution.Match.BY_ID) "by_id" else "by_path",
-                        found.page.path.value, matched,
+                        found.page.path.value, matched?.match, matched?.pageHash,
                     )
                 }
             }
@@ -230,14 +238,14 @@ class DiscussionReadProjection(
         null -> null
     }
 
-    private fun match(root: RootName, summary: DiscussionSummary, page: IndexedPage, cache: PageSupplierCache): AnchorMatch? {
+    private fun match(root: RootName, summary: DiscussionSummary, page: IndexedPage, cache: PageSupplierCache): DiscussionAnchorMatch? {
         val row = DiscussionRow(
             root, summary.id, summary.state, summary.reason, null, summary.pageId, summary.pagePath,
             summary.status, summary.anchorKind, summary.anchorHash, summary.starterKey, summary.created, summary.updated,
             summary.commentCount, summary.starterKind, summary.starterLabel, summary.quotePreview,
         )
         return matches.forPage(root, page.id, page.contentHash, listOf(row)) { cache.get(page) }
-            .firstOrNull { it.id == summary.id }?.match
+            .firstOrNull { it.id == summary.id }
     }
 
     private inner class PageSupplierCache(private val snapshot: PageIndex) {

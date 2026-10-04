@@ -1,5 +1,7 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -26,6 +28,28 @@ import java.net.Socket
  * not a path segment — PB-LINK-1 does not apply), and unknown parameters ignored.
  */
 class SearchGrammarTest : FunSpec({
+
+    test("search rejects an unregistered root instead of returning global matches") {
+        restTest(Fixtures.demoDocs) {
+            val response = client.get("/api/v1/search?q=deploy&root=missing-space")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldContain "invalid_root"
+        }
+    }
+
+    test("root syntax is validated and an unavailable scoped root is not an empty search") {
+        restTest(Fixtures.demoDocs) { harness ->
+            for (suffix in listOf("root=", "root=BAD", "root=docs&root=docs")) {
+                val response = client.get("/api/v1/search?q=deploy&$suffix")
+                response.status shouldBe HttpStatusCode.BadRequest
+                response.bodyAsText() shouldContain "invalid_root"
+            }
+            client.get("/api/v1/search?q=deploy&root=%64ocs").status shouldBe HttpStatusCode.OK
+            harness.availability.markUnavailable(RootName.PRIMARY, UnavailableCause.VANISHED)
+            client.get("/api/v1/search?q=deploy&root=docs").status shouldBe HttpStatusCode.ServiceUnavailable
+            client.get("/api/v1/search?q=deploy").status shouldBe HttpStatusCode.OK
+        }
+    }
 
     suspend fun HttpResponse.jsonBody(): JsonObject {
         status shouldBe HttpStatusCode.OK

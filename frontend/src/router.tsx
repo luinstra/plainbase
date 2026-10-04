@@ -10,7 +10,7 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { Admin } from "./components/Admin";
-import { EditorPage, NewPage } from "./components/EditorPage";
+import { EditorPage } from "./components/EditorPage";
 import { ErrorView } from "./components/ErrorView";
 import { History } from "./components/History";
 import { NotFoundView } from "./components/NotFound";
@@ -22,7 +22,7 @@ import { Shell } from "./components/Shell";
 import { DiscussionsIndex } from "./components/DiscussionsIndex";
 import { DiscussionThread } from "./components/DiscussionThread";
 import { treeQuery } from "./api/queries";
-import { primaryEntry } from "./lib/tree";
+import { entryFor, primaryEntry } from "./lib/tree";
 
 /**
  * Route table (chunk 7 + the chunk-6 amendment):
@@ -61,6 +61,7 @@ const indexRoute = createRoute({
 /** The `/$` query mode: `edit` (the editor), `history` (W7 seam), or absent (the read view). */
 interface DocsSearch {
   mode?: "edit" | "history";
+  property?: "status" | "owner";
 }
 
 const splatRoute = createRoute({
@@ -73,7 +74,7 @@ const splatRoute = createRoute({
   // A bogus `?mode=foo` coerces to undefined → the read view; never an undefined/blank state (D-1).
   validateSearch: (search: Record<string, unknown>): DocsSearch => {
     const mode = search.mode;
-    return mode === "edit" || mode === "history" ? { mode } : {};
+    return mode === "edit" ? { mode, ...(search.property === "status" || search.property === "owner" ? { property: search.property } : {}) } : mode === "history" ? { mode } : {};
   },
 });
 
@@ -103,7 +104,7 @@ function useHasEncodedSlash(): boolean {
  */
 function DocsSplat() {
   const { _splat } = splatRoute.useParams();
-  const { mode } = splatRoute.useSearch();
+  const { mode, property } = splatRoute.useSearch();
   const encodedSlash = useHasEncodedSlash();
   const tree = useQuery(treeQuery);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -112,7 +113,7 @@ function DocsSplat() {
   const normalizedPathname = pathname.endsWith("/") && pathname !== "/" ? pathname.slice(0, -1) : pathname;
   const landing = tree.data?.roots.find((entry) => entry.tree.url === normalizedPathname);
   if (landing?.tree.url) return <FolderLanding url={landing.tree.url} />;
-  if (mode === "edit" && path) return <EditorPage path={path} />;
+  if (mode === "edit" && path) return <EditorPage path={path} property={property} />;
   if (mode === "history" && path) return <History path={path} />;
   return <DocsPage path={path} />;
 }
@@ -124,6 +125,7 @@ function DocsSplat() {
 /** The `/new` search: `?root=` names the document root the create lands in. */
 interface NewSearch {
   root?: string;
+  folder?: string;
 }
 
 const newRoute = createRoute({
@@ -134,13 +136,16 @@ const newRoute = createRoute({
   // A non-string `root` coerces to undefined. An unknown name is not decided here: the server owns the registry
   // and answers 400 `invalid_root`, so the client never guesses.
   validateSearch: (search: Record<string, unknown>): NewSearch =>
-    typeof search.root === "string" && search.root !== "" ? { root: search.root } : {},
+    ({ ...(typeof search.root === "string" && search.root !== "" ? { root: search.root } : {}),
+      ...(typeof search.folder === "string" ? { folder: search.folder } : {}) }),
 });
 
 /** Threads the `?root=` search param into the form (the [DocsSplat] shape) — the root the bytes will land in. */
 function NewSplat() {
   const { root } = newRoute.useSearch();
-  return <NewPage root={root} />;
+  const tree = useQuery(treeQuery);
+  const target = root ? entryFor(tree.data?.roots ?? [], root) : primaryEntry(tree.data?.roots ?? []);
+  return target?.tree.url ? <FolderLanding url={target.tree.url} /> : <div className="min-h-[60vh]" />;
 }
 
 const adminRoute = createRoute({
