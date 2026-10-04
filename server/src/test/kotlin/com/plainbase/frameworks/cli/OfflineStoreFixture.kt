@@ -17,6 +17,7 @@ import com.plainbase.frameworks.runtime.RootStoreFactory
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.BeginImmediateSqliteDriver
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import io.kotest.matchers.shouldBe
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.cio.CIO
@@ -25,8 +26,10 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Files
 import java.sql.Connection
 import java.sql.DriverManager
@@ -264,6 +267,17 @@ internal class TrackingRealClient(
 
     val transportActive: Boolean
         get() = delegate.transportActiveForTest()
+
+    fun assertTransportClosed() {
+        // HttpClient.close completes its job without joining its in-flight children.
+        // Observe completion before fixture rescue; never close the client from this assertion.
+        runBlocking {
+            withTimeoutOrNull(5_000) {
+                while (transportActive) delay(10)
+            }
+        }
+        transportActive shouldBe false
+    }
 
     override fun close() {
         closeCount++

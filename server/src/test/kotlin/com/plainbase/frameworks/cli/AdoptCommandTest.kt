@@ -327,14 +327,14 @@ class AdoptCommandTest : FunSpec({
 
                     actual shouldBeSameInstanceAs partialFailure
                     fixture.clients.single().closeCount shouldBe 1
-                    fixture.clients.single().transportActive shouldBe false
+                    fixture.clients.single().assertTransportClosed()
                     fixture.drivers.single().closeCount shouldBe 1
                     clientLocks shouldBe listOf("HELD")
                     driverLocks shouldBe listOf("HELD")
                     probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
                 }
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
             }
         }
@@ -363,13 +363,13 @@ class AdoptCommandTest : FunSpec({
                 fixture.staticConnections.isNotEmpty() shouldBe true
                 fixture.staticConnections.all { it.isClosed } shouldBe true
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
                 Files.exists(objectConfig.appDatabasePath) shouldBe false
                 Files.exists(objectConfig.dataDir.resolve("mirror")) shouldBe false
             }
             fixture.clients.single().closeCount shouldBe 1
-            fixture.clients.single().transportActive shouldBe false
+            fixture.clients.single().assertTransportClosed()
             fixture.drivers.single().closeCount shouldBe 1
         }
     }
@@ -410,13 +410,13 @@ class AdoptCommandTest : FunSpec({
                 fixture.staticConnections.isNotEmpty() shouldBe true
                 fixture.staticConnections.all { it.isClosed } shouldBe true
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
                 Files.exists(objectConfig.appDatabasePath) shouldBe false
                 Files.exists(objectConfig.dataDir.resolve("mirror")) shouldBe false
             }
             fixture.clients.single().closeCount shouldBe 1
-            fixture.clients.single().transportActive shouldBe false
+            fixture.clients.single().assertTransportClosed()
             fixture.drivers.single().closeCount shouldBe 1
         }
     }
@@ -453,13 +453,13 @@ class AdoptCommandTest : FunSpec({
                 fixture.staticConnections.isNotEmpty() shouldBe true
                 fixture.staticConnections.all { it.isClosed } shouldBe true
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
                 Files.exists(objectConfig.appDatabasePath) shouldBe false
                 Files.exists(objectConfig.dataDir.resolve("mirror")) shouldBe false
             }
             fixture.clients.single().closeCount shouldBe 1
-            fixture.clients.single().transportActive shouldBe false
+            fixture.clients.single().assertTransportClosed()
             fixture.drivers.single().closeCount shouldBe 1
         }
     }
@@ -489,11 +489,11 @@ class AdoptCommandTest : FunSpec({
                 fixture.staticConnections.isNotEmpty() shouldBe true
                 fixture.staticConnections.all { it.isClosed } shouldBe true
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
             }
             fixture.clients.single().closeCount shouldBe 1
-            fixture.clients.single().transportActive shouldBe false
+            fixture.clients.single().assertTransportClosed()
             fixture.drivers.single().closeCount shouldBe 1
         }
     }
@@ -583,14 +583,14 @@ class AdoptCommandTest : FunSpec({
                         actual shouldBeSameInstanceAs decorationFailure
                         actual.suppressed.single() shouldBeSameInstanceAs closeFailure
                         fixture.clients.single().closeCount shouldBe 1
-                        fixture.clients.single().transportActive shouldBe false
+                        fixture.clients.single().assertTransportClosed()
                         fixture.drivers.single().closeCount shouldBe 1
                         clientLocks shouldBe listOf("HELD")
                         driverLocks shouldBe listOf("HELD")
                         probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
                     }
                     fixture.clients.single().closeCount shouldBe 1
-                    fixture.clients.single().transportActive shouldBe false
+                    fixture.clients.single().assertTransportClosed()
                     fixture.drivers.single().closeCount shouldBe 1
                 }
             }
@@ -649,11 +649,11 @@ class AdoptCommandTest : FunSpec({
                     events shouldBe listOf("object-close", "driver-close")
                     probeDataDirLock(config.dataDir, parent, fixture = null) shouldBe "AVAILABLE"
                     fixture.clients.single().closeCount shouldBe 1
-                    fixture.clients.single().transportActive shouldBe false
+                    fixture.clients.single().assertTransportClosed()
                     fixture.drivers.single().closeCount shouldBe 1
                 }
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
             }
         }
@@ -676,11 +676,11 @@ class AdoptCommandTest : FunSpec({
 
                     (requests.get() > 0) shouldBe true
                     fixture.clients.single().closeCount shouldBe 1
-                    fixture.clients.single().transportActive shouldBe false
+                    fixture.clients.single().assertTransportClosed()
                     fixture.drivers.single().closeCount shouldBe 1
                 }
                 fixture.clients.single().closeCount shouldBe 1
-                fixture.clients.single().transportActive shouldBe false
+                fixture.clients.single().assertTransportClosed()
                 fixture.drivers.single().closeCount shouldBe 1
             }
         }
