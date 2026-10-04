@@ -140,11 +140,11 @@ export function RootSelector({
         aria-controls={LISTBOX_ID}
         onClick={() => (open ? closeMenu() : openMenu())}
         onKeyDown={handleTriggerKeyDown}
-        className="flex w-full items-center justify-between gap-3 rounded-md border border-edge bg-surface px-3 py-2 text-left font-mono text-sm text-ink hover:bg-hovered"
+        className="flex w-full items-center gap-3 rounded-md border border-edge bg-surface px-3 py-2 text-left text-sm text-ink hover:bg-hovered"
         data-pb-root-selector
         data-pb-selected-root={selected.root}
       >
-        <span id={VALUE_ID}>{labelOf(selected)}</span>
+        <span id={VALUE_ID} className="min-w-0 flex-1 truncate font-semibold" title={labelOf(selected)}>{labelOf(selected)}</span>
         <span aria-hidden="true" className="pb-root-selector-caret" />
       </button>
       {open && (
@@ -177,12 +177,13 @@ export function RootSelector({
                   }}
                   className={
                     active
-                      ? "w-full rounded bg-active px-3 py-2 text-left font-mono text-sm text-ink"
-                      : "w-full rounded px-3 py-2 text-left font-mono text-sm text-muted hover:bg-hovered hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+                      ? "w-full truncate rounded bg-active px-3 py-2 text-left text-sm font-semibold text-ink"
+                      : "w-full truncate rounded px-3 py-2 text-left text-sm text-muted hover:bg-hovered hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
                   }
                   data-pb-root-option={entry.root}
                   data-pb-root-label={entry.root}
                   data-pb-root-active={active ? "" : undefined}
+                  title={labelOf(entry)}
                 >
                   {labelOf(entry)}
                 </button>

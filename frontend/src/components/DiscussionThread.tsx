@@ -5,11 +5,12 @@ import { ApiError } from "../api/client";
 import { addDiscussionComment, discussionDetailQuery, editDiscussionComment, purgeDiscussionComment, reattachDiscussion,
   refreshDiscussionViews, reopenDiscussion, resolveDiscussion, retractDiscussionComment } from "../api/discussions";
 import { sessionQuery } from "../api/queries";
-import type { DiscussionComment, DiscussionDetailResponse, DiscussionQuoteRequestAnchor } from "../api/types";
+import type { DiscussionDetail, DiscussionComment, DiscussionDetailResponse, DiscussionQuoteRequestAnchor } from "../api/types";
+import { useDiscussionRefresh } from "../lib/useDiscussionRefresh";
 import { formatTime } from "../lib/datetime";
 import { focusDiscussionElement } from "../lib/discussionFocus";
 import { DiscussionComposer, commentValidation, discussionActionError, discussionWriteError, discussionWriteRecovery } from "./DiscussionComposer";
-import { DiscussionAnchor, DiscussionAvailability, DiscussionReadError, DiscussionState, DiscussionSummary, formatDiscussionTime, ReadWindow } from "./DiscussionRead";
+import { DiscussionAnchor, DiscussionAvatar, DiscussionStatus, DiscussionAvailability, DiscussionReadError, DiscussionState, DiscussionSummary, formatDiscussionTime, ReadWindow } from "./DiscussionRead";
 import { closeDiscussionActions, DiscussionActionHint, DiscussionActions } from "./DiscussionActions";
 import { DiscussionReattach, type DiscussionSourceConnection } from "./DiscussionReattach";
 
@@ -30,7 +31,8 @@ function OriginalPassage({ quote }: { quote: string }) {
   </>;
 }
 
-export function DiscussionThread({ root, id, inPanel = false, source, creationPending = false, onActionChange }: {
+export function DiscussionThread({ root, id, inPanel = false, source, creationPending = false, onActionChange, active = true, onPassageChange }: {
+  active?: boolean; onPassageChange?: (detail: DiscussionDetail | null) => void;
   root: string; id: string; inPanel?: boolean; source?: DiscussionSourceConnection;
   creationPending?: boolean;
   onActionChange?: (active: boolean, busy: boolean) => void;
@@ -64,12 +66,20 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
     return () => { alive.current = false; activityCallback.current?.(false, false); };
   }, []);
   useEffect(() => { if (action?.kind === "retract" || action?.kind === "purge") focusDiscussionElement(cancelButton.current); }, [action?.kind]);
-  const query = useInfiniteQuery(discussionDetailQuery(root, id));
+  const query = useInfiniteQuery({ ...discussionDetailQuery(root, id), enabled: active });
+  useDiscussionRefresh(query, active && query.data?.pages[0]?.discussions_available !== false,
+    () => posting.current || creationPending || inspection.current);
   const replyMutation = useMutation({ mutationFn: (submitted: string) => addDiscussionComment(root, id, submitted), retry: false });
   useEffect(() => { onActionChange?.(!!action || composing || inspectRequired, writing || replyMutation.isPending); },
     [action, composing, inspectRequired, writing, replyMutation.isPending, onActionChange]);
   const first = query.data?.pages[0];
   const detail = first?.discussion;
+  const passageCallback = useRef(onPassageChange);
+  passageCallback.current = onPassageChange;
+  useEffect(() => {
+    passageCallback.current?.(active && query.isSuccess && !query.isRefetchError && !query.isFetching ? detail ?? null : null);
+    return () => passageCallback.current?.(null);
+  }, [active, root, id, detail, query.isSuccess, query.isRefetchError, query.isFetching]);
   const title = detail?.page.path ? `Discussion on ${detail.page.path}` : "Discussion";
   const seen = new Set<string>();
   const comments = query.data?.pages.flatMap((page) => page.comments.filter((comment) => {
@@ -162,7 +172,7 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
     if (kind === "reattach" && (action?.kind !== "reattach" || !anchor || detail?.status !== "open" || detail.page.id !== action.pageId)) return;
     const submitted = { root, id, action, anchor };
     const commentId = submitted.action && "comment" in submitted.action ? submitted.action.comment.id : null;
-    posting.current = true; setWriting(true); setStatus(null); setError(null);
+    posting.current = true; activityCallback.current?.(true, true); setWriting(true); setStatus(null); setError(null);
     const success = kind === "edit" ? { text: "Comment saved", verb: "Saved" } :
       kind === "retract" ? { text: "Comment retracted", verb: "Retracted" } :
         kind === "purge" ? { text: "Comment removed", verb: "Removed" } :
@@ -204,7 +214,7 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
     const validation = commentValidation(body);
     if (validation) { setError(validation); setErrorNeedsRefresh(false); return; }
     const submitted = { root, id, body };
-    posting.current = true; setWriting(true); setStatus("Posting…"); setError(null);
+    posting.current = true; activityCallback.current?.(true, true); setWriting(true); setStatus("Posting…"); setError(null);
     try {
       const result = await replyMutation.mutateAsync(submitted.body);
       if (alive.current) {
@@ -242,12 +252,10 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
     {inPanel ?
       <h3 ref={heading} className="pb-discussion-heading" tabIndex={-1} aria-label={title}>Conversation</h3> :
       <h1 ref={heading} className="text-3xl font-bold break-words" tabIndex={-1}>{title}</h1>}
-    {detail && <div className="pb-discussion-thread-status"><span>{detail.status === "open" ? "Open" : detail.status === "resolved" ? "Resolved" : "Status unavailable"}</span>
+    {detail && <div className="pb-discussion-thread-status"><DiscussionStatus status={detail.status} />
       <DiscussionState item={{ ...detail, status: null }} /></div>}
     </div>
     {detail && <DiscussionActions label="Discussion actions" triggerRef={threadTrigger}>
-      {!recovery && <button type="button" className="pb-discussion-action pb-discussion-quiet" disabled={query.isFetching || busy}
-        onClick={(event) => { const target = closeDiscussionActions(event.currentTarget); focusDiscussionElement(target); void refresh(); }}>Refresh</button>}
       {detail.status && <button type="button" className="pb-discussion-action pb-discussion-quiet" disabled={competing || !!actionDisabled || !!localDisabled}
         onClick={(event) => { focusDiscussionElement(closeDiscussionActions(event.currentTarget));
           void submitAction(detail.status === "resolved" ? "reopen" : "resolve"); }}>
@@ -279,7 +287,7 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
         {comments.length === 0 && <p>{query.hasNextPage ? "No comments in this window. Load more to continue." : "No comments yet."}</p>}
         {comments.map((comment) => <article key={comment.id} className="pb-discussion-comment">
           <div className="pb-discussion-comment-header">
-            <p className="pb-discussion-meta"><strong className="pb-discussion-author">{comment.author.label}{comment.author.kind === "agent" ? " · Agent" : ""}</strong>
+            <p className="pb-discussion-meta"><strong className="pb-discussion-author"><DiscussionAvatar label={comment.author.label} />{comment.author.label}{comment.author.kind === "agent" ? " · Agent" : ""}</strong>
               <time dateTime={comment.created} title={comment.created}>{formatDiscussionTime(comment.created)}</time>
               {comment.edited_at && <span>Edited <time dateTime={comment.edited_at} title={comment.edited_at}>{formatDiscussionTime(comment.edited_at)}</time></span>}
               {comment.retracted && <span>Retracted</span>}</p>
@@ -300,7 +308,7 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
             <div className="pb-discussion-body" dangerouslySetInnerHTML={{ __html: comment.html }} />}
         </article>)}
         {query.isFetchNextPageError && <p role="alert">Could not load more comments. Earlier comments remain available.</p>}
-        {query.hasNextPage && <button type="button" className="pb-discussion-action" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
+        {query.hasNextPage && <button type="button" className="pb-discussion-action" disabled={query.isFetching} onClick={() => void query.fetchNextPage({ cancelRefetch: false })}>
           {query.isFetchingNextPage ? "Loading…" : "Load more"}
         </button>}
       </section>}

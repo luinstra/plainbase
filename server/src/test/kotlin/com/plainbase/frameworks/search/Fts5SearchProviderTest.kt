@@ -18,6 +18,68 @@ import io.kotest.matchers.shouldNotBe
  */
 class Fts5SearchProviderTest : FunSpec({
 
+    test("title matches show indexed body text and empty documents fall back within their own page") {
+        withProvider { provider, _ ->
+            provider.rebuild(
+                sequenceOf(
+                    pageDocuments(1, title = "Needle", sections = listOf("z-first" to "First actual body.", "a-later" to "Later body.")),
+                    pageDocuments(1, title = "Needle", root = RootName.require("extra"), sections = listOf("intro" to "Root B body.")),
+                    pageDocuments(2, title = "Needle", preamble = "Page preamble."),
+                    pageDocuments(3, title = "Needle"),
+                ),
+            )
+            for (term in listOf("needle", "eed")) {
+                val results = provider.search(query(term))
+                results.total shouldBe 7L
+                val page = results.hits.single { it.pageId == pageId(1) && it.root == RootName.PRIMARY && it.headingId == null }
+                page.snippet shouldBe "First actual body."
+                page.highlights.shouldBeEmpty()
+                results.hits.single { it.pageId == pageId(2) }.snippet shouldBe "Page preamble."
+                results.hits.single { it.pageId == pageId(3) }.snippet shouldBe ""
+                results.hits.filter { it.root == RootName.require("extra") }.forEach { it.snippet shouldBe "Root B body." }
+                results.hits.single { it.headingId == "a-later" }.snippet shouldBe "Later body."
+            }
+        }
+    }
+
+    test("fallback prefixes are bounded by Unicode code points and replace with the indexed generation") {
+        withProvider { provider, _ ->
+            val body = "😀".repeat(245)
+            val original = pageDocuments(1, title = "Needle", sections = listOf("empty" to "", "body" to body))
+            provider.index(listOf(original))
+            fun pageHit() = provider.search(query("needle")).hits.single { it.headingId == null }
+            pageHit().snippet shouldBe "😀".repeat(240) + "…"
+            pageHit().highlights.shouldBeEmpty()
+            provider.index(listOf(pageDocuments(1, title = "Needle", sections = listOf("body" to "Replacement body."))))
+            pageHit().snippet shouldBe "Replacement body."
+            provider.rebuild(sequenceOf(pageDocuments(1, title = "Needle", sections = listOf("body" to "New generation body."))))
+            pageHit().snippet shouldBe "New generation body."
+        }
+    }
+
+    test("root filtering applies to count and windows in primary and trigram queries") {
+        withProvider { provider, _ ->
+            val extra = RootName.require("extra")
+            provider.rebuild(
+                (1..24).asSequence().map { pageDocuments(it, title = "Needle", preamble = "coexistence") } +
+                    sequenceOf(
+                        pageDocuments(1, title = "Needle", preamble = "coexistence", root = extra),
+                        pageDocuments(2, title = "Needle", preamble = "coexistence", root = extra),
+                        pageDocuments(3, title = "Needle", preamble = "coexistence", root = extra, status = "archived"),
+                    ),
+            )
+            for (term in listOf("needle", "exist")) {
+                val scoped = query(term, limit = 1, offset = 1, statusFilter = setOf("active")).copy(rootFilter = extra)
+                val result = provider.search(scoped)
+                result.total shouldBe 2L
+                result.hits.map { it.root to it.pageId } shouldBe listOf(extra to pageId(2))
+                provider.search(scoped.copy(offset = 20)).total shouldBe 2L
+                provider.search(scoped.copy(offset = 20)).hits.shouldBeEmpty()
+                provider.search(query(term)).total shouldBe 27L
+            }
+        }
+    }
+
     test("every document field is searchable: title, heading, body, tags, aliases, owner") {
         withProvider { provider, _ ->
             provider.rebuild(

@@ -6,24 +6,9 @@ import {
   setFrontmatterValue,
   splitFrontmatter,
 } from "../lib/frontmatter";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-/**
- * The `?mode=edit` metadata form (C2/D-4): a structured "Page info" editor in the editor rail that
- * surgically patches the FRONTMATTER REGION of the editor buffer, so the body CodeMirror shows prose only.
- *
- * It is a CONTROLLED surface over `buffer` — the single source of truth (D-1). Every field reads its value
- * FRESH from `splitFrontmatter(buffer)` each render (no internal field state that could drift) for DISPLAY,
- * but every WRITE composes over the LATEST buffer via a FUNCTIONAL updater (`onChange((prev) => …)`), never
- * the render-scope `buffer` prop — so two field edits in one React batch can't clobber each other (the
- * stale-closure data-loss class). The next buffer is computed by the surgical write primitives
- * (`setFrontmatterValue`/`removeFrontmatterKey`/`setFrontmatterList`, the client analogue of the server
- * `FrontmatterPatcher`). A form edit is therefore an ordinary `setBuffer` → it marks the editor dirty
- * exactly as a body edit does, and rides the unchanged save/CAS/conflict path. No policy field, no auth (D-7).
- *
- * The read-mode `DocRail` (`PageView.tsx`) stays a SEPARATE read-only surface with distinct `data-pb-*`
- * hooks; this is the edit-mode twin, reusing the same `.pb-rail*`/`.pb-meta*`/`.pb-chip`/`.pb-tag` structure.
- */
+/** Properties patch the authoritative full buffer surgically, preserving unedited metadata and body bytes. */
 
 /** The five known statuses (mirrors `app.css` `.pb-chip[data-pb-chip-status]`); a value outside it still renders. */
 const KNOWN_STATUSES = ["active", "draft", "review", "archived", "deprecated"] as const;
@@ -45,7 +30,25 @@ function isIsoDate(value: string): boolean {
 /** A functional buffer updater — every form write composes over the LATEST buffer, never a stale prop. */
 type BufferUpdater = (update: (prev: string) => string) => void;
 
-export function MetaForm({ buffer, onChange }: { buffer: string; onChange: BufferUpdater }) {
+export function MetaForm({ buffer, onChange, focusProperty, onDraftChange }: { buffer: string; onChange: BufferUpdater; focusProperty?: "status" | "owner"; onDraftChange?: (dirty: boolean) => void }) {
+  const form = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focusProperty) {
+      const input = form.current?.querySelector<HTMLElement>(`[data-pb-field-${focusProperty}]`);
+      const details = input?.closest("details");
+      if (details) details.open = true;
+      input?.focus();
+    }
+  }, [focusProperty]);
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      for (const details of form.current?.querySelectorAll("details[open]") ?? []) {
+        if (!details.contains(event.target as Node)) (details as HTMLDetailsElement).open = false;
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, []);
   const { frontmatter } = splitFrontmatter(buffer);
   const fm = frontmatter ?? "";
   const status = frontmatterValue(fm, "status");
@@ -68,10 +71,8 @@ export function MetaForm({ buffer, onChange }: { buffer: string; onChange: Buffe
   const knownStatus = status && KNOWN_STATUSES.includes(status as (typeof KNOWN_STATUSES)[number]) ? status : undefined;
 
   return (
-    <div className="pb-rail-card" data-pb-meta-form>
-      <div className="pb-rail-head">Page info</div>
-      <div className="pb-meta">
-        <FieldRow label="Status">
+    <div ref={form} className="pb-editor-properties" data-pb-meta-form role="group" aria-label="Page properties">
+        <FieldRow label="Status" value={status ?? "Add status"}>
           {/* A styled pill wraps the native <select>: the dot + chip framing are CSS, the value-write
               behavior (incl. the unknown-value-stays-selectable handling) is untouched. */}
           <span className="pb-chip pb-status-pill" data-pb-chip-status={knownStatus}>
@@ -79,6 +80,7 @@ export function MetaForm({ buffer, onChange }: { buffer: string; onChange: Buffe
             <select
               className="pb-status-select"
               data-pb-field-status
+              aria-label="Status"
               value={status ?? ""}
               onChange={(event) => setScalar("status", event.target.value)}
             >
@@ -92,11 +94,11 @@ export function MetaForm({ buffer, onChange }: { buffer: string; onChange: Buffe
           </span>
         </FieldRow>
 
-        <FieldRow label="Tags">
-          <TagEditor tags={tags} onChange={(next) => onChange((prev) => setFrontmatterList(prev, "tags", next))} />
+        <FieldRow label="Tags" value={tags.length ? tags.join(", ") : "Add tags"}>
+          <TagEditor tags={tags} onDraftChange={onDraftChange} onChange={(next) => onChange((prev) => setFrontmatterList(prev, "tags", next))} />
         </FieldRow>
 
-        <FieldRow label="Owner">
+        <FieldRow label="Owner" value={owner ?? "Add owner"}>
           {/* A circular initials avatar (1-2 uppercased letters; blank placeholder when empty) beside the input. */}
           <span className="pb-avatar" data-pb-owner-avatar aria-hidden="true">
             {ownerInitials(owner)}
@@ -105,13 +107,14 @@ export function MetaForm({ buffer, onChange }: { buffer: string; onChange: Buffe
             type="text"
             className="pb-meta-input flex-1 rounded-md border border-edge bg-surface px-2 py-1 text-ink"
             data-pb-field-owner
+            aria-label="Owner"
             value={owner ?? ""}
             onChange={(event) => setScalar("owner", event.target.value)}
             placeholder="Owner"
           />
         </FieldRow>
 
-        <FieldRow label="Updated">
+        <FieldRow label="Updated" value={updated ?? "Add date"}>
           <input
             // A non-ISO `updated` (a hand-authored `2026 Q1`, a prose date) would render BLANK under
             // `type="date"` and hide the user's real value → a save could silently drop it. Fall back to a
@@ -119,22 +122,23 @@ export function MetaForm({ buffer, onChange }: { buffer: string; onChange: Buffe
             type={updated && !isIsoDate(updated) ? "text" : "date"}
             className="pb-meta-input rounded-md border border-edge bg-surface px-2 py-1 text-ink"
             data-pb-field-updated
+            aria-label="Updated"
             value={updated ?? ""}
             onChange={(event) => setScalar("updated", event.target.value)}
           />
         </FieldRow>
 
-        <FieldRow label="Review by">
+        <FieldRow label="Review by" value={review ?? "Add date"}>
           <input
             // Reads frontmatter `review`; the same non-ISO `type=text` fallback as Updated (C2).
             type={review && !isIsoDate(review) ? "text" : "date"}
             className="pb-meta-input rounded-md border border-edge bg-surface px-2 py-1 text-ink"
             data-pb-field-review
+            aria-label="Review by"
             value={review ?? ""}
             onChange={(event) => setScalar("review", event.target.value)}
           />
         </FieldRow>
-      </div>
     </div>
   );
 }
@@ -149,10 +153,11 @@ function ownerInitials(owner: string | null): string {
 }
 
 /** A chip editor over a string list: existing tags as removable `.pb-tag` chips + an input to add one. */
-function TagEditor({ tags, onChange }: { tags: string[]; onChange: (next: string[]) => void }) {
+function TagEditor({ tags, onChange, onDraftChange }: { tags: string[]; onChange: (next: string[]) => void; onDraftChange?: (dirty: boolean) => void }) {
   const [draft, setDraft] = useState("");
 
   function add() {
+    onDraftChange?.(false);
     const value = draft.trim();
     if (value === "" || tags.includes(value)) {
       setDraft("");
@@ -187,7 +192,7 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (next: string
         className="pb-tag-add"
         data-pb-tag-add
         value={draft}
-        onChange={(event) => setDraft(event.target.value)}
+        onChange={(event) => { setDraft(event.target.value); onDraftChange?.(!!event.target.value.trim()); }}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
@@ -202,12 +207,19 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (next: string
   );
 }
 
-/** A metadata row mirroring `DocRail`'s `MetaRow` structure (`.pb-meta-row`/`.pb-meta-key`/`.pb-meta-val`). */
-function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
+/** A property stays in the compact strip while its native input opens below it. */
+function FieldRow({ label, value, children }: { label: string; value: string; children: React.ReactNode }) {
   return (
-    <div className="pb-meta-row">
-      <span className="pb-meta-key">{label}</span>
-      <span className="pb-meta-val">{children}</span>
-    </div>
+    <details className="pb-editor-property" name="pb-editor-properties" onBlur={(event) => {
+      if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+    }} onKeyDown={(event) => {
+      if (event.key === "Escape") {
+        event.preventDefault(); event.stopPropagation(); event.currentTarget.open = false;
+        event.currentTarget.querySelector("summary")?.focus();
+      }
+    }}>
+      <summary title={`${label}: ${value}`}><span>{label}</span><span className={label === "Owner" ? "" : "font-mono"}>{value}</span></summary>
+      <div className="pb-editor-property-panel" role="group" aria-label={label}>{children}</div>
+    </details>
   );
 }

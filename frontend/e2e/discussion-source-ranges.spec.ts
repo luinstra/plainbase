@@ -52,12 +52,12 @@ test("maps rendered selections to source block byte ranges", async ({ page }) =>
   await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
 
   await gotoExpectStatus(page, PAGE);
-  const prose = page.locator(".pb-prose");
+  const prose = page.locator("[data-pb-selection-surface]");
   await expect(prose.locator("[data-pb-src]").first()).toBeVisible();
   await expect(prose.locator(".pb-mermaid[data-pb-src]")).toBeVisible();
   const measurements = await page.evaluate((source) => {
-    const article = document.querySelector<HTMLElement>(".pb-prose");
-    if (!article) throw new Error("rendered page is missing .pb-prose");
+    const article = document.querySelector<HTMLElement>("[data-pb-selection-surface]");
+    if (!article) throw new Error("rendered page is missing source selection surface");
 
     const bytes = new TextEncoder().encode(source);
     const decoder = new TextDecoder();
@@ -308,7 +308,7 @@ test("maps rendered selections to source block byte ranges", async ({ page }) =>
   });
   expect(tripleClick.text).toContain("banana");
   expect(tripleClick.end).toEqual({ type: 1, offset: 0, name: "P" });
-  await page.getByRole("button", { name: "New discussion" }).click();
+  await page.getByRole("button", { name: "Start a discussion" }).click();
   await expect(page.getByRole("button", { name: "Confirm passage" })).toBeVisible();
 });
 
@@ -317,11 +317,11 @@ test("keeps a real hash in a heading selection while excluding its link", async 
   const content = page.locator("[data-pb-codemirror] .cm-content");
   await content.click();
   await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.insertText("# C# setup\n\nThe heading is source text.\n");
+  await page.keyboard.insertText("# Source selection\n\n## C# setup\n\nThe heading is source text.\n");
   await page.locator("[data-pb-save]").click();
   await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
   await gotoExpectStatus(page, PAGE);
-  const heading = page.locator("[data-pb-page-article] h1").filter({ hasText: "C# setup" });
+  const heading = page.locator("[data-pb-page-article] h2").filter({ hasText: "C# setup" });
   const anchor = heading.locator(".pb-heading-anchor");
   await expect(anchor).toHaveCount(1);
   const start = await heading.evaluate((node) => {
@@ -344,13 +344,13 @@ test("keeps a real hash in a heading selection while excluding its link", async 
   await page.mouse.up();
   const selected = await page.evaluate(() => {
     const selection = window.getSelection();
-    const anchor = document.querySelector("[data-pb-page-article] h1 .pb-heading-anchor");
+    const anchor = document.querySelector("[data-pb-page-article] h2 .pb-heading-anchor");
     return { text: selection?.toString(), crossesLink: !!anchor && !!selection?.rangeCount && selection.getRangeAt(0).intersectsNode(anchor) };
   });
   expect(selected.text).toContain("C# setup");
   expect(selected.text).toContain("The");
   expect(selected.crossesLink).toBe(true);
-  await page.getByRole("button", { name: "New discussion" }).click();
+  await page.getByRole("button", { name: "Start a discussion" }).click();
   await expect(page.getByRole("button", { name: "Confirm passage" })).toBeVisible();
   await expect(page.locator(".pb-discussion-quote")).toContainText("C# setup");
 });

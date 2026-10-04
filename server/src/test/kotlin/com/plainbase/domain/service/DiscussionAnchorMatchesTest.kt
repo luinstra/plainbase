@@ -53,6 +53,28 @@ import kotlin.time.Clock
 import kotlin.time.Instant
 
 class DiscussionAnchorMatchesTest : FunSpec({
+    test("a computed match carries actual bytes hash rather than the stale index hash") {
+        withAnchorWorld { rows, store, fullReads, sync ->
+            val id = discussionId(1)
+            val original = "A quote in the page".encodeToByteArray()
+            val indexedHash = CitationFactory().contentHash(original)
+            writeMarker(store, quoteMarker(id, indexedHash, original, "quote"))
+            SyncedDiscussionIndex(rows, store, fullReads, sync).publish(ROOT, id, markerChanged = false) { store.read(ROOT, id) }
+            val current = PageBytes.of("Added before. A quote in the page".encodeToByteArray(), emptyList())
+            val matches = AnchorMatches(rows, store, fullReads, sync)
+            val result = matches.forPage(ROOT, PAGE, indexedHash, listOf(requireNotNull(rows.row(ROOT, id)))) { current }
+
+            result.single().match.shouldBeInstanceOf<AnchorMatch.Moved>()
+            result.single().pageHash shouldBe current.hash
+            result.single().pageHash shouldNotBe indexedHash
+            val cached = matches.forPage(ROOT, PAGE, current.hash, listOf(requireNotNull(rows.row(ROOT, id)))) {
+                error("cached current result must not reread the page")
+            }
+            cached.single().pageHash shouldBe current.hash
+            cached.single().match shouldBe result.single().match
+        }
+    }
+
     test("a cache hit reuses its match without reading page bytes") {
         withAnchorWorld { rows, store, fullReads, sync ->
             val id = discussionId(1)
@@ -74,6 +96,7 @@ class DiscussionAnchorMatchesTest : FunSpec({
             }
 
             result.single().match shouldBe expected
+            result.single().pageHash shouldBe hash
             pageReads shouldBe 0
             matches.hits shouldBe 1
             matches.computations shouldBe 0

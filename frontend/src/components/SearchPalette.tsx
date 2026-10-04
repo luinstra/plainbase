@@ -2,32 +2,20 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../api/client";
-import { searchQuery, SEARCH_MAX_QUERY, treeQuery } from "../api/queries";
-import type { SearchHit } from "../api/types";
+import { searchQuery, SEARCH_LIMIT, SEARCH_MAX_QUERY, treeQuery } from "../api/queries";
+import { searchRows, searchSpaceLabel, type SearchRow } from "../lib/searchResults";
 import { fuzzyRank, type FuzzyCandidate } from "../lib/fuzzy";
 import { permalinkOf } from "../lib/permalink";
 import { diagrams, pageHref, pages, type QuickSwitchEntry } from "../lib/tree";
 import { useDebounced } from "../lib/useDebounced";
 import { LISTBOX_ID, optionId, SearchList } from "./SearchList";
 
-/** Stage-1 quick-switcher is capped so the bridge is always within a few ArrowDowns (UI-only). */
+/** Keep instant matches compact enough that content results remain nearby. */
 export const QUICK_SWITCH_MAX = 8;
 const DEBOUNCE_MS = 150;
 
-type Stage = "jump" | "search";
-
-/**
- * The two-stage Cmd/Ctrl+K palette (ADR-0005). Stage 1 is the zero-network quick-switcher
- * over the cached tree; the bridge row crosses to Stage 2, full-text only. Mounted once in
- * `Shell`. Selection is a plain per-stage integer; Esc is stage-aware; outside-click always
- * closes. Combobox a11y (real option ids → `aria-activedescendant`, focus-trap, scroll-lock,
- * focus-return) is hand-rolled — no new dependency.
- */
-export function SearchPalette() {
+export function SearchPalette({ disabled = false }: { disabled?: boolean }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [stage, setStage] = useState<Stage>("jump");
-  const [rawQuery, setRawQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -36,20 +24,20 @@ export function SearchPalette() {
   const close = useCallback(() => setIsOpen(false), []);
 
   const reopen = useCallback(() => {
+    if (disabled) return;
     openerRef.current = (document.activeElement as HTMLElement | null) ?? null;
-    setStage("jump");
-    setRawQuery("");
-    setSelectedIndex(0);
     setIsOpen(true);
-  }, []);
+  }, [disabled]);
+
+  useEffect(() => { if (disabled) setIsOpen(false); }, [disabled]);
 
   // Cmd/Ctrl+K toggles; a `pb:search-open` custom event (header trigger) opens. The
-  // shortcut always fully closes regardless of stage.
+  // shortcut always fully closes from anywhere in the dialog.
   const isOpenRef = useRef(isOpen);
   isOpenRef.current = isOpen;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      if (!event.defaultPrevented && !event.shiftKey && !event.altKey && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         if (isOpenRef.current) close();
         else reopen();
@@ -80,240 +68,101 @@ export function SearchPalette() {
   }, [isOpen]);
 
   if (!isOpen) return null;
-  return <PaletteBody {...{ stage, setStage, rawQuery, setRawQuery, selectedIndex, setSelectedIndex, inputRef, overlayRef, close, router }} />;
+  return <PaletteBody {...{ inputRef, overlayRef, close, router }} />;
 }
 
-function PaletteBody({
-  stage,
-  setStage,
-  rawQuery,
-  setRawQuery,
-  selectedIndex,
-  setSelectedIndex,
-  inputRef,
-  overlayRef,
-  close,
-  router,
-}: {
-  stage: Stage;
-  setStage: (s: Stage) => void;
-  rawQuery: string;
-  setRawQuery: (q: string) => void;
-  selectedIndex: number;
-  setSelectedIndex: (updater: number | ((prev: number) => number)) => void;
+function PaletteBody({ inputRef, overlayRef, close, router }: {
   inputRef: React.RefObject<HTMLInputElement | null>;
   overlayRef: React.RefObject<HTMLDivElement | null>;
   close: () => void;
   router: ReturnType<typeof useRouter>;
 }) {
-  // Passive cache reader — the app shell owns fetching the tree. `refetchOnMount: false` keeps
-  // opening the palette a true zero-network action even after `treeQuery`'s staleTime elapses; on
-  // a cold cache it simply shows no Stage-1 matches (the bridge row) until the shell's fetch fills.
-  const tree = useQuery({ ...treeQuery, refetchOnMount: false });
-
-  // Both stages badge their rows with the root only when there IS more than one (D-C5-11's rule): a
-  // single-root install must not sprout a "docs" badge on every row.
-  const showRoots = (tree.data?.roots.length ?? 0) > 1;
-
-  // ---- Stage 1: quick-switcher (synchronous, zero network) ----
-  const trimmed = rawQuery.trim();
-  const candidates = useMemo<FuzzyCandidate<QuickSwitchEntry>[]>(() => {
-    if (!tree.data) return [];
-    // The candidate carries its root: `page.path` is root-relative, so the scorer's `hint` (and the row
-    // it renders) would otherwise be identical for the same file in two roots.
-    return [...pages(tree.data.roots), ...diagrams(tree.data.roots)].map((entry) => {
+  const [rawQuery, setRawQuery] = useState("");
+  const [scope, setScope] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // The shell owns tree acquisition; this observer never starts or refreshes a request.
+  const tree = useQuery({ ...treeQuery, enabled: false });
+  const roots = tree.data?.roots ?? [];
+  const scopeUnavailable = scope !== null && !roots.some((root) => root.root === scope && root.available);
+  const trimmed = rawQuery.trim().slice(0, SEARCH_MAX_QUERY);
+  const debounced = useDebounced(trimmed, DEBOUNCE_MS);
+  const queryReady = trimmed.length > 0 && trimmed === debounced && !scopeUnavailable;
+  const fullText = useQuery(searchQuery(queryReady ? debounced : "", SEARCH_LIMIT, 0, scope));
+  const candidates = useMemo(() => {
+    const available = (tree.data?.roots ?? []).filter((root) => root.available && (scope === null || root.root === scope));
+    return [...pages(available), ...diagrams(available)].map((entry): FuzzyCandidate<QuickSwitchEntry> => {
       const node = "page" in entry ? entry.page : entry.diagram;
-      return { node: entry, label: node.title, hint: node.path };
+      return { label: node.title, hint: node.path, node: entry };
     });
-  }, [tree.data]);
+  }, [tree.data, scope]);
+  const quick = (trimmed ? fuzzyRank(trimmed, candidates).map((item) => item.candidate) : candidates).slice(0, QUICK_SWITCH_MAX).map((item) => item.node);
+  const hits = queryReady && !fullText.isError ? (fullText.data?.hits ?? []).filter((hit) =>
+    (scope === null || hit.root === scope) && !roots.some((root) => root.root === hit.root && !root.available)) : [];
+  const rows = searchRows(quick, hits, roots);
+  const active = rows.find((row) => row.key === selectedKey);
+  const activeId = active ? optionId(active.key) : undefined;
+  const rowOrder = JSON.stringify(rows.map((row) => row.key));
+  useEffect(() => {
+    if (selectedKey !== null && !rows.some((row) => row.key === selectedKey)) setSelectedKey(null);
+  }, [rows, selectedKey]);
+  useLayoutEffect(() => { if (activeId) document.getElementById(activeId)?.scrollIntoView({ block: "nearest" }); }, [activeId, rowOrder]);
 
-  const jumpPages = useMemo<QuickSwitchEntry[]>(() => {
-    if (!trimmed) return candidates.map((c) => c.node).slice(0, QUICK_SWITCH_MAX);
-    return fuzzyRank(trimmed, candidates)
-      .slice(0, QUICK_SWITCH_MAX)
-      .map((m) => m.candidate.node);
-  }, [trimmed, candidates]);
-
-  const bridgeIndex = jumpPages.length; // the bridge is the last Stage-1 row
-  const bridgeEnabled = trimmed.length > 0;
-
-  // ---- Stage 2: full-text (debounced, query-keyed) ----
-  const clamped = trimmed.slice(0, SEARCH_MAX_QUERY);
-  const debounced = useDebounced(clamped, DEBOUNCE_MS);
-  const fullText = useQuery(searchQuery(stage === "search" ? debounced : ""));
-  const hits: SearchHit[] = fullText.data?.hits ?? [];
-  const status: "loading" | "empty" | "error" | "ready" = fullText.isError
-    ? "error"
-    : fullText.isFetching && !fullText.data
-      ? "loading"
-      : fullText.data && fullText.data.hits.length === 0
-        ? "empty"
-        : "ready";
-  const errorMessage = fullText.error instanceof ApiError ? fullText.error.message : fullText.error?.message;
-
-  // Reset selection on stage-enter/return and on every query change (explicit Resolution-4
-  // rule). Stage 1 resets to -1 = "no row actively selected" (criterion 22: Enter then
-  // activates the bridge, the snappy "type + Enter → full-text" path); the first ArrowDown
-  // steps onto row 0. Stage 2 resets to 0 (the top hit is the natural default).
-  const noSelection = stage === "jump" ? -1 : 0;
-  useEffect(() => setSelectedIndex(noSelection), [stage, trimmed, noSelection, setSelectedIndex]);
-
-  const maxIndex = stage === "jump" ? bridgeIndex : Math.max(hits.length - 1, 0);
-  const activeId =
-    selectedIndex < 0 ? undefined : stage === "jump" ? optionId("jump", selectedIndex) : hits.length > 0 ? optionId("search", selectedIndex) : undefined;
-
-  // Keep the actively-selected row visible: with SEARCH_LIMIT rows in a max-h-80 scroll
-  // box, arrowing past the fold would leave it off-screen. `block: "nearest"` scrolls the
-  // minimum needed (no janky recentering); guarded on activeId so the Stage-1 `-1` default
-  // (no row selected) scrolls nothing. Layout effect keyed on index+stage → fires post-render.
-  useLayoutEffect(() => {
-    if (!activeId) return;
-    document.getElementById(activeId)?.scrollIntoView({ block: "nearest" });
-  }, [activeId]);
-
-  const navigateToEntry = useCallback(
-    (entry: QuickSwitchEntry) => {
-      router.history.push("page" in entry ? pageHref(entry.root, entry.page) : entry.diagram.url);
-      close();
-    },
-    [router, close],
-  );
-
-  const navigateToHit = useCallback(
-    (hit: SearchHit) => {
-      const base = hit.url ?? permalinkOf(hit.root, hit.page_id);
-      router.history.push(hit.heading_id ? `${base}#${hit.heading_id}` : base);
-      close();
-    },
-    [router, close],
-  );
-
-  const activateBridge = useCallback(() => {
-    if (!bridgeEnabled) return; // empty query: the server refuses a blank `q`, so the bridge is inert
-    setStage("search");
-  }, [bridgeEnabled, setStage]);
-
-  const enterAt = useCallback(
-    (index: number) => {
-      if (stage === "jump") {
-        // No active row (-1) or the bridge row → activate the bridge (the snappy path).
-        if (index < 0 || index >= bridgeIndex) {
-          activateBridge();
-          return;
-        }
-        navigateToEntry(jumpPages[index]);
-        return;
-      }
-      if (hits.length > 0 && index < hits.length) navigateToHit(hits[index]);
-    },
-    [stage, bridgeIndex, jumpPages, hits, activateBridge, navigateToEntry, navigateToHit],
-  );
-
-  const returnToJump = useCallback(() => {
-    setStage("jump");
-    setSelectedIndex(-1);
-  }, [setStage, setSelectedIndex]);
-
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === "ArrowDown") {
+  function activate(row: SearchRow) {
+    const href = row.kind === "jump"
+      ? ("page" in row.entry ? pageHref(row.root, row.entry.page) : row.entry.diagram.url)
+      : (row.hit.url ?? permalinkOf(row.root, row.hit.page_id)) + (row.hit.heading_id ? `#${row.hit.heading_id}` : "");
+    router.history.push(href);
+    close();
+  }
+  function onKeyDown(event: React.KeyboardEvent) {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
+    if (event.key === "Tab") {
+      const controls = [...overlayRef.current!.querySelectorAll<HTMLElement>("input, button:not(:disabled)")];
+      const index = controls.indexOf(document.activeElement as HTMLElement);
       event.preventDefault();
-      setSelectedIndex((prev) => Math.min(prev + 1, maxIndex)); // clamp, no wrap; -1 → 0 first step
-    } else if (event.key === "ArrowUp") {
+      controls[(index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length]?.focus();
+      return;
+    }
+    if (event.target !== inputRef.current) return;
+    const index = active ? rows.indexOf(active) : -1;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setSelectedIndex((prev) => Math.max(prev - 1, stage === "jump" ? -1 : 0));
+      const next = index < 0 ? (event.key === "ArrowDown" ? 0 : rows.length - 1)
+        : Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
+      setSelectedKey(rows[next]?.key ?? null);
     } else if (event.key === "Enter") {
       event.preventDefault();
-      enterAt(selectedIndex);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      // Stage-aware: Stage 2 returns to Stage 1; Stage 1 closes. NOT the outside-click handler.
-      if (stage === "search") returnToJump();
-      else close();
-    } else if (event.key === "Backspace" && stage === "search" && rawQuery.length === 0) {
-      event.preventDefault();
-      returnToJump();
-    } else if (event.key === "Tab") {
-      // Focus-trap: the only focusable control is the input, so keep focus on it.
-      event.preventDefault();
-      inputRef.current?.focus();
+      const row = active ?? rows[0];
+      if (row) activate(row);
     }
-  };
+  }
+  const status = scopeUnavailable || (queryReady && fullText.isError) ? "error"
+    : !trimmed ? "idle" : !queryReady || (fullText.isFetching && !fullText.data) ? "loading"
+    : fullText.data && hits.length === 0 ? "empty" : "ready";
+  const errorMessage = scopeUnavailable ? "This space is unavailable. Choose another space to continue."
+    : fullText.error instanceof ApiError ? fullText.error.message : fullText.error?.message;
 
   return (
-    <div
-      ref={overlayRef}
-      className="pb-search fixed inset-0 z-50 flex items-start justify-center bg-surface/60 p-4 pt-[12vh]"
-      data-pb-search=""
-      data-pb-search-stage={stage}
-      onMouseDown={(event) => {
-        // Outside-click (the scrim) always fully closes, regardless of stage.
-        if (event.target === overlayRef.current) close();
-      }}
-    >
-      <div className="w-full max-w-xl overflow-hidden rounded-xl border border-edge bg-raised shadow-lg" onMouseDown={(e) => e.stopPropagation()}>
-        {stage === "search" && (
-          <div className="flex items-center gap-2 border-b border-edge px-3 py-1.5 text-xs text-muted" data-pb-search-stage-label="">
-            <button
-              type="button"
-              onMouseDown={(event) => {
-                event.preventDefault();
-                returnToJump();
-              }}
-              className="rounded px-1.5 py-0.5 text-muted hover:bg-hovered hover:text-ink"
-              aria-label="Back to quick switcher"
-            >
-              ← Back
-            </button>
-            <span className="font-medium text-ink">Search results</span>
-          </div>
-        )}
-        <input
-          ref={inputRef}
-          type="text"
-          role="combobox"
-          aria-expanded={true}
-          aria-controls={LISTBOX_ID}
-          aria-activedescendant={activeId}
-          aria-autocomplete="list"
-          value={rawQuery}
-          maxLength={SEARCH_MAX_QUERY}
-          onChange={(event) => setRawQuery(event.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={stage === "jump" ? "Jump to a page, or search all docs…" : "Search all docs…"}
-          data-pb-search-input=""
-          className="w-full bg-transparent px-4 py-3 text-ink outline-none placeholder:text-faint"
-        />
-        <SearchList
-          stage={stage}
-          jumpPages={jumpPages}
-          query={trimmed}
-          bridgeEnabled={bridgeEnabled}
-          bridgeIndex={bridgeIndex}
-          hits={hits}
-          status={status}
-          searchedQuery={fullText.data?.query}
-          errorMessage={errorMessage}
-          showRoots={showRoots}
-          roots={tree.data?.roots}
-          selectedIndex={selectedIndex}
-          onSelect={setSelectedIndex}
-          onActivate={enterAt}
-          onActivateBridge={activateBridge}
-        />
-        <div
-          className="pb-search-foot flex items-center gap-[18px] border-t border-edge px-4 py-2 font-mono text-[10.5px] text-faint"
-          data-pb-search-foot=""
-          aria-hidden="true"
-        >
-          <span>
-            <b>↑↓</b> move
-          </span>
-          <span>
-            <b>↵</b> open
-          </span>
-          <span>
-            <b>esc</b> {stage === "search" ? "back" : "close"}
-          </span>
+    <div ref={overlayRef} className="pb-search fixed inset-0 z-50 flex items-start justify-center p-4 pt-[8vh]" data-pb-search
+      onMouseDown={(event) => { if (event.target === overlayRef.current) close(); }}>
+      <div role="dialog" aria-modal="true" aria-label="Search your docs" onKeyDown={onKeyDown}
+        className="pb-search-panel w-full overflow-hidden rounded-xl border border-edge bg-raised shadow-lg" data-pb-search-panel="">
+        <input ref={inputRef} type="text" role="combobox" aria-label="Search your docs" aria-expanded={true}
+          aria-controls={LISTBOX_ID} aria-activedescendant={activeId} aria-autocomplete="list" value={rawQuery} maxLength={SEARCH_MAX_QUERY}
+          onChange={(event) => { setRawQuery(event.target.value); setSelectedKey(null); }} placeholder="Search your docs…" data-pb-search-input=""
+          className="w-full bg-transparent px-4 py-4 text-ink outline-none placeholder:text-faint" />
+        <div role="group" aria-label="Search scope" className="pb-search-scopes flex flex-wrap gap-1.5 border-b border-edge px-4 py-3">
+          {[null, ...roots.map((root) => root.root)].map((root) => {
+            const unavailable = root !== null && !roots.some((entry) => entry.root === root && entry.available);
+            return <button key={JSON.stringify(["scope", root])} type="button" disabled={unavailable} aria-pressed={scope === root}
+              className="pb-search-scope" onClick={() => { setScope(root); setSelectedKey(null); }}>
+              {root === null ? "All spaces" : searchSpaceLabel(roots, root)}{unavailable ? " (unavailable)" : ""}
+            </button>;
+          })}
+        </div>
+        <SearchList {...{ rows, roots, status, errorMessage }} showSpaceGroups={scope === null} query={trimmed} selectedKey={active?.key ?? null} onSelect={setSelectedKey} onActivate={activate} />
+        <div className="pb-search-foot flex items-center gap-[18px] border-t border-edge px-4 py-2 font-sans text-xs text-faint" data-pb-search-foot="" aria-hidden="true">
+          <span><b>↑↓</b> move</span><span><b>↵</b> open</span><span><b>tab</b> spaces</span><span><b>esc</b> close</span>
         </div>
       </div>
     </div>

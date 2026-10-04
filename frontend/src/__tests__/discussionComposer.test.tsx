@@ -25,7 +25,7 @@ function mount(fetcher: typeof fetch, strict = false, initialEntry = "/extra/not
 
 afterEach(() => { vi.unstubAllGlobals(); clearCsrfToken(); });
 
-it.each(["live", "retained"])("New discussion uses a %s page selection once, then defaults back to the page", async (kind) => {
+it.each(["live", "retained"])("Start a discussion uses a %s page selection once, then defaults back to the page", async (kind) => {
   const previews: unknown[] = [];
   mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -38,7 +38,7 @@ it.each(["live", "retained"])("New discussion uses a %s page selection once, the
     if (url.includes("/discussions?")) return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
     return Response.json(page);
   }) as typeof fetch);
-  const start = await screen.findByRole("button", { name: "New discussion" });
+  const start = await screen.findByRole("button", { name: "Start a discussion" });
   expect(screen.queryByRole("button", { name: "Comment on selection" })).toBeNull();
   const text = screen.getByText("Text", { selector: "p" }).firstChild!;
   const selection = window.getSelection()!;
@@ -55,14 +55,14 @@ it.each(["live", "retained"])("New discussion uses a %s page selection once, the
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "A comment" } });
   expect(screen.getByRole("button", { name: "Create discussion" })).toHaveProperty("disabled", false);
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  const next = screen.getByRole("button", { name: "New discussion" });
+  const next = screen.getByRole("button", { name: "Start a discussion" });
   await waitFor(() => expect(next).toBe(document.activeElement));
   fireEvent.click(next);
   expect(await screen.findByRole("heading", { name: "New page discussion" })).toBeTruthy();
   expect(previews).toHaveLength(1);
 });
 
-it.each(["absent", "collapsed", "cleared by page click", "invalid", "multiple ranges"])("New discussion distinguishes an %s selection from a passage", async (kind) => {
+it.each(["absent", "collapsed", "cleared by page click", "invalid", "multiple ranges"])("Start a discussion distinguishes an %s selection from a passage", async (kind) => {
   let previews = 0;
   mount(vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -71,7 +71,7 @@ it.each(["absent", "collapsed", "cleared by page click", "invalid", "multiple ra
     if (url.includes("/discussions?")) return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
     return Response.json(page);
   }) as typeof fetch);
-  const start = await screen.findByRole("button", { name: "New discussion" });
+  const start = await screen.findByRole("button", { name: "Start a discussion" });
   const text = screen.getByText("Text", { selector: "p" }).firstChild!;
   const selection = window.getSelection()!;
   selection.removeAllRanges();
@@ -124,7 +124,7 @@ it.each(["network", "server", "malformed success"])("keeps Refresh beside uncert
     }
     return Response.json(page);
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   const field = screen.getByRole("textbox", { name: "Comment" });
   fireEvent.change(field, { target: { value: "Keep my first comment" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
@@ -157,7 +157,7 @@ it.each(["empty", "server validation", "preview"])("keeps ordinary creation erro
       next: null, discussions_available: true, reason: null });
     return Response.json(page);
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   if (failure !== "empty") fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "My comment" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   await screen.findByRole("alert");
@@ -166,7 +166,7 @@ it.each(["empty", "server validation", "preview"])("keeps ordinary creation erro
   expect(posts).toBe(failure === "empty" ? 0 : 1);
 });
 
-it("returns creation Cancel to visible Refresh when availability removed the initiating control", async () => {
+it("returns creation Cancel to the panel when availability removed the initiating control", async () => {
   let available = true;
   const view = mount(vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -174,15 +174,15 @@ it("returns creation Cancel to visible Refresh when availability removed the ini
     if (url.includes("/discussions?")) return Response.json({ discussions: [], next: null, discussions_available: available, reason: null });
     return Response.json(page);
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   available = false;
   await act(async () => { await view.client.invalidateQueries({ queryKey: pageDiscussionsQuery("extra", "page").queryKey }); });
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(screen.queryByRole("button", { name: "New discussion" })).toBeNull();
-  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBe(document.activeElement));
+  expect(screen.queryByRole("button", { name: "Start a discussion" })).toBeNull();
+  await waitFor(() => expect(screen.getByRole("region", { name: "Page discussions" })).toBe(document.activeElement));
 });
 
-it("returns passage Cancel to Refresh when source failure disables New discussion", async () => {
+it("returns passage Cancel to the panel when source failure disables Start a discussion", async () => {
   let sourceFailed = false; let previews = 0;
   const view = mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -199,14 +199,14 @@ it("returns passage Cancel to Refresh when source failure disables New discussio
   const selection = window.getSelection()!;
   const range = document.createRange(); range.selectNodeContents(text); selection.removeAllRanges(); selection.addRange(range);
   fireEvent(document, new Event("selectionchange"));
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   await screen.findByRole("button", { name: "Confirm passage" });
   sourceFailed = true;
   await act(async () => { await view.client.invalidateQueries({ queryKey: pageHtmlQuery("page", "extra").queryKey }); });
   await waitFor(() => expect(screen.getByRole("button", { name: "Reselect" })).toHaveProperty("disabled", true));
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(screen.getByRole("button", { name: "New discussion" })).toHaveProperty("disabled", true);
-  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBe(document.activeElement));
+  expect(screen.getByRole("button", { name: "Start a discussion" })).toHaveProperty("disabled", true);
+  await waitFor(() => expect(screen.getByRole("region", { name: "Page discussions" })).toBe(document.activeElement));
   expect(previews).toBe(1);
 });
 
@@ -227,7 +227,7 @@ it("resets a hidden bare permalink margin when an unqualified HTML refetch resol
       return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
     throw new Error(`unexpected fetch: ${url}`);
   }) as typeof fetch, false, `/p/${id}`);
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   fireEvent.change(await screen.findByRole("textbox", { name: "Comment" }), { target: { value: "A draft" } });
   await waitFor(() => expect(screen.getByRole("button", { name: "Create discussion" })).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
@@ -244,7 +244,7 @@ it("resets a hidden bare permalink margin when an unqualified HTML refetch resol
   expect(toggle).toBe(document.activeElement);
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByRole("textbox")).toBeNull();
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   const bDraft = screen.getByRole("textbox", { name: "Comment" });
   fireEvent.change(bDraft, { target: { value: "B draft" } });
   await waitFor(() => expect(bDraft).toBe(document.activeElement));
@@ -300,7 +300,7 @@ it.each([false, true])("invalidates bare same-hash root-change selection (live r
   const range = document.createRange(); range.selectNodeContents(text); selection.removeAllRanges(); selection.addRange(range);
   fireEvent(document, new Event("selectionchange"));
   if (!liveRange) selection.removeAllRanges(); // Capture must use the hook's retained article selection.
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   await screen.findByText("Preparing passage preview…");
   fireEvent.click(screen.getByRole("button", { name: "Hide discussions" }));
   const toggle = screen.getByRole("button", { name: "Show discussions" });
@@ -313,7 +313,7 @@ it.each([false, true])("invalidates bare same-hash root-change selection (live r
   expect(toggle).toBe(document.activeElement);
   expect(screen.queryByRole("button", { name: "Confirm passage" })).toBeNull();
   expect(screen.queryByRole("textbox")).toBeNull();
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   expect(await screen.findByRole("heading", { name: "New page discussion" })).toBeTruthy();
   expect(calls.filter((url) => url.includes("anchor-preview"))).toEqual([`/api/v1/pages/${id}/discussions/anchor-preview?root=extra`]);
   ambiguous = true;
@@ -352,7 +352,7 @@ it.each([
     });
     throw new Error(`unexpected fetch: ${input}`);
   }) as typeof fetch);
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   expect(await screen.findByRole("heading", { name: "New page discussion" })).toBeTruthy();
   fireEvent.change(await screen.findByRole("textbox", { name: "Comment" }), { target: { value: "A draft" } });
   await waitFor(() => expect(screen.getByRole("button", { name: "Create discussion" })).toHaveProperty("disabled", false));
@@ -373,7 +373,7 @@ it.each([
   expect(screen.getByRole("button", { name: "Hide discussions" }).getAttribute("aria-expanded")).toBe("true");
   expect(screen.queryByRole("textbox")).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "New discussion" }));
+  fireEvent.click(screen.getByRole("button", { name: "Start a discussion" }));
   const bDraft = screen.getByRole("textbox", { name: "Comment" });
   fireEvent.change(bDraft, { target: { value: "B draft" } });
   bDraft.focus();
@@ -402,7 +402,7 @@ it("retains a delayed creation preview while hidden without stealing focus or po
   const text = (await screen.findByText("Text", { selector: "p" })).firstChild!;
   const selection = window.getSelection()!;
   const range = document.createRange(); range.selectNodeContents(text); selection.removeAllRanges(); selection.addRange(range);
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   await screen.findByText("Preparing passage preview…");
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Hidden preview draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Hide discussions" }));
@@ -432,7 +432,7 @@ it("keeps a page draft through hide/reopen and sends a rooted hash-bound creatio
     if (url.includes("/discussions/created")) return Response.json({ discussion: null, comments: [], next: null, discussions_available: true, reason: null });
     return new Response(null, { status: 404 });
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   const body = await screen.findByRole("textbox", { name: "Comment" });
   fireEvent.change(body, { target: { value: "  Draft 😀  " } });
   fireEvent.click(screen.getByRole("button", { name: "Hide discussions" }));
@@ -457,11 +457,11 @@ it("automatically reads availability and keeps unsupported discussions expanded 
   }) as typeof fetch);
   expect(await screen.findByText("Loading page discussions…")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Hide discussions" })).toHaveProperty("disabled", false);
-  expect(screen.queryByRole("button", { name: "New discussion" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Start a discussion" })).toBeNull();
   await act(async () => { finish(Response.json({ discussions: [], next: null, discussions_available: false, reason: "object_storage" })); });
   expect(await screen.findByText("Discussions are not available for this storage type")).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "New discussion" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "New discussion" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Start a discussion" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Start a discussion" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Hide discussions" }));
   fireEvent.click(screen.getByRole("button", { name: "Show discussions" }));
   expect(screen.getByText("Discussions are not available for this storage type")).toBeTruthy();
@@ -479,7 +479,7 @@ it("keeps a page draft accessible and disables posting when its source refetch f
     if (url.includes("/pages/page/discussions")) return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
     return new Response(null, { status: 404 });
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Keep this draft" } });
   const info = view.container.querySelector("[data-pb-rail-meta]");
   const toc = view.container.querySelector("[data-pb-toc]");
@@ -489,7 +489,8 @@ it("keeps a page draft accessible and disables posting when its source refetch f
   await view.client.invalidateQueries({ queryKey: ["page", "html", "page"] });
   expect(await screen.findByText("HTML unavailable")).toBeTruthy();
   expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", "Keep this draft");
-  expect(view.container.querySelector("[data-pb-rail-meta]")).toBe(info);
+  expect(view.container.querySelector("[data-pb-rail-meta] [data-pb-path]")?.textContent).toBe("note.md");
+  expect(screen.queryByRole("link", { name: "+ Owner" })).toBeNull();
   expect(view.container.querySelector("[data-pb-toc]")).toBe(toc);
   expect(screen.getByRole("button", { name: "Create discussion" })).toHaveProperty("disabled", true);
   await waitFor(() => expect(screen.getByRole("textbox", { name: "Comment" })).toBe(document.activeElement));
@@ -539,7 +540,7 @@ it("reloads an unreadable page from its visible draft and posts once after same-
     if (url.includes("/discussions/created")) return Response.json({ discussion: null, comments: [], next: null, discussions_available: true, reason: null });
     return new Response(null, { status: 404 });
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "  Draft after outage  " } });
   await view.client.invalidateQueries({ queryKey: ["page", "html", "page"] });
   expect(await screen.findByText("HTML unavailable")).toBeTruthy();
@@ -583,7 +584,7 @@ it("keeps a rejected page draft gated through a failed reload, then accepts an e
     if (url.includes("/discussions/created")) return Response.json({ discussion: null, comments: [], next: null, discussions_available: true, reason: null });
     return new Response(null, { status: 404 });
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Keep my page draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   expect(await screen.findByText("The page changed. Reload it, review the text, and try again.")).toBeTruthy();
@@ -615,7 +616,7 @@ it("removes stale reload guidance when a newer page source arrives in the page c
     if (url.includes("/pages/page/discussions")) return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
     return new Response(null, { status: 404 });
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Keep this page draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   expect(await screen.findByText("The page changed. Reload it, review the text, and try again.")).toBeTruthy();
@@ -655,7 +656,7 @@ it("requires a fresh preview and confirmation after a changed-hash reload of a r
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 4); selection.addRange(range);
-    fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+    fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   };
   await selectText();
   fireEvent.click(await screen.findByRole("button", { name: "Confirm passage" }));
@@ -693,7 +694,7 @@ it("keeps a confirmed creation confirmed when discussion refresh fails", async (
     if (url.includes("/discussions/created")) return Response.json({ discussion: null, comments: [], next: null, discussions_available: true, reason: null });
     return new Response(null, { status: 404 });
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Posted once" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   expect(await screen.findByRole("status", { name: "Discussion created" })).toBeTruthy();
@@ -733,7 +734,7 @@ it("keeps the complete draft after an ordinary access denial without resubmittin
     if (url.includes("/pages/page/discussions")) return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
     return new Response(null, { status: 404 });
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "  Still mine  " } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   expect((await screen.findByText(/You cannot post here/)).closest("[role=alert]")).toBeTruthy();
@@ -756,7 +757,7 @@ it("settles one page creation and one denied retry under StrictMode", async () =
     if (url.includes("/discussions/created")) return Response.json({ discussion: null, comments: [], next: null, discussions_available: true, reason: null });
     return new Response(null, { status: 404 });
   }) as typeof fetch, true);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Strict draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   expect(await screen.findByText(/You cannot post here/)).toBeTruthy();
@@ -786,7 +787,7 @@ it("settles passage preview failure and success under StrictMode without duplica
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 4); selection.addRange(range);
-    fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+    fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   };
   await selectText();
   expect(await screen.findByText(/passage could not be found/i)).toBeTruthy();
@@ -822,7 +823,7 @@ it("requires a source reload and new selection after a mismatched preview hash",
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 4); selection.addRange(range);
-    fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+    fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   };
   await selectText();
   expect(await screen.findByText(/page changed\. Reload and reselect/i)).toBeTruthy();
@@ -867,7 +868,7 @@ it("holds the confirmed passage and focused draft while a create request is pend
     const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, value.length); selection.addRange(range);
   };
   await select("First");
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   fireEvent.click(await screen.findByRole("button", { name: "Confirm passage" }));
   const textbox = screen.getByRole("textbox", { name: "Comment" });
   fireEvent.change(textbox, { target: { value: "Draft for First" } });
@@ -877,7 +878,7 @@ it("holds the confirmed passage and focused draft while a create request is pend
   expect(textbox).toBe(document.activeElement);
   expect(textbox).toHaveProperty("readOnly", true);
   await select("Second");
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   fireEvent.click(screen.getByRole("button", { name: "Reselect" }));
   fireEvent.keyDown(textbox, { key: "Escape" });
   await act(async () => { await Promise.resolve(); });
@@ -891,7 +892,7 @@ it("holds the confirmed passage and focused draft while a create request is pend
   expect(textbox).toHaveProperty("readOnly", false);
   expect(textbox).toHaveProperty("value", "Draft for First");
   expect(writes).toHaveLength(1);
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   expect(await screen.findByText("Second", { selector: "blockquote" })).toBeTruthy();
   expect(previews).toEqual(["First", "Second"]);
 });
@@ -911,7 +912,7 @@ it("does not promise a page discussion after an unexpected preview path refusal"
   const selection = window.getSelection()!;
   selection.removeAllRanges();
   const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 4); selection.addRange(range);
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   expect(await screen.findByText("The passage could not be previewed. Refresh the page and try again.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Discuss the whole page instead" })).toBeNull();
 });
@@ -929,7 +930,7 @@ it("keeps the page draft when its discussion path cannot be written", async () =
     if (url.includes("/pages/page/discussions")) return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
     return new Response(null, { status: 404 });
   }) as typeof fetch);
-  fireEvent.click(await screen.findByRole("button", { name: "New discussion" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start a discussion" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Keep this draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Create discussion" }));
   expect(await screen.findByText("This discussion could not be saved here. Your draft is still here.")).toBeTruthy();
@@ -955,7 +956,7 @@ it("keeps a confirmed passage through an unreadable source and clears it only wh
   const selection = window.getSelection()!;
   selection.removeAllRanges();
   const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 4); selection.addRange(range);
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   fireEvent.click(await screen.findByRole("button", { name: "Confirm passage" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Keep this passage draft" } });
   unreadable = true;
@@ -995,11 +996,11 @@ it("opens the page composer from selection help", async () => {
   const selection = window.getSelection()!;
   selection.removeAllRanges();
   const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 4); selection.addRange(range);
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   fireEvent.click(await screen.findByRole("button", { name: "Confirm passage" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Keep my draft" } });
   selection.collapse(text, 0);
-  fireEvent.click(await findDiscussionButton({ name: "New discussion" }));
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   fireEvent.click(screen.getByRole("button", { name: "Discuss the whole page instead" }));
   expect(await screen.findByRole("heading", { name: "New page discussion" })).toBeTruthy();
   expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", "Keep my draft");

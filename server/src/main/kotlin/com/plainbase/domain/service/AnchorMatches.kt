@@ -19,7 +19,7 @@ import com.plainbase.domain.root.RootName
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.util.concurrent.atomic.AtomicInteger
 
-data class DiscussionAnchorMatch(val pageId: PageId, val id: DiscussionId, val match: AnchorMatch)
+data class DiscussionAnchorMatch(val pageId: PageId, val id: DiscussionId, val match: AnchorMatch, val pageHash: String? = null)
 
 @Suppress("TooGenericExceptionCaught", "SwallowedException")
 class AnchorMatches(
@@ -66,7 +66,7 @@ class AnchorMatches(
                     }
                     if (cached != null && cached.anchorHash == row.anchorHash && cached.pageHash == contentHash) {
                         hitCount.incrementAndGet()
-                        result += DiscussionAnchorMatch(pageId, row.id, cached.match)
+                        result += DiscussionAnchorMatch(pageId, row.id, cached.match, cached.pageHash)
                     } else {
                         misses += row
                     }
@@ -94,7 +94,7 @@ class AnchorMatches(
                 }
                 sync.enter(root, failure.message ?: "discussion match cache write failed")
             }
-            result += DiscussionAnchorMatch(pageId, row.id, match)
+            result += DiscussionAnchorMatch(pageId, row.id, match, page.hash)
         }
         return result
     }

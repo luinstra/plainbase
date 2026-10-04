@@ -6,6 +6,7 @@
     "state": "page_level",
     "reason": null,
     "range": null,
+      "range_content_hash": null,
     "candidates": null,
     "placement": null,
     "quote": null,

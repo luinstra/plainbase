@@ -23,21 +23,24 @@ export function discussionDetailUrl(root: string, id: string, after: string | nu
 
 export const rootDiscussionsQuery = (root: string, state: string | null) => infiniteQueryOptions({
   queryKey: ["discussions", "root", root, state, ROOT_DISCUSSION_LIMIT],
-  queryFn: ({ pageParam }) => getJson<DiscussionListResponse>(rootDiscussionsUrl(root, state, pageParam)),
+  staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false,
+  queryFn: ({ pageParam, signal }) => getJson<DiscussionListResponse>(rootDiscussionsUrl(root, state, pageParam), signal),
   initialPageParam: null as string | null,
   getNextPageParam: (page) => page.next,
 });
 
 export const pageDiscussionsQuery = (root: string, pageId: string) => infiniteQueryOptions({
   queryKey: ["discussions", "page", root, pageId, PAGE_DISCUSSION_LIMIT],
-  queryFn: ({ pageParam }) => getJson<DiscussionListResponse>(pageDiscussionsUrl(root, pageId, pageParam)),
+  staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false,
+  queryFn: ({ pageParam, signal }) => getJson<DiscussionListResponse>(pageDiscussionsUrl(root, pageId, pageParam), signal),
   initialPageParam: null as string | null,
   getNextPageParam: (page) => page.next,
 });
 
 export const discussionDetailQuery = (root: string, id: string) => infiniteQueryOptions({
   queryKey: ["discussions", "detail", root, id, COMMENT_LIMIT],
-  queryFn: ({ pageParam }) => getJson<DiscussionDetailResponse>(discussionDetailUrl(root, id, pageParam)),
+  staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false,
+  queryFn: ({ pageParam, signal }) => getJson<DiscussionDetailResponse>(discussionDetailUrl(root, id, pageParam), signal),
   initialPageParam: null as string | null,
   getNextPageParam: (page) => page.next,
 });

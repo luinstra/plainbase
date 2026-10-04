@@ -16,20 +16,7 @@ import {
   type CalloutType,
 } from "../lib/markdownCommands";
 
-/**
- * The C3 formatting toolbar (D-4): a horizontal strip of icon buttons between the editor header row and the
- * body CodeMirror, edit-mode only and BODY-only. Each button runs the SAME `markdownCommands` op the
- * keymap binds, against the live `EditorView`, then refocuses the editor so the next keystroke lands.
- *
- * Hidden entirely while the C2 preview overlay is open (`disabled`) — there is no editing surface beneath
- * the overlay, so a clickable button would act on a CM the user can't see (D-5). The keymap stays
- * installed (harmless — the covered CM isn't the user's focus); the visible toolbar is the contract.
- *
- * The C3.5 visual layer: compact inline-SVG icons (a unicode `<>` for inline code reads cleaner than any
- * glyph), token-styled to mirror the C2 header buttons. The button order matches the Designer mockup —
- * heading · | · bold · italic · inline-code · link · bullet · numbered · quote · code-block · table — with the
- * `⌘S to save` hint pushed to the far right. The stable `data-pb-fmt-*` selectors are the public contract.
- */
+/** Formatting controls share the body editor commands and stay disabled when Preview covers the source. */
 const STROKE = { fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
 
 function Icon({ children }: { children: ReactNode }) {
@@ -131,21 +118,28 @@ const ITEMS: ToolbarItem[] = [
 
 export function EditorToolbar({ view, disabled }: { view: EditorView | null; disabled: boolean }) {
   const [calloutType, setCalloutType] = useState<CalloutType>("NOTE");
-  if (disabled) return null;
+  const groups = [
+    { label: "Block style", items: ITEMS.slice(0, 1) },
+    { label: "Inline", items: ITEMS.slice(2, 6) },
+    { label: "Lists", items: ITEMS.slice(6, 8) },
+    { label: "Insert", items: ITEMS.slice(8) },
+  ];
+  const shortcuts: Record<string, string> = { Bold: "⌘B", Italic: "⌘I", "Inline code": "⌘E", Link: "⌘⇧K" };
   return (
-    <div className="flex flex-wrap items-center gap-1" data-pb-toolbar role="toolbar" aria-label="Formatting">
-      {ITEMS.map((item, index) =>
+    <div className="pb-editor-toolbar flex flex-wrap items-center gap-1" data-pb-toolbar role="toolbar" aria-label="Formatting">
+      {groups.map((group) => <div className="pb-editor-tool-group" role="group" aria-label={group.label} key={group.label}>
+      {group.items.map((item, index) =>
         item.kind === "sep" ? (
           <span key={`sep-${index}`} className="mx-1 h-5 w-px bg-edge" aria-hidden="true" data-pb-fmt-sep />
         ) : (
           <button
             key={item.hook}
             type="button"
-            className="pb-fmt-btn inline-flex items-center justify-center rounded-md border border-edge bg-surface p-1.5 text-muted hover:text-ink disabled:opacity-50"
+            className="pb-fmt-btn inline-flex items-center justify-center rounded-md p-1.5 text-muted hover:text-ink"
             {...{ [item.hook]: "" }}
-            title={item.label}
+            title={shortcuts[item.label] ? `${item.label} (${shortcuts[item.label]})` : item.label}
             aria-label={item.label}
-            disabled={!view}
+            disabled={disabled || !view}
             onClick={() => {
               if (!view) return;
               item.run(view);
@@ -156,12 +150,13 @@ export function EditorToolbar({ view, disabled }: { view: EditorView | null; dis
           </button>
         ),
       )}
+      {group.label === "Insert" && <>
       <select
         className="rounded-md border border-edge bg-surface px-1.5 py-1.5 text-xs text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         aria-label="Callout type"
         data-pb-callout-type
         value={calloutType}
-        disabled={!view}
+        disabled={disabled || !view}
         onChange={(event) => setCalloutType(event.target.value as CalloutType)}
       >
         {CALLOUT_TYPES.map((type) => (
@@ -172,11 +167,11 @@ export function EditorToolbar({ view, disabled }: { view: EditorView | null; dis
       </select>
       <button
         type="button"
-        className="rounded-md border border-edge bg-surface px-2 py-1.5 text-xs text-muted hover:text-ink disabled:opacity-50"
+        className="rounded-md px-2 py-1.5 text-xs text-muted hover:text-ink"
         data-pb-fmt-callout
         title="Insert callout"
         aria-label="Insert callout"
-        disabled={!view}
+        disabled={disabled || !view}
         onClick={() => {
           if (!view) return;
           insertCallout(calloutType)(view);
@@ -185,9 +180,8 @@ export function EditorToolbar({ view, disabled }: { view: EditorView | null; dis
       >
         Callout
       </button>
-      <span className="ml-auto text-xs text-muted" data-pb-save-hint>
-        <kbd className="font-mono">⌘S</kbd> to save
-      </span>
+      </>}
+      </div>)}
     </div>
   );
 }

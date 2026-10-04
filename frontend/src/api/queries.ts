@@ -163,10 +163,10 @@ export const SEARCH_MAX_QUERY = 512;
  * fix. `enabled: q.length > 0` means a blank query never fires, so §A1 `invalid_query` is
  * impossible by construction.
  */
-export function searchQuery(q: string, limit = SEARCH_LIMIT, offset = 0) {
+export function searchQuery(q: string, limit = SEARCH_LIMIT, offset = 0, root: string | null = null) {
   return queryOptions({
-    queryKey: ["search", q, limit, offset],
-    queryFn: () => getJson<SearchResponse>(`/api/v1/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`),
+    queryKey: ["search", q, limit, offset, root],
+    queryFn: () => getJson<SearchResponse>(`/api/v1/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}${root === null ? "" : `&root=${encodeURIComponent(root)}`}`),
     enabled: q.length > 0,
     staleTime: 30_000,
   });
@@ -187,10 +187,13 @@ export function searchQuery(q: string, limit = SEARCH_LIMIT, offset = 0) {
 export function previewQuery(text: string, path?: string, root?: string) {
   return queryOptions({
     queryKey: ["preview", root ?? null, path ?? null, text],
-    queryFn: () => previewRaw(text, path, root),
+    queryFn: ({ signal }) => previewRaw(text, path, root, signal),
     enabled: text.length > 0,
     staleTime: 5_000,
     gcTime: 5_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
   });
 }
 

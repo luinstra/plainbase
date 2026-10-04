@@ -20,6 +20,19 @@ private val pageIndexStub = object : PageIndexView {
 class SourceRangesNativeTest {
 
     @Test
+    fun brokenLinkOccurrenceUsesStrictUtf8ByteBoundaries() {
+        val source = "\uFEFF---\r\ntitle: Café\r\n---\r\n😀\r[first][missing]\n\n[missing]: lost.md\n".toByteArray(Charsets.UTF_8)
+        val renderer = FlexmarkRenderer(pageIndexStub)
+        val html = renderer.render(TreePath.require("links.md"), source).html
+        val match = Regex("data-pb-link-src=\"(\\d+)-(\\d+)\"").find(html)!!
+        val start = match.groupValues[1].toInt()
+        val end = match.groupValues[2].toInt()
+        assertEquals("[first][missing]", String(source, start, end - start, Charsets.UTF_8))
+        val invalid = byteArrayOf(0xC3.toByte(), 0x28) + source
+        assertFalse(renderer.render(TreePath.require("links.md"), invalid).html.contains("data-pb-link-src"))
+    }
+
+    @Test
     fun malformedUtf8DisablesRangesWhileReplacementRenderingRemainsAvailable() {
         val renderer = FlexmarkRenderer(pageIndexStub)
         val source = "before ".toByteArray(Charsets.UTF_8) +

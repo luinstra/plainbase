@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
@@ -85,6 +85,20 @@ function renderPage(root: string) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("the Edit affordance", () => {
+  it("opens missing owner directly in editor properties without modifying the document", async () => {
+    const { container } = renderPage("docs");
+    const owner = await screen.findByRole("link", { name: "+ Owner" });
+    expect(owner.getAttribute("href")).toBe("/docs/guides/onboarding?mode=edit&property=owner");
+    fireEvent.click(owner);
+    await waitFor(() => expect(document.activeElement).toBe(container.querySelector("[data-pb-field-owner]")));
+    expect((container.querySelector("[data-pb-field-owner]") as HTMLInputElement).value).toBe("");
+  });
+  it("focuses the missing status editor field without choosing a status", async () => {
+    const { container } = renderPage("docs");
+    fireEvent.click(await screen.findByRole("link", { name: "+ Status" }));
+    await waitFor(() => expect(document.activeElement).toBe(container.querySelector("[data-pb-field-status]")));
+    expect((document.activeElement as HTMLSelectElement).value).toBe("");
+  });
   it("renders in the header on an EDITABLE root, not in the document footer", async () => {
     const { container } = renderPage("docs");
     await waitFor(() => expect(container.querySelector("[data-pb-docfoot]")).not.toBeNull());
@@ -100,6 +114,8 @@ describe("the Edit affordance", () => {
     const { container } = renderPage("handbook");
     await waitFor(() => expect(container.querySelector("[data-pb-docfoot]")).not.toBeNull());
     expect(container.querySelector("[data-pb-edit-page]")).toBeNull();
+    expect(screen.queryByRole("link", { name: "+ Owner" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "+ Status" })).toBeNull();
     // `editable` gates the WRITE affordance only: a read-only root's metadata still renders.
     expect(container.querySelector(".pb-docfoot-updated")?.textContent).toBe("Last updated 2026-01-01");
   });

@@ -2,6 +2,8 @@ import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { SearchHit } from "../api/types";
 import { SearchResultItem } from "../components/SearchResultItem";
+import { JumpToItem } from "../components/JumpToItem";
+import type { QuickSwitchEntry } from "../lib/tree";
 
 /**
  * Snippet injection-inertness (criterion 2/13). A snippet containing `<script>` and
@@ -29,6 +31,30 @@ function hit(snippet: string, highlights: { start: number; end: number }[]): Sea
 function noop() {}
 
 describe("SearchResultItem", () => {
+  it("omits only the leading title breadcrumb and hides a genuinely empty excerpt", () => {
+    const props = { id: "opt", active: false, onActivate: noop, onHover: noop };
+    const { container, rerender } = render(<SearchResultItem {...props} hit={{ ...hit("Actual body", []), heading_path: [" x ", "Details"] }} />);
+    expect(container.querySelector("[data-pb-search-trail]")?.textContent).toBe("x.md · Details");
+    expect(container.querySelector("[data-pb-search-snippet]")?.textContent).toBe("Actual body");
+    rerender(<SearchResultItem {...props} hit={{ ...hit("", []), heading_path: ["X"] }} />);
+    expect(container.querySelector("[data-pb-search-trail]")?.textContent).toBe("x.md");
+    expect(container.querySelector("[data-pb-search-snippet]")).toBeNull();
+  });
+  it("highlights literal query terms safely in quick and content titles, not path-only matches", () => {
+    const title = "Deploy <img> Guide";
+    const entry = { root: "docs", page: { id: "p1", title, path: "special.md" } } as QuickSwitchEntry;
+    const props = { id: "opt", active: false, onActivate: noop, onHover: noop, query: "DEPLOY <img>" };
+    const quick = render(<JumpToItem entry={entry} {...props} />);
+    const content = render(<SearchResultItem hit={{ ...hit("body", []), title }} {...props} />);
+    for (const view of [quick, content]) {
+      const heading = view.container.querySelector('[title="Deploy <img> Guide"]')!;
+      expect([...heading.querySelectorAll("mark")].map((mark) => mark.textContent)).toEqual(["Deploy", "<img>"]);
+      expect(heading.textContent).toBe(title);
+      expect(heading.querySelector("img")).toBeNull();
+    }
+    quick.rerender(<JumpToItem entry={entry} {...props} query="special" />);
+    expect(quick.container.querySelector("mark")).toBeNull();
+  });
   it("renders attacker-controlled snippet text inert (no script/img elements injected)", () => {
     const snippet = 'before <script>alert(1)</script> and <img onerror=bad> after';
     const { container } = render(<SearchResultItem hit={hit(snippet, [{ start: 0, end: 6 }])} id="opt" active={false} onActivate={noop} onHover={noop} />);
@@ -49,13 +75,16 @@ describe("SearchResultItem", () => {
     expect(mark!.textContent).toBe("rolling");
   });
 
-  it("joins the heading_path breadcrumb verbatim, in mono", () => {
+  it("combines path and verbatim heading trail on one line without losing full text", () => {
     const { container } = render(
       <SearchResultItem hit={{ ...hit("s", []), heading_path: ["Deploy Guide", "Prerequisites"] }} id="opt" active={false} onActivate={noop} onHover={noop} />,
     );
     expect(container.textContent).toContain("Deploy Guide › Prerequisites");
-    // The breadcrumb is a structural path → mono (presentational contract, §1c).
-    expect(container.querySelector("span.font-mono")?.textContent).toBe("Deploy Guide › Prerequisites");
+    const trail = container.querySelector("[data-pb-search-trail]");
+    expect(trail?.textContent).toBe("x.md · Deploy Guide › Prerequisites");
+    expect(trail?.getAttribute("title")).toBe("x.md · Deploy Guide › Prerequisites");
+    expect(trail?.querySelector(".font-mono")?.textContent).toBe("x.md");
+    expect(trail?.querySelector(".font-sans")?.textContent).toBe("Deploy Guide › Prerequisites");
   });
 
   it("carries the data-pb-search-active tint hook only when active", () => {

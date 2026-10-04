@@ -58,3 +58,7 @@ JSON response's `ETag` value as the `If-Match` base hash for a subsequent page `
 no representation validator. Page reads do not return conditional `304` responses: even a matching
 `If-None-Match` tag still performs the authorized lookup and returns the selected representation with
 `200` when the read succeeds.
+
+## Discussion passage versions
+
+Discussion page-list, root-list and detail responses include nullable `range_content_hash` beside the resolved `range`. For `exact` and `moved` matches it identifies the precise source bytes used for that range, including a cached match's original source version. Consumers should highlight source blocks only when it matches the displayed page HTML `content_hash`; a different or missing hash means the range cannot safely be painted on that document. Other match states return null. Stored original and reattachment anchors remain unchanged.

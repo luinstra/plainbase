@@ -1,8 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Fragment } from "react";
 import { treeQuery } from "../api/queries";
-import type { TreeFolder } from "../api/types";
-import { entryFor, folderTitle, foldersByPath, landingPage, rootLabel, treeFor } from "../lib/tree";
+import { breadcrumbTrail } from "../lib/breadcrumbs";
 
 /**
  * Breadcrumb trail derived from the page's content-relative `path` (the API's value,
@@ -16,27 +15,7 @@ import { entryFor, folderTitle, foldersByPath, landingPage, rootLabel, treeFor }
  */
 export function Breadcrumbs({ root, path, title }: { root: string; path: string; title: string }) {
   const tree = useQuery(treeQuery);
-  const data = tree.data;
-  const entry = data ? entryFor(data.roots, root) : null;
-  const entryTree = data ? treeFor(data.roots, root) : null;
-  const folders = entryTree ? foldersByPath(entryTree) : new Map<string, TreeFolder>();
-
-  const segments = path.split("/").slice(0, -1);
-  // The crumb names THIS page's root and links to that root's own server-issued URL. A hardcoded primary-root
-  // address would name the wrong tree and walk an extra-root reader into the primary tree.
-  const rootCrumb = { key: `root:${root}`, label: entry ? rootLabel(entry) : root, url: entry?.tree.url ?? null };
-  const ancestors = segments.map((name, i) => {
-    const folderPath = segments.slice(0, i + 1).join("/");
-    const folder = folders.get(folderPath);
-    return { key: folderPath, label: folder ? folderTitle(folder) : name, url: folder?.url ?? null };
-  });
-  // When the page IS its parent folder's landing (index/README), the parent ancestor crumb and the
-  // leaf crumb are the same place: `folderTitle` resolves to the index title and the parent's url is
-  // this very page's URL. Drop the redundant ancestor so the trail reads `<root> / <Title>`, not
-  // `<root> / <Title> / <Title>` with the ancestor self-linking to the page being viewed (Phase 5.5).
-  const parent = folders.get(segments.join("/"));
-  const pageIsLanding = parent ? landingPage(parent)?.path === path : false;
-  const crumbs = path === "" ? [] : [rootCrumb, ...(pageIsLanding ? ancestors.slice(0, -1) : ancestors)];
+  const crumbs = breadcrumbTrail(tree.data?.roots ?? [], root, path);
 
   return (
     <nav className="pb-breadcrumbs mb-4 text-sm text-muted" data-pb-breadcrumbs aria-label="Breadcrumb" aria-busy={tree.isPending}>

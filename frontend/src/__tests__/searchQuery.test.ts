@@ -9,8 +9,8 @@ import { SEARCH_LIMIT, SEARCH_MAX_QUERY, searchQuery } from "../api/queries";
  */
 describe("searchQuery", () => {
   it("keys on the trimmed q plus limit/offset", () => {
-    expect(searchQuery("rolling deploy").queryKey).toEqual(["search", "rolling deploy", SEARCH_LIMIT, 0]);
-    expect(searchQuery("a", 5, 10).queryKey).toEqual(["search", "a", 5, 10]);
+    expect(searchQuery("rolling deploy").queryKey).toEqual(["search", "rolling deploy", SEARCH_LIMIT, 0, null]);
+    expect(searchQuery("a", 5, 10).queryKey).toEqual(["search", "a", 5, 10, null]);
   });
 
   it("is disabled for an empty q so invalid_query is impossible by construction", () => {
@@ -45,4 +45,18 @@ describe("searchQuery", () => {
     }
     expect(captured).toBe("/api/v1/search?q=a%20b&limit=20&offset=0");
   });
+  it("isolates each space in the cache and sends the selected root", async () => {
+    expect(searchQuery("a", 5, 10, "handbook").queryKey).toEqual(["search", "a", 5, 10, "handbook"]);
+    const originalFetch = globalThis.fetch;
+    let captured = "";
+    globalThis.fetch = (async (url: string) => {
+      captured = url;
+      return new Response(JSON.stringify({ hits: [] }));
+    }) as typeof fetch;
+    try {
+      await searchQuery("a b", 5, 10, "handbook").queryFn!({} as never);
+    } finally { globalThis.fetch = originalFetch; }
+    expect(captured).toBe("/api/v1/search?q=a%20b&limit=5&offset=10&root=handbook");
+  });
+
 });

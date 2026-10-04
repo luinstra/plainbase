@@ -175,12 +175,16 @@ test("the new-section affordance creates <dir>/index.md and the folder landing r
 
   await gotoExpectStatus(page, "/new");
   await expect(page.locator("[data-pb-new-page-form]")).toBeVisible();
+  await page.getByText("More options", { exact: true }).click();
   await page.locator("[data-pb-new-section]").check();
-  await page.locator("[data-pb-new-folder]").fill(dir);
+  await page.locator("[data-pb-new-folder]").selectOption(JSON.stringify(["custom"]));
+    await page.locator("[data-pb-new-custom-folder]").fill(dir);
   await page.locator("[data-pb-new-title]").fill(sectionTitle);
   await page.locator("[data-pb-new-create]").click();
 
   // The index page's own url (/docs/<dir>/index) canonicalizes to the folder landing (/docs/<dir>).
+  await expect(page.locator("[data-pb-editor]")).toBeVisible();
+  await page.getByRole("button", { name: "Done editing", exact: true }).click();
   await expect(page).toHaveURL(`/docs/${dir}`);
   // REPLACE semantics: the folder landing IS the index page view (rail present), NOT the generated
   // listing — neither the listing container nor the generated-folder heading appear.

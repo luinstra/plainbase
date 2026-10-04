@@ -107,7 +107,7 @@ describe("C2 metadata form", () => {
     const { view } = renderSeeded();
 
     // Default edit view: the form rail is present, the preview pane is absent.
-    await waitFor(() => expect(view.container.querySelector("[data-pb-edit-rail]")).not.toBeNull());
+    await waitFor(() => expect(view.container.querySelector(".pb-editor-properties")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-meta-form]")).not.toBeNull();
     expect(view.container.querySelector("[data-pb-preview]")).toBeNull();
     expect(view.container.querySelector<HTMLButtonElement>("[data-pb-preview-toggle]")?.getAttribute("aria-pressed")).toBe("false");
@@ -127,19 +127,19 @@ describe("C2 metadata form", () => {
     // underneath (covered, not unmounted), aria-pressed flips.
     fireEvent.click(toggle);
     await waitFor(() => expect(view.container.querySelector("[data-pb-preview]")).not.toBeNull());
-    expect(view.container.querySelector("[data-pb-edit-rail]")).not.toBeNull();
+    expect(view.container.querySelector(".pb-editor-properties")).not.toBeNull();
     expect(view.container.querySelector("[data-pb-codemirror]")).not.toBeNull();
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
 
     // Toggle off: the overlay is gone, the editor + rail remain.
-    fireEvent.click(toggle);
+    fireEvent.click(view.getByRole("button", { name: "Write" }));
     await waitFor(() => expect(view.container.querySelector("[data-pb-preview]")).toBeNull());
-    expect(view.container.querySelector("[data-pb-edit-rail]")).not.toBeNull();
+    expect(view.container.querySelector(".pb-editor-properties")).not.toBeNull();
     expect(view.container.querySelector("[data-pb-codemirror]")).not.toBeNull();
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("does not fetch the preview while it is hidden — only after the toggle opens it", async () => {
+  it("shares automatic Write diagnostics with the visible Preview", async () => {
     const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("/preview")) return jsonResponse({ html: "<p>rendered</p>", headings: [] });
@@ -153,8 +153,8 @@ describe("C2 metadata form", () => {
       expect(el).not.toBeNull();
       return el!;
     });
-    // No /preview POST while hidden.
-    expect(fetchSpy.mock.calls.some(([input]) => (typeof input === "string" ? input : input!.toString()).includes("/preview"))).toBe(false);
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([input]) => String(input).includes("/preview"))).toBe(true));
+    expect(view.container.querySelector("[data-pb-preview]")).toBeNull();
 
     fireEvent.click(toggle);
     await waitFor(() =>

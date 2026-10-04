@@ -74,6 +74,43 @@ async function appendToEditor(view: ReturnType<typeof render>, text: string) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("W6 editor", () => {
+  it("keeps Done separate from modes and preserves a dirty draft when discard is cancelled", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const { view, history } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    });
+    await appendToEditor(view, "Keep this draft.\n");
+    const viewAction = view.container.querySelector<HTMLButtonElement>("[data-pb-editor] [data-pb-view-page]");
+    expect(viewAction).not.toBeNull();
+    expect(view.getByRole("button", { name: "Done editing" })).toBe(viewAction);
+    expect(viewAction?.textContent).toBe("Done");
+    expect(viewAction?.parentElement?.getAttribute("role")).toBe("group");
+    expect(viewAction?.parentElement?.getAttribute("aria-label")).toBe("Finish editing");
+    expect(viewAction?.closest('[aria-label="Editor mode"]')).toBeNull();
+    expect(view.container.querySelector("[data-pb-header] [data-pb-view-page]")).toBeNull();
+    fireEvent.click(viewAction!);
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes and view this page?");
+    expect(history.location.href).toBe("/docs/guides/deploy-guide?mode=edit");
+    expect(view.container.querySelector("[data-pb-codemirror]")?.textContent).toContain("Keep this draft.");
+  });
+
+  it("uses the addressed space and authored folder display labels in inert editor breadcrumbs", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
+    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+      qc.setQueryData(treeQuery.queryKey, { roots: [{ ...emptyTree.roots[0], displayName: "Documentation", tree: { ...emptyTree.roots[0].tree,
+        children: [{ type: "folder", name: "guides", title: "Team handbook", path: "guides", children: [], page_count: 1, url: "/docs/guides", description: null }] } }] });
+    });
+    const breadcrumb = await waitFor(() => {
+      const node = view.container.querySelector("[data-pb-editor-path]"); expect(node).not.toBeNull(); return node!;
+    });
+    expect(breadcrumb.textContent).toBe("Documentation/Team handbook/Deploy Guide");
+    expect(breadcrumb.querySelector("a")).toBeNull();
+    expect(breadcrumb.getAttribute("title")).toBe("docs/guides/deploy-guide.md");
+  });
+
   it("mounting /docs/<path>?mode=edit renders the editor seeded with the page markdown", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {

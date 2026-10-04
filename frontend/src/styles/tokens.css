@@ -21,17 +21,24 @@
 
   --pb-warmth: 5%; /* barely-there warm-paper blend applied to every consumed gray step */
 
+  --pb-warm-25: #fbfaf7;
   --pb-warm-50: #faf8f3;
+  --pb-warm-75: #f4f2ec;
   --pb-warm-100: #f3f0e9;
+  --pb-warm-150: #eeebe4;
   --pb-warm-200: #e7e2d8;
+  --pb-warm-250: #e4dfd4;
   --pb-warm-300: #d8d1c4;
   --pb-warm-400: #a8a092;
   --pb-warm-500: #767065;
+  --pb-warm-550: #6b645a;
+  --pb-warm-575: #5c564d;
   --pb-warm-600: #565049;
   --pb-warm-700: #423d37;
   --pb-warm-750: #322e29;
   --pb-warm-800: #292520;
   --pb-warm-850: #211d18;
+  --pb-warm-875: #1c1a16;
   --pb-warm-900: #1a1611;
   --pb-warm-925: #15120e;
   --pb-warm-950: #100d09;
@@ -61,6 +68,7 @@
 
   --pb-teal-50: #f0fdfa;
   --pb-teal-100: #ccfbf1;
+  --pb-teal-150: #d5ece6;
   --pb-teal-200: #99f6e4;
   --pb-teal-300: #5eead4;
   --pb-teal-400: #2dd4bf;
@@ -79,11 +87,13 @@
   --pb-green-600: #16a34a;
   --pb-green-700: #15803d;
 
+  --pb-green-800: #166534;
   --pb-amber-300: #fcd34d;
   --pb-amber-400: #fbbf24;
   --pb-amber-600: #d97706;
   --pb-amber-700: #b45309;
 
+  --pb-amber-800: #92400e;
   --pb-violet-300: #c4b5fd;
   --pb-violet-400: #a78bfa;
   --pb-violet-600: #7c3aed;
@@ -93,18 +103,32 @@
   color-scheme: light;
 
   /* surfaces */
-  --pb-surface: var(--pb-white);
-  --pb-surface-raised: var(--pb-gray-50);
-  --pb-surface-hover: var(--pb-gray-100);
+  --pb-surface: var(--pb-warm-25);
+  --pb-surface-raised: var(--pb-white);
+  --pb-search-scrim: color-mix(in srgb, var(--pb-gray-950) 48%, transparent);
+  --pb-surface-hover: var(--pb-warm-150);
   --pb-surface-active: var(--pb-gray-200);
 
+  --pb-surface-chrome: var(--pb-warm-75);
+  --pb-surface-field: var(--pb-white);
+  --pb-nav-active-bg: var(--pb-teal-150);
+  --pb-primary-bg: var(--pb-accent);
+  --pb-primary-border: var(--pb-accent);
+  --pb-primary-text: var(--pb-accent-contrast);
+  --pb-discussion-highlight-bg: var(--pb-accent-soft);
+  --pb-discussion-highlight-edge: var(--pb-accent);
+  --pb-selection-text: var(--pb-text);
+  --pb-callout-note-bg: var(--pb-accent-soft);
+  --pb-callout-warning-bg: var(--pb-warning-soft);
+  --pb-callout-danger-bg: var(--pb-danger-soft);
+
   /* text */
-  --pb-text: var(--pb-gray-900);
-  --pb-text-muted: var(--pb-gray-600);
-  --pb-text-faint: var(--pb-gray-400);
+  --pb-text: var(--pb-warm-875);
+  --pb-text-muted: var(--pb-warm-575);
+  --pb-text-faint: var(--pb-warm-550);
 
   /* edges */
-  --pb-border: var(--pb-gray-200);
+  --pb-border: var(--pb-warm-250);
   --pb-border-strong: var(--pb-gray-300);
 
   /* diagrams: distinct blocks with a small, dark shadow rather than a pale glow */
@@ -115,45 +139,45 @@
   /* interactive */
   --pb-accent: var(--pb-teal-700);
   --pb-accent-contrast: var(--pb-white);
-  --pb-accent-soft: color-mix(in srgb, var(--pb-accent) 13%, transparent);
+  --pb-accent-soft: color-mix(in srgb, var(--pb-accent) 8%, var(--pb-white));
   --pb-link: var(--pb-teal-700);
   --pb-link-hover: color-mix(in srgb, var(--pb-accent), #000 24%);
-  --pb-link-broken: var(--pb-red-600);
+  --pb-link-broken: var(--pb-warning);
   --pb-focus-ring: var(--pb-teal-600);
   --pb-selection-bg: var(--pb-teal-100);
   /* transient deep-link landing pulse (Resolution 1) — mirrors the selection highlight */
   --pb-deeplink-pulse: var(--pb-teal-100);
 
   /* code */
-  --pb-code-bg: var(--pb-gray-50);
-  --pb-code-border: var(--pb-gray-200);
+  --pb-code-bg: var(--pb-white);
+  --pb-code-border: var(--pb-border);
   --pb-code-text: var(--pb-gray-800);
   --pb-inline-code-bg: var(--pb-gray-100);
 
   /* syntax highlighting (consumed by the hljs class mapping in app.css) */
   --pb-syntax-keyword: var(--pb-violet-600);
-  --pb-syntax-string: var(--pb-green-700);
-  --pb-syntax-comment: var(--pb-gray-500);
-  --pb-syntax-literal: var(--pb-amber-700);
+  --pb-syntax-string: var(--pb-green-800);
+  --pb-syntax-comment: var(--pb-text-muted);
+  --pb-syntax-literal: var(--pb-warning);
   --pb-syntax-title: var(--pb-blue-700);
   --pb-syntax-attr: var(--pb-red-700);
 
   /* prose furniture */
   --pb-blockquote-border: var(--pb-gray-300);
-  --pb-table-header-bg: var(--pb-gray-50);
+  --pb-table-header-bg: var(--pb-warm-75);
 
   /* status dots (folder-landing page rows; the dot consumes the semantic tier, never a primitive) */
-  --pb-status-active: var(--pb-green-600);
-  --pb-status-draft: var(--pb-amber-600);
-  --pb-status-review: var(--pb-blue-600);
-  --pb-status-archived: var(--pb-gray-400);
-  --pb-status-deprecated: var(--pb-red-600);
+  --pb-status-active: var(--pb-green-700);
+  --pb-status-draft: var(--pb-amber-800);
+  --pb-status-review: var(--pb-blue-700);
+  --pb-status-archived: var(--pb-text-faint);
+  --pb-status-deprecated: var(--pb-red-700);
 
   /* feedback surfaces — the W6 conflict banner (danger) and the deleted/moved notice (warning) */
   --pb-danger: var(--pb-red-700);
-  --pb-danger-soft: color-mix(in srgb, var(--pb-red-600) 12%, transparent);
-  --pb-warning: var(--pb-amber-700);
-  --pb-warning-soft: color-mix(in srgb, var(--pb-amber-600) 14%, transparent);
+  --pb-danger-soft: color-mix(in srgb, var(--pb-red-600) 8%, var(--pb-white));
+  --pb-warning: var(--pb-amber-800);
+  --pb-warning-soft: color-mix(in srgb, var(--pb-amber-600) 8%, var(--pb-white));
 
   /* diff line tinting — the W7 history diff (added/removed line backgrounds) */
   --pb-diff-add-bg: color-mix(in srgb, var(--pb-green-600) 12%, transparent);
@@ -166,16 +190,28 @@
   /* surfaces */
   --pb-surface: var(--pb-gray-850);
   --pb-surface-raised: var(--pb-gray-800);
+  --pb-search-scrim: color-mix(in srgb, var(--pb-gray-950) 72%, transparent);
   --pb-surface-hover: var(--pb-gray-750);
   --pb-surface-active: var(--pb-gray-700);
 
+  --pb-surface-chrome: var(--pb-gray-800);
+  --pb-surface-field: var(--pb-gray-750);
+  --pb-nav-active-bg: var(--pb-accent-soft);
+  --pb-primary-bg: color-mix(in srgb, var(--pb-accent) 15%, transparent);
+  --pb-primary-border: color-mix(in srgb, var(--pb-accent) 40%, transparent);
+  --pb-primary-text: var(--pb-teal-300);
+  --pb-selection-text: var(--pb-text);
+  --pb-callout-note-bg: color-mix(in srgb, var(--pb-accent) 18%, var(--pb-surface));
+  --pb-callout-warning-bg: color-mix(in srgb, var(--pb-amber-400) 18%, var(--pb-surface));
+  --pb-callout-danger-bg: color-mix(in srgb, var(--pb-red-400) 16%, var(--pb-surface));
+
   /* text */
   --pb-text: var(--pb-gray-100);
-  --pb-text-muted: var(--pb-gray-400);
-  --pb-text-faint: var(--pb-gray-500);
+  --pb-text-muted: color-mix(in srgb, var(--pb-gray-400) 70%, var(--pb-gray-300));
+  --pb-text-faint: color-mix(in srgb, var(--pb-gray-400) 85%, var(--pb-gray-500));
 
   /* edges */
-  --pb-border: var(--pb-gray-750);
+  --pb-border: color-mix(in srgb, var(--pb-gray-750) 60%, var(--pb-gray-700));
   --pb-border-strong: var(--pb-gray-600);
 
   --pb-diagram-node-bg: var(--pb-surface-active);
@@ -188,21 +224,21 @@
   --pb-accent-soft: color-mix(in srgb, var(--pb-accent) 18%, transparent);
   --pb-link: var(--pb-teal-400);
   --pb-link-hover: color-mix(in srgb, var(--pb-accent), #fff 26%);
-  --pb-link-broken: var(--pb-red-400);
+  --pb-link-broken: var(--pb-warning);
   --pb-focus-ring: var(--pb-teal-400);
   --pb-selection-bg: var(--pb-teal-900);
   --pb-deeplink-pulse: var(--pb-teal-900);
 
   /* code */
   --pb-code-bg: var(--pb-gray-900);
-  --pb-code-border: var(--pb-gray-750);
+  --pb-code-border: var(--pb-border);
   --pb-code-text: var(--pb-gray-200);
   --pb-inline-code-bg: var(--pb-gray-750);
 
   /* syntax highlighting */
-  --pb-syntax-keyword: var(--pb-violet-400);
+  --pb-syntax-keyword: var(--pb-violet-300);
   --pb-syntax-string: var(--pb-green-400);
-  --pb-syntax-comment: var(--pb-gray-500);
+  --pb-syntax-comment: var(--pb-text-muted);
   --pb-syntax-literal: var(--pb-amber-400);
   --pb-syntax-title: var(--pb-blue-300);
   --pb-syntax-attr: var(--pb-red-300);
@@ -215,7 +251,7 @@
   --pb-status-active: var(--pb-green-400);
   --pb-status-draft: var(--pb-amber-400);
   --pb-status-review: var(--pb-blue-400);
-  --pb-status-archived: var(--pb-gray-500);
+  --pb-status-archived: var(--pb-text-faint);
   --pb-status-deprecated: var(--pb-red-400);
 
   /* feedback surfaces */

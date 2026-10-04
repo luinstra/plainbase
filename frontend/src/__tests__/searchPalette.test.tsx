@@ -8,7 +8,7 @@ import { QUICK_SWITCH_MAX } from "../components/SearchPalette";
 import { createAppRouter } from "../router";
 
 /**
- * Two-stage palette component tests (criteria 14, 18–23). Driven through the real Shell so
+ * Palette behavior is exercised through the real Shell so
  * the palette mounts once, alongside the router (memory history) and a primed tree cache.
  */
 
@@ -145,8 +145,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("two-stage search palette", () => {
-  it("opens on Cmd/Ctrl+K with the input focused, combobox role, and a Stage-1 listbox", async () => {
+describe("automatic search", () => {
+  it("appends content matches automatically while keeping immediate title matches", async () => {
+    const response = searchResponse("deploy");
+    response.hits[0].page_id = "content-only";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } })));
+    try {
+      setup();
+      await openPalette();
+      fireEvent.change(getInput(), { target: { value: "deploy" } });
+      expect(document.querySelector('[data-pb-search-item="jump"]')).not.toBeNull();
+      expect(document.querySelector("[data-pb-search-bridge]")).toBeNull();
+      await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
+      expect(document.querySelector('[data-pb-search-item="jump"]')).not.toBeNull();
+    } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+describe("search palette", () => {
+  it("opens on Cmd/Ctrl+K with focused combobox and one result list", async () => {
     setup();
     await openPalette();
     await waitFor(() => expect(getInput()).not.toBeNull());
@@ -154,10 +171,10 @@ describe("two-stage search palette", () => {
     expect(input.getAttribute("role")).toBe("combobox");
     expect(input.getAttribute("aria-controls")).toBe("pb-search-listbox");
     expect(document.activeElement).toBe(input);
-    expect(document.querySelector('[data-pb-search-stage="jump"]')).not.toBeNull();
+    expect(document.querySelector('[data-pb-search-list]')).not.toBeNull();
   });
 
-  it("Stage 1 is zero-network: typing recomputes the quick-switcher with no fetch", async () => {
+  it("typing recomputes cached title matches synchronously before the debounce", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     try {
@@ -175,7 +192,7 @@ describe("two-stage search palette", () => {
     }
   });
 
-  it("Stage 1 stays zero-network even when the tree cache is STALE (no refetch on palette open)", async () => {
+  it("opening with a stale tree cache never starts another tree request", async () => {
     // Regression guard (Codex review): the palette must read the cached tree passively. After
     // treeQuery's 60s staleTime elapses, a default useQuery observer would refetch /api/v1/tree on
     // mount — i.e. just opening the palette would hit the network. `refetchOnMount: false` fixes it.
@@ -219,79 +236,45 @@ describe("two-stage search palette", () => {
     expect(rows.length).toBeLessThanOrEqual(QUICK_SWITCH_MAX);
   });
 
-  it("ArrowDown/Up clamp at both ends (no wrap) and update aria-activedescendant", async () => {
-    setup();
-    await openPalette();
-    await waitFor(() => expect(getInput()).not.toBeNull());
+  it("arrows choose real options and clamp at both ends", async () => {
+    setup(); await openPalette();
     const input = getInput();
-    // Stage 1 default: no row actively selected → no activedescendant (criterion 22).
+    const rows = [...document.querySelectorAll('[role="option"]')];
     expect(input.getAttribute("aria-activedescendant")).toBeNull();
-
-    fireEvent.keyDown(input, { key: "ArrowUp" }); // nothing selected → clamp, still nothing
-    expect(input.getAttribute("aria-activedescendant")).toBeNull();
-
-    fireEvent.keyDown(input, { key: "ArrowDown" }); // first step lands on row 0
-    expect(input.getAttribute("aria-activedescendant")).toBe("pb-search-opt-jump-0");
-
-    // Arrow all the way down past the end → clamps at the bridge (last row), no wrap.
-    for (let i = 0; i < 20; i++) fireEvent.keyDown(input, { key: "ArrowDown" });
-    const max = document.querySelectorAll('[data-pb-search-item="jump"]').length; // bridge index
-    expect(input.getAttribute("aria-activedescendant")).toBe(`pb-search-opt-jump-${max}`);
-
-    // Arrow back up past the top → clamps at "no selection" again.
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(input.getAttribute("aria-activedescendant")).toBe(rows.at(-1)!.id);
     for (let i = 0; i < 20; i++) fireEvent.keyDown(input, { key: "ArrowUp" });
-    expect(input.getAttribute("aria-activedescendant")).toBeNull();
+    expect(input.getAttribute("aria-activedescendant")).toBe(rows[0].id);
+    for (let i = 0; i < 20; i++) fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input.getAttribute("aria-activedescendant")).toBe(rows.at(-1)!.id);
   });
 
-  it("scrolls the active row into view on ArrowDown, but not while Stage-1 selection is -1", async () => {
-    setup();
-    await openPalette();
-    await waitFor(() => expect(getInput()).not.toBeNull());
-    const input = getInput();
-
-    // Stage-1 default is -1 (no active row): the layout effect guards on activeId, so settling
-    // into the -1 default scrolls nothing.
-    await waitFor(() => expect(input.getAttribute("aria-activedescendant")).toBeNull());
+  it("scrolls the active option into view without scrolling on open", async () => {
+    setup(); await openPalette();
+    expect(getInput().getAttribute("aria-activedescendant")).toBeNull();
     (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
-    fireEvent.keyDown(input, { key: "ArrowUp" }); // already at -1 → clamp, stays -1
-    expect(input.getAttribute("aria-activedescendant")).toBeNull();
-    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
-
-    fireEvent.keyDown(input, { key: "ArrowDown" }); // first step lands on row 0
-    await waitFor(() => expect(input.getAttribute("aria-activedescendant")).toBe("pb-search-opt-jump-0"));
-
-    const activeRow = document.getElementById("pb-search-opt-jump-0")!;
-    expect(activeRow.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    fireEvent.keyDown(getInput(), { key: "ArrowDown" });
+    const row = document.getElementById(getInput().getAttribute("aria-activedescendant")!)!;
+    expect(row.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
   });
 
-  it("Enter with no row actively selected activates the bridge (snappy full-text path)", async () => {
-    setup();
-    await openPalette();
-    await waitFor(() => expect(getInput()).not.toBeNull());
-    // Type a query whose top fuzzy match exists, then Enter WITHOUT arrowing → bridge.
+  it("Enter without explicit selection opens the first available result", async () => {
+    const { history } = setup(); await openPalette();
     fireEvent.change(getInput(), { target: { value: "deploy" } });
-    await waitFor(() => expect(document.querySelector('[data-pb-search-item="jump"]')).not.toBeNull());
-    expect(getInput().getAttribute("aria-activedescendant")).toBeNull(); // nothing selected
     fireEvent.keyDown(getInput(), { key: "Enter" });
-    await waitFor(() => expect(document.querySelector('[data-pb-search-stage="search"]')).not.toBeNull());
+    await waitFor(() => expect(history.location.pathname).toBe("/docs/guides/deploy-guide"));
   });
 
-  it("activating the bridge at an empty query does nothing (no stage change, no fetch)", async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
+  it("empty query does not request full text and Enter with no result does nothing", async () => {
+    const fetchSpy = vi.fn(); vi.stubGlobal("fetch", fetchSpy);
     try {
-      setup();
-      await openPalette();
-      await waitFor(() => expect(getInput()).not.toBeNull());
-      // Empty query: arrow to the bridge and press Enter.
-      const bridge = document.querySelector("[data-pb-search-bridge]")!;
-      expect(bridge.getAttribute("aria-disabled")).toBe("true");
-      fireEvent.mouseDown(bridge);
-      expect(document.querySelector('[data-pb-search-stage="search"]')).toBeNull();
+      const empty = { roots: [{ ...tree.roots[0], tree: { ...tree.roots[0].tree, children: [] } }] };
+      const { history } = setup("/docs", empty); await openPalette();
+      fireEvent.keyDown(getInput(), { key: "Enter" });
+      expect(history.location.pathname).toBe("/docs");
       expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+      expect(document.querySelector('[data-pb-search]')).not.toBeNull();
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("Enter on a quick-switcher row navigates via pageHref; a loser navigates via /p/{root}/{id}", async () => {
@@ -314,7 +297,7 @@ describe("two-stage search palette", () => {
     await waitFor(() => expect(history.location.pathname).toBe(`/p/docs/${LOSER_ID}`));
   });
 
-  it("Stage 2 Enter on a hit pushes hit.url + #heading_id", async () => {
+  it("Content result Enter on a hit pushes hit.url + #heading_id", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => new Response(JSON.stringify(searchResponse(new URL(url, "http://x").searchParams.get("q") ?? "")), { status: 200, headers: { "content-type": "application/json" } })),
@@ -324,7 +307,6 @@ describe("two-stage search palette", () => {
       await openPalette();
       await waitFor(() => expect(getInput()).not.toBeNull());
       fireEvent.change(getInput(), { target: { value: "rollback" } });
-      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
       fireEvent.keyDown(getInput(), { key: "Enter" });
       await waitFor(() => expect(history.location.pathname + history.location.hash).toBe("/docs/guides/deploy-guide#rollback"));
@@ -333,7 +315,7 @@ describe("two-stage search palette", () => {
     }
   });
 
-  it("Stage 2 Enter on a hit with NO url pushes the hit's OWN root's permalink + #heading_id", async () => {
+  it("Content result Enter on a hit with NO url pushes the hit's OWN root's permalink + #heading_id", async () => {
     // The `??` branch of navigateToHit, uncovered until now: every other fixture hit carries a url.
     // The hit's root is `extra`, so a root-blind fallback is visible as a missing `/extra` segment
     // rather than as a wrong-looking id.
@@ -366,7 +348,6 @@ describe("two-stage search palette", () => {
       await openPalette();
       await waitFor(() => expect(getInput()).not.toBeNull());
       fireEvent.change(getInput(), { target: { value: "rollback" } });
-      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
       fireEvent.keyDown(getInput(), { key: "Enter" });
       await waitFor(() => expect(history.location.pathname + history.location.hash).toBe(`/p/extra/${LOSER_ID}#rollback`));
@@ -375,28 +356,16 @@ describe("two-stage search palette", () => {
     }
   });
 
-  it("Esc is stage-aware: Stage-2 Esc returns to Stage 1 (still open); Stage-1 Esc closes", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(searchResponse("rollback")), { status: 200, headers: { "content-type": "application/json" } })));
+  it("Escape closes even after content results arrive", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(searchResponse("rollback")))));
     try {
-      setup();
-      await openPalette();
-      await waitFor(() => expect(getInput()).not.toBeNull());
+      setup(); await openPalette();
       fireEvent.change(getInput(), { target: { value: "rollback" } });
-      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
-      await waitFor(() => expect(document.querySelector('[data-pb-search-stage="search"]')).not.toBeNull());
-      // The footer hint tracks what Esc actually does: in Stage 2 it goes BACK, not close.
-      expect(document.querySelector("[data-pb-search-foot]")?.textContent).toContain("back");
-
-      fireEvent.keyDown(getInput(), { key: "Escape" }); // Stage 2 → Stage 1, still open
-      await waitFor(() => expect(document.querySelector('[data-pb-search-stage="jump"]')).not.toBeNull());
-      expect(document.querySelector("[data-pb-search]")).not.toBeNull();
-      expect(document.querySelector("[data-pb-search-foot]")?.textContent).toContain("close"); // Stage 1: Esc closes
-
-      fireEvent.keyDown(getInput(), { key: "Escape" }); // Stage 1 → closed
-      await waitFor(() => expect(document.querySelector("[data-pb-search]")).toBeNull());
-    } finally {
-      vi.unstubAllGlobals();
-    }
+      await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
+      expect(document.querySelector("[data-pb-search-foot]")?.textContent).toContain("close");
+      fireEvent.keyDown(getInput(), { key: "Escape" });
+      expect(document.querySelector("[data-pb-search]")).toBeNull();
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("no-match copy names the SEARCHED query (the server's echo), not the live input", async () => {
@@ -409,7 +378,6 @@ describe("two-stage search palette", () => {
       await openPalette();
       await waitFor(() => expect(getInput()).not.toBeNull());
       fireEvent.change(getInput(), { target: { value: "zzz" } });
-      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelector("[data-pb-search-empty]")).not.toBeNull());
       expect(document.querySelector("[data-pb-search-empty]")?.textContent).toContain("No matches for");
       expect(document.querySelector("[data-pb-search-empty]")?.textContent).toContain("zzz");
@@ -418,25 +386,20 @@ describe("two-stage search palette", () => {
     }
   });
 
-  it("Backspace on an empty input in Stage 2 returns to Stage 1", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(searchResponse("")), { status: 200, headers: { "content-type": "application/json" } })));
+  it("clearing the input immediately hides old content results and leaves the palette open", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(searchResponse("rollback")))));
     try {
-      setup();
-      await openPalette();
-      await waitFor(() => expect(getInput()).not.toBeNull());
-      fireEvent.change(getInput(), { target: { value: "rollback" } });
-      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
-      await waitFor(() => expect(document.querySelector('[data-pb-search-stage="search"]')).not.toBeNull());
+      setup(); await openPalette(); fireEvent.change(getInput(), { target: { value: "rollback" } });
+      await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
       fireEvent.change(getInput(), { target: { value: "" } });
       fireEvent.keyDown(getInput(), { key: "Backspace" });
-      await waitFor(() => expect(document.querySelector('[data-pb-search-stage="jump"]')).not.toBeNull());
+      expect(document.querySelector('[data-pb-search-item="hit"]')).toBeNull();
+      expect(document.querySelector('[data-pb-search-item="jump"]')).not.toBeNull();
       expect(document.querySelector("[data-pb-search]")).not.toBeNull();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    } finally { vi.unstubAllGlobals(); }
   });
 
-  it("outside-click always closes, regardless of stage", async () => {
+  it("outside-click closes the palette", async () => {
     setup();
     await openPalette();
     await waitFor(() => expect(getInput()).not.toBeNull());
@@ -485,7 +448,6 @@ describe("two-stage search palette", () => {
       await openPalette();
       await waitFor(() => expect(getInput()).not.toBeNull());
       fireEvent.change(getInput(), { target: { value: "rollback" } });
-      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelector("[data-pb-search-loading]")).not.toBeNull());
       const loadingRow = document.querySelector("[data-pb-search-loading]")!;
       expect(loadingRow.getAttribute("role")).not.toBe("option");
@@ -498,12 +460,13 @@ describe("two-stage search palette", () => {
     }
   });
 
-  it("Tab keeps focus trapped on the input", async () => {
-    setup();
-    await openPalette();
-    await waitFor(() => expect(getInput()).not.toBeNull());
-    fireEvent.keyDown(getInput(), { key: "Tab" });
-    expect(document.activeElement).toBe(getInput());
+  it("Tab cycles the input and scope chips in both directions", async () => {
+    setup(); await openPalette();
+    const chips = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Search scope"] button')];
+    fireEvent.keyDown(getInput(), { key: "Tab" }); expect(document.activeElement).toBe(chips[0]);
+    fireEvent.keyDown(chips[0], { key: "Tab" }); expect(document.activeElement).toBe(chips[1]);
+    fireEvent.keyDown(chips[1], { key: "Tab" }); expect(document.activeElement).toBe(getInput());
+    fireEvent.keyDown(getInput(), { key: "Tab", shiftKey: true }); expect(document.activeElement).toBe(chips[1]);
   });
 
   it("a later query's hits win over an earlier slow response (stale-response race)", async () => {
@@ -529,7 +492,6 @@ describe("two-stage search palette", () => {
       await openPalette();
       await waitFor(() => expect(getInput()).not.toBeNull());
       fireEvent.change(getInput(), { target: { value: "rollback" } });
-      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
       // The rendered hit is the active query's (rollback), never the stale "rol" data.
       expect(within(document.querySelector("[data-pb-search-list]") as HTMLElement).queryByText("STALE")).toBeNull();
@@ -550,7 +512,7 @@ describe("two-stage search palette", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" }); // lands on row 0
     const active = document.querySelectorAll("[data-pb-search-active]");
     expect(active).toHaveLength(1);
-    expect(active[0].id).toBe("pb-search-opt-jump-0");
+    expect(active[0].id).toBe(getInput().getAttribute("aria-activedescendant"));
   });
 });
 
@@ -571,9 +533,9 @@ describe("the palette with more than one root", () => {
 
     const rows = [...document.querySelectorAll('[data-pb-search-item="jump"]')];
     // Both rows are the same page, in name and in path...
-    expect(rows.map((row) => row.querySelector("[data-pb-root-badge]")?.getAttribute("data-pb-root-badge"))).toEqual(["docs", "handbook"]);
+    expect([...document.querySelectorAll("[data-pb-search-group]")].map((row) => row.textContent)).toEqual(["docs", "handbook"]);
     // ...and the ONE thing that tells them apart is on screen, not just in the props.
-    expect(rows.map((row) => row.textContent)).toEqual(["Deploy Guidedocsguides/deploy-guide.md", "Deploy Guidehandbookguides/deploy-guide.md"]);
+    expect(rows.map((row) => row.textContent)).toEqual(["docs: Deploy Guideguides / deploy-guide.md", "handbook: Deploy Guideguides / deploy-guide.md"]);
   });
 
   it("badges each full-text hit with the root it came from", async () => {
@@ -586,10 +548,9 @@ describe("the palette with more than one root", () => {
       await openPalette();
       await waitFor(() => expect(getInput()).not.toBeNull());
       fireEvent.change(getInput(), { target: { value: "rollback" } });
-      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelectorAll('[data-pb-search-item="hit"]')).toHaveLength(2));
 
-      const badges = [...document.querySelectorAll('[data-pb-search-item="hit"] [data-pb-root-badge]')];
+      const badges = [...document.querySelectorAll("[data-pb-search-group]")];
       expect(badges.map((badge) => badge.textContent)).toEqual(["docs", "handbook"]);
     } finally {
       vi.unstubAllGlobals();
@@ -605,14 +566,123 @@ describe("the palette with more than one root", () => {
       setup(); // the one-root fixture — every legacy install
       await openPalette();
       await waitFor(() => expect(getInput()).not.toBeNull());
-      expect(document.querySelectorAll("[data-pb-root-badge]")).toHaveLength(0); // Stage 1
+      expect(document.querySelectorAll("[data-pb-root-badge]")).toHaveLength(0); // Cached suggestions
 
       fireEvent.change(getInput(), { target: { value: "rollback" } });
-      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
-      expect(document.querySelectorAll("[data-pb-root-badge]")).toHaveLength(0); // Stage 2
+      expect(document.querySelectorAll("[data-pb-root-badge]")).toHaveLength(0); // Content results
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("combined results and space scope", () => {
+  it("keeps All spaces distinct from a configured space named all", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const allRoot = { ...twoRootTree.roots[1], root: "all" };
+    const { queryClient } = setup("/docs", { roots: [tree.roots[0], allRoot] });
+    await openPalette();
+    const scopeGroup = within(document.querySelector('[aria-label="Search scope"]') as HTMLElement);
+    fireEvent.click(scopeGroup.getByRole("button", { name: "all" }));
+    expect(scopeGroup.getByRole("button", { name: "All spaces" }).getAttribute("aria-pressed")).toBe("false");
+    expect(scopeGroup.getByRole("button", { name: "all" }).getAttribute("aria-pressed")).toBe("true");
+    act(() => queryClient.setQueryData(treeQuery.queryKey, { roots: [allRoot, tree.roots[0]] }));
+    await waitFor(() => expect(scopeGroup.getByRole("button", { name: "all" }).getAttribute("aria-pressed")).toBe("true"));
+    fireEvent.click(scopeGroup.getByRole("button", { name: "All spaces" }));
+    expect(document.querySelectorAll('[data-pb-search-item="jump"]')).toHaveLength(5);
+    expect(errors.mock.calls.flat().join(" ")).not.toContain("same key");
+  });
+
+  it("scrolls the same selected result back into view when preceding groups move", async () => {
+    const { queryClient } = setup("/docs", twoRootTree);
+    await openPalette();
+    fireEvent.keyDown(getInput(), { key: "ArrowDown" });
+    const selected = getInput().getAttribute("aria-activedescendant")!;
+    const scroll = vi.mocked(Element.prototype.scrollIntoView);
+    scroll.mockClear();
+    act(() => queryClient.setQueryData(treeQuery.queryKey, { roots: [...twoRootTree.roots].reverse() }));
+    await waitFor(() => expect(document.querySelector('[data-pb-search-group]')?.getAttribute("data-pb-search-group")).toBe("handbook"));
+    expect(getInput().getAttribute("aria-activedescendant")).toBe(selected);
+    expect(scroll.mock.contexts).toContain(document.getElementById(selected));
+  });
+
+  it("keeps the selected quick match when asynchronous groups append, then hides stale content immediately", async () => {
+    const pending = new Map<string, (response: Response) => void>();
+    vi.stubGlobal("fetch", vi.fn((url: string) => new Promise<Response>((resolve) => pending.set(new URL(url, "http://x").searchParams.get("q")!, resolve))));
+    try {
+      setup("/docs", twoRootTree); await openPalette();
+      fireEvent.change(getInput(), { target: { value: "deploy" } });
+      fireEvent.keyDown(getInput(), { key: "ArrowDown" });
+      fireEvent.keyDown(getInput(), { key: "ArrowDown" });
+      const selected = getInput().getAttribute("aria-activedescendant");
+      await waitFor(() => expect(pending.has("deploy")).toBe(true));
+      const response = crossRootSearchResponse("deploy");
+      response.hits = response.hits.map((hit) => ({ ...hit, page_id: `content-${hit.page_id}` }));
+      await act(async () => pending.get("deploy")!(new Response(JSON.stringify(response))));
+      await waitFor(() => expect(document.querySelectorAll('[data-pb-search-item="hit"]')).toHaveLength(2));
+      expect(getInput().getAttribute("aria-activedescendant")).toBe(selected);
+      expect(document.getElementById(selected!)?.textContent).toContain("Deploy Guide");
+      fireEvent.change(getInput(), { target: { value: "rollback" } });
+      expect(getInput().getAttribute("aria-activedescendant")).toBeNull();
+      expect(document.querySelector('[data-pb-search-item="hit"]')).toBeNull();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("an earlier deferred response cannot replace a later query", async () => {
+    const pending = new Map<string, (response: Response) => void>();
+    vi.stubGlobal("fetch", vi.fn((url: string) => new Promise<Response>((resolve) => pending.set(new URL(url, "http://x").searchParams.get("q")!, resolve))));
+    try {
+      setup(); await openPalette();
+      fireEvent.change(getInput(), { target: { value: "old" } });
+      await waitFor(() => expect(pending.has("old")).toBe(true));
+      fireEvent.change(getInput(), { target: { value: "new" } });
+      await waitFor(() => expect(pending.has("new")).toBe(true));
+      const newer = searchResponse("new"); newer.hits[0].title = "Current result";
+      await act(async () => pending.get("new")!(new Response(JSON.stringify(newer))));
+      await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')?.textContent).toContain("Current result"));
+      const older = searchResponse("old"); older.hits[0].title = "Stale result";
+      await act(async () => pending.get("old")!(new Response(JSON.stringify(older))));
+      expect(document.querySelector('[data-pb-search-list]')?.textContent).not.toContain("Stale result");
+      expect(document.querySelector('[data-pb-search-item="hit"]')?.textContent).toContain("Current result");
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("scope uses its own request, keeps readonly spaces searchable, and excludes unavailable cached candidates", async () => {
+    const requests: URL[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const parsed = new URL(url, "http://x"); requests.push(parsed);
+      const response = crossRootSearchResponse(parsed.searchParams.get("q") ?? "");
+      response.hits = response.hits.map((hit) => ({ ...hit, page_id: `content-${hit.page_id}` }));
+      if (parsed.searchParams.has("root")) response.hits = response.hits.filter((hit) => hit.root === parsed.searchParams.get("root"));
+      return new Response(JSON.stringify(response));
+    }));
+    try {
+      const scopedTree = { roots: twoRootTree.roots.map((root) => ({ ...root, editable: false, displayName: "Guides" })) };
+      const { queryClient } = setup("/docs", scopedTree); await openPalette();
+      const scopeGroup = within(document.querySelector('[aria-label="Search scope"]') as HTMLElement);
+      fireEvent.click(scopeGroup.getByRole("button", { name: "Guides (handbook)" }));
+      expect(document.querySelectorAll('[data-pb-search-item="jump"]')).toHaveLength(1);
+      fireEvent.change(getInput(), { target: { value: "deploy" } });
+      await waitFor(() => expect(requests.some((url) => url.searchParams.get("root") === "handbook")).toBe(true));
+      await waitFor(() => expect(document.querySelectorAll('[data-pb-search-item="hit"]')).toHaveLength(1));
+      act(() => queryClient.setQueryData(treeQuery.queryKey, { roots: scopedTree.roots.map((root) => ({ ...root, available: root.root !== "handbook" })) }));
+      await waitFor(() => expect(document.querySelector('[data-pb-search-item="jump"]')).toBeNull());
+      expect(document.querySelector('[data-pb-search-item="hit"]')).toBeNull();
+      expect(document.querySelector('[data-pb-search-error]')?.textContent).toContain("unavailable");
+      fireEvent.click(scopeGroup.getByRole("button", { name: "All spaces" }));
+      expect(document.querySelectorAll('[data-pb-search-item="jump"]')).toHaveLength(1);
+      expect(scopeGroup.getByRole("button", { name: "Guides (handbook) (unavailable)" }).hasAttribute("disabled")).toBe(true);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("content errors retain quick matches without presenting stale hits as current", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "search_unavailable", message: "Search is unavailable" } }), { status: 503 })));
+    try {
+      setup(); await openPalette(); fireEvent.change(getInput(), { target: { value: "deploy" } });
+      await waitFor(() => expect(document.querySelector('[data-pb-search-error]')?.textContent).toContain("Search is unavailable"));
+      expect(document.querySelector('[data-pb-search-item="jump"]')).not.toBeNull();
+      expect(document.querySelector('[data-pb-search-empty]')).toBeNull();
+    } finally { vi.unstubAllGlobals(); }
   });
 });

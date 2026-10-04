@@ -37,7 +37,7 @@ fun Route.searchRoute(ctx: RouteContext) {
             val decoded = HashMap<String, String?>()
             // §A1 parameter NAMES are matched in raw form (deliberate): no real client percent-encodes
             // ASCII names, and decoding names would re-open the throwing decode this handler avoids.
-            for (name in listOf("q", "limit", "offset")) {
+            for (name in listOf("q", "limit", "offset", "root")) {
                 decoded[name] = runCatching {
                     raw[name]?.decodeURLQueryComponent(plusIsSpace = true)
                 }.getOrElse { failure ->
@@ -55,12 +55,15 @@ fun Route.searchRoute(ctx: RouteContext) {
             // Blocking JDBC must never park a CIO event-loop thread — the SearchDb contract makes this
             // route own the hop to Dispatchers.IO before the engine query runs (§B5). The read gate
             // (checkRead, inside the facade) fires off the event loop on Dispatchers.IO with the rest.
+            val pin = call.pinnedRootOrRefuse() ?: return@guarded
             val outcome = withContext(Dispatchers.IO) {
-                ctx.read.search(principal, q = decoded["q"], limit = decoded["limit"], offset = decoded["offset"])
+                ctx.read.search(principal, q = decoded["q"], limit = decoded["limit"], offset = decoded["offset"], root = pin.root)
             }
             when (outcome) {
                 is SearchService.Outcome.InvalidQuery ->
                     call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_QUERY, outcome.message)
+                is SearchService.Outcome.InvalidRoot ->
+                    call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_ROOT, outcome.message)
                 is SearchService.Outcome.Results ->
                     call.respondRest(SearchResponse.serializer(), outcome.payload.toDto())
             }

@@ -28,11 +28,12 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           />
         </button>
         <a
-          class="flex flex-1 items-center rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
+          class="flex min-w-0 flex-1 items-center rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
           href="/docs/guides"
         >
           <span
-            class="min-w-0"
+            class="min-w-0 truncate"
+            title="Guides"
           >
             Guides
           </span>
@@ -54,8 +55,28 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
               data-pb-status="active"
               href="/docs/guides/deploy-guide"
             >
+              <svg
+                aria-hidden="true"
+                class="pb-nav-page-icon mr-2 shrink-0 text-faint"
+                fill="none"
+                height="16"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                viewBox="0 0 18 20"
+                width="14"
+              >
+                <path
+                  d="M10.5 2H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6.5L10.5 2Z"
+                />
+                <path
+                  d="M10 2v5h5M6 11h6M6 14h4"
+                />
+              </svg>
               <span
-                class="min-w-0"
+                class="min-w-0 truncate"
+                title="Deploy Guide"
               >
                 Deploy Guide
               </span>
@@ -73,7 +94,7 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
         <button
           aria-controls="pb-folder-children-shadowed-folder"
           aria-expanded="true"
-          aria-label="Collapse shadowed-folder"
+          aria-label="Collapse Shadowed folder"
           class="rounded p-1 text-faint hover:bg-hovered hover:text-ink disabled:invisible"
           data-pb-folder-toggle="true"
           type="button"
@@ -84,12 +105,13 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           />
         </button>
         <span
-          class="flex flex-1 items-center px-2 py-1 font-semibold text-ink"
+          class="flex min-w-0 flex-1 items-center px-2 py-1 font-semibold text-ink"
         >
           <span
-            class="min-w-0"
+            class="min-w-0 truncate"
+            title="Shadowed folder"
           >
-            shadowed-folder
+            Shadowed folder
           </span>
         </span>
       </div>
@@ -108,8 +130,28 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
               data-pb-status="active"
               href="/p/docs/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
             >
+              <svg
+                aria-hidden="true"
+                class="pb-nav-page-icon mr-2 shrink-0 text-faint"
+                fill="none"
+                height="16"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                viewBox="0 0 18 20"
+                width="14"
+              >
+                <path
+                  d="M10.5 2H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6.5L10.5 2Z"
+                />
+                <path
+                  d="M10 2v5h5M6 11h6M6 14h4"
+                />
+              </svg>
               <span
-                class="min-w-0"
+                class="min-w-0 truncate"
+                title="Shadowed Page"
               >
                 Shadowed Page
               </span>

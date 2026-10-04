@@ -3,8 +3,9 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { rootDiscussionsQuery } from "../api/discussions";
 import { treeQuery } from "../api/queries";
+import { useDiscussionRefresh } from "../lib/useDiscussionRefresh";
 import { rootLabel } from "../lib/tree";
-import { DISCUSSION_STATES, DiscussionAvailability, DiscussionListRows, DiscussionReadError, ReadWindow, stateLabel, uniqueDiscussionItems } from "./DiscussionRead";
+import { DISCUSSION_STATES, DiscussionFilters, type DiscussionStatusFilter, DiscussionAvailability, DiscussionListRows, DiscussionReadError, ReadWindow, stateLabel, uniqueDiscussionItems } from "./DiscussionRead";
 
 export function DiscussionsIndex({ root }: { root?: string }) {
   return root === undefined ? <DiscussionsChooser /> : <RootDiscussions key={root} root={root} />;
@@ -24,10 +25,13 @@ function DiscussionsChooser() {
 
 function RootDiscussions({ root }: { root: string }) {
   const [state, setState] = useState<string | null>(null);
+  const [status, setStatus] = useState<DiscussionStatusFilter>("all");
   const query = useInfiniteQuery(rootDiscussionsQuery(root, state));
   const first = query.data?.pages[0];
+  useDiscussionRefresh(query, first?.discussions_available !== false);
   const latest = query.data?.pages.at(-1);
   const items = uniqueDiscussionItems(query.data?.pages ?? []);
+  const visible = items.filter((item) => status === "all" || item.status === status);
   return <ReadWindow>
     <Link to="/discussions" className="text-sm text-link">All roots</Link>
     <h1 className="text-3xl font-bold break-words">Discussions in {root}</h1>
@@ -36,18 +40,19 @@ function RootDiscussions({ root }: { root: string }) {
         <option value="">All states</option>
         {DISCUSSION_STATES.map((value) => <option key={value} value={value}>{stateLabel(value)}</option>)}
       </select></label>
-      <button type="button" className="pb-discussion-action" onClick={() => void query.refetch()} disabled={query.isRefetching}>Refresh</button>
+      <DiscussionFilters value={status} onChange={setStatus} more={!!query.hasNextPage} />
     </div>
     {query.isPending && <p role="status">Loading discussions…</p>}
     {query.isError && !query.data && <DiscussionReadError error={query.error} retry={() => void query.refetch()} />}
     {first && !first.discussions_available && <DiscussionAvailability reason={first.reason} />}
     {first?.discussions_available && <>
-      {query.isRefetchError && <p role="alert">Refresh failed. Showing earlier results; retry before relying on them.</p>}
+      {query.isRefetchError && <p role="alert">Refresh failed. Showing earlier results; retry before relying on them. <button type="button" className="pb-discussion-action" onClick={() => void query.refetch()}>Retry</button></p>}
       {items.length === 0 && !query.hasNextPage && <p>No discussions in this view.</p>}
       {latest?.discussions.length === 0 && query.hasNextPage && <p>No matches in this window. Load more to continue the scan.</p>}
-      <DiscussionListRows root={root} items={items} />
+      {status !== "all" && visible.length === 0 && <p>No {status} discussions in the loaded results.</p>}
+      <DiscussionListRows root={root} items={visible} />
       {query.isFetchNextPageError && <p role="alert">Could not load the next page. Earlier discussions remain available.</p>}
-      {query.hasNextPage && <button type="button" className="pb-discussion-action" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
+      {query.hasNextPage && <button type="button" className="pb-discussion-action" disabled={query.isFetching} onClick={() => void query.fetchNextPage({ cancelRefetch: false })}>
         {query.isFetchingNextPage ? "Loading…" : "Load more"}
       </button>}
     </>}

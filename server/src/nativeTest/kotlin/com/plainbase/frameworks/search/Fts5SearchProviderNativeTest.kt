@@ -25,6 +25,36 @@ import kotlin.test.assertTrue
 class Fts5SearchProviderNativeTest {
 
     @Test
+    fun `body snippets and bounded Unicode fallback stay within the indexed root`() {
+        val dir = Files.createTempDirectory("pb-native-body-snippet")
+        try {
+            SearchDb(dir.resolve("search.db")).use { db ->
+                val provider = Fts5SearchProvider(db)
+                val original = page("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a", "body.md", "Needle", "")
+                val extra = RootName.require("extra")
+                fun withBody(body: String, root: RootName) = original.copy(
+                    root = root,
+                    sections = original.sections +
+                        original.sections.single().copy(headingId = "intro", heading = "Introduction", body = body),
+                )
+                provider.rebuild(sequenceOf(withBody("😀".repeat(245), RootName.PRIMARY), withBody("Other body.", extra)))
+                for (term in listOf("needle", "eed")) {
+                    val hits = provider.search(SearchQuery(term, 10, 0)).hits
+                    val primary = hits.single { it.root == RootName.PRIMARY && it.headingId == null }
+                    assertEquals("😀".repeat(240) + "…", primary.snippet)
+                    assertTrue(primary.highlights.isEmpty())
+                    assertEquals("Other body.", hits.single { it.root == extra && it.headingId == null }.snippet)
+                }
+                val bodyHit = provider.search(SearchQuery("Other", 10, 0)).hits.single()
+                assertEquals(extra, bodyHit.root)
+                assertEquals(listOf("Other"), bodyHit.highlights.map { bodyHit.snippet.substring(it.start, it.end) })
+            }
+        } finally {
+            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
+
+    @Test
     fun `file db index, search, bm25 ordering, and snippet offsets work natively`() {
         val dir = Files.createTempDirectory("pb-native-search")
         try {
@@ -69,6 +99,13 @@ class Fts5SearchProviderNativeTest {
                 val hits = provider.search(SearchQuery("coexist", 10, 0)).hits
                 assertEquals(2, hits.size)
                 assertEquals(setOf(RootName.PRIMARY, extraRoot), hits.map { it.root }.toSet())
+                for (term in listOf("coexist", "exist")) {
+                    val scoped = SearchQuery(term, 1, 0, statusFilter = setOf("active"), rootFilter = extraRoot)
+                    assertEquals(1L, provider.search(scoped).total)
+                    assertEquals(extraRoot, provider.search(scoped).hits.single().root)
+                    assertTrue(provider.search(scoped.copy(offset = 1)).hits.isEmpty())
+                    assertEquals(1L, provider.search(scoped.copy(offset = 1)).total)
+                }
             }
         } finally {
             Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }

@@ -100,6 +100,28 @@ function submitCreate(view: ReturnType<typeof render>) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("W6 new-page creation", () => {
+  it("opens direct creation as a labelled dialog with collapsed options and no body field", async () => {
+    const { view } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201));
+    await waitFor(() => expect(view.getByRole("dialog", { name: "New page" })).toBeTruthy());
+    expect(view.container.querySelector("[data-pb-new-body]")).toBeNull();
+    expect(view.container.querySelector("details")?.open).toBe(false);
+    expect(view.getAllByRole("radio").map((radio) => radio.getAttribute("value"))).toEqual(["blank", "howto", "reference", "meeting"]);
+    fireEvent.click(view.getByRole("button", { name: "Edit URL" }));
+    expect(view.container.querySelector("details")?.open).toBe(true);
+    expect(document.activeElement).toBe(view.container.querySelector("[data-pb-new-slug]"));
+  });
+
+  it.each(PAGE_TEMPLATES)("the $label card submits its exact scaffold then opens the server-selected editor", async (template) => {
+    const { view, fetchSpy, history } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201));
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.click(view.getByRole("radio", { name: new RegExp(`^${template.label}`) }));
+    submitCreate(view);
+    await waitFor(() => expect(new URLSearchParams(history.location.search).get("mode")).toBe("edit"));
+    expect(history.location.pathname).toBe(NEW_URL);
+    const post = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(post[1]!.body as string).body).toBe(template.body || undefined);
+  });
+
   it("creating a page POSTs /api/v1/pages and navigates directly to the server-returned url", async () => {
     const { view, history } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       // Prime the destination so the post-navigation read renders without a live fetch.
@@ -132,6 +154,7 @@ describe("W6 new-page creation", () => {
       return el!;
     });
     expect(notice.textContent).toContain("not yet indexed");
+    expect(view.getByRole("button", { name: "Create page" }).hasAttribute("disabled")).toBe(true);
     // …and the flow stays on /new rather than silently landing on a possibly-unresolvable route.
     expect(history.location.pathname).toBe("/new");
   });
@@ -156,6 +179,7 @@ describe("W6 new-page creation", () => {
       return el!;
     });
     expect(notice.textContent).toContain("proposal");
+    expect(view.getByRole("button", { name: "Create page" }).hasAttribute("disabled")).toBe(true);
     // …and the flow stays on /new (no navigation to a page that was never applied).
     expect(history.location.pathname).toBe("/new");
   });
@@ -200,7 +224,8 @@ describe("W6 new-page creation", () => {
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
     fireEvent.click(view.container.querySelector<HTMLInputElement>("[data-pb-new-section]")!);
-    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-folder]")!, { target: { value: "runbooks" } });
+    fireEvent.change(view.getByRole("combobox", { name: "Folder" }), { target: { value: JSON.stringify(["custom"]) } });
+    fireEvent.change(view.getByRole("textbox", { name: "Custom folder path" }), { target: { value: "runbooks" } });
     fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "Runbooks" } });
     fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
 
@@ -274,8 +299,9 @@ describe("W6 new-page creation", () => {
     });
     fireEvent.click(newLink);
 
-    await waitFor(() => expect(history.location.pathname).toBe("/new"));
-    expect(history.location.search).toBe("?root=extra");
+    await waitFor(() => expect(view.getByRole("dialog", { name: "New page" })).toBeTruthy());
+    expect(history.location.pathname).toBe(EXTRA_URL);
+    expect(view.container.querySelector<HTMLInputElement>("[data-pb-new-custom-folder]")!.value).toBe("notes");
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
     submitCreate(view);
@@ -334,8 +360,8 @@ describe("W6 new-page creation", () => {
     const preview = view.container.querySelector("[data-pb-new-preview]");
     expect(preview).not.toBeNull();
     expect(preview!.textContent).toContain("≈");
-    expect(preview!.textContent).toContain("approx.");
-    expect(preview!.textContent).toContain("my-new-page.md");
+    expect(preview!.textContent).toContain("/docs/");
+    expect(preview!.textContent).toContain("my-new-page");
   });
 
   it("forwards the typed slug VERBATIM (case-preserving) — the server is the slug authority", async () => {
@@ -348,7 +374,7 @@ describe("W6 new-page creation", () => {
     fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "My New Page" } });
     fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-slug]")!, { target: { value: "My Page" } });
     // The preview lowercases (advisory)…
-    expect(view.container.querySelector("[data-pb-new-preview]")!.textContent).toContain("my-page.md");
+    expect(view.container.querySelector("[data-pb-new-preview]")!.textContent).toContain("/docs/my-page");
     fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
 
     // …but the POST carries the raw user slug, case preserved — the client never derives a slug.
@@ -367,12 +393,13 @@ describe("W6 new-page creation", () => {
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
-    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-folder]")!, { target: { value: "guides/" } });
+    fireEvent.change(view.getByRole("combobox", { name: "Folder" }), { target: { value: JSON.stringify(["custom"]) } });
+    fireEvent.change(view.getByRole("textbox", { name: "Custom folder path" }), { target: { value: "guides/" } });
     fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "My New Page" } });
 
     // (a) The advisory preview reflects the normalized folder — a single slash, never `guides//`.
     const preview = view.container.querySelector("[data-pb-new-preview]")!;
-    expect(preview.textContent).toContain("guides/my-new-page.md");
+    expect(preview.textContent).toContain("/docs/guides/my-new-page");
     expect(preview.textContent).not.toContain("guides//");
 
     fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
@@ -387,7 +414,7 @@ describe("W6 new-page creation", () => {
     expect(JSON.parse(post[1]!.body as string).folder).toBe("guides");
   });
 
-  it("section mode hides BOTH the slug input and the advisory preview", async () => {
+  it("section mode hides the slug input and previews the folder address", async () => {
     const { view } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201));
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -396,7 +423,7 @@ describe("W6 new-page creation", () => {
 
     fireEvent.click(view.container.querySelector<HTMLInputElement>("[data-pb-new-section]")!);
     expect(view.container.querySelector("[data-pb-new-slug]")).toBeNull();
-    expect(view.container.querySelector("[data-pb-new-preview]")).toBeNull();
+    expect(view.container.querySelector("[data-pb-new-preview]")!.textContent).toBe("≈ /docs");
   });
 
   it("a default (Blank) create omits the body field entirely (byte-identical to today)", async () => {
@@ -416,7 +443,7 @@ describe("W6 new-page creation", () => {
     expect("body" in JSON.parse(post[1]!.body as string)).toBe(false);
   });
 
-  it("selecting a template fills the body textarea and POSTs that scaffold", async () => {
+  it("selecting a template POSTs its unchanged scaffold without a body field", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("docs/guides/my-new-page").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID, "docs").queryKey, htmlResponse());
@@ -424,10 +451,9 @@ describe("W6 new-page creation", () => {
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
     fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "My New Page" } });
-    fireEvent.change(view.container.querySelector<HTMLSelectElement>("[data-pb-new-template]")!, { target: { value: "meeting" } });
+    fireEvent.click(view.getByRole("radio", { name: /^Meeting notes/ }));
 
-    const textarea = view.container.querySelector<HTMLTextAreaElement>("[data-pb-new-body]")!;
-    expect(textarea.value).toBe(MEETING_BODY);
+    expect(view.container.querySelector("[data-pb-new-body]")).toBeNull();
 
     fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
     const post = await waitFor(() => {
@@ -447,9 +473,10 @@ describe("W6 new-page creation", () => {
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
     fireEvent.click(view.container.querySelector<HTMLInputElement>("[data-pb-new-section]")!);
-    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-folder]")!, { target: { value: "runbooks" } });
+    fireEvent.change(view.getByRole("combobox", { name: "Folder" }), { target: { value: JSON.stringify(["custom"]) } });
+    fireEvent.change(view.getByRole("textbox", { name: "Custom folder path" }), { target: { value: "runbooks" } });
     fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "Runbooks" } });
-    fireEvent.change(view.container.querySelector<HTMLSelectElement>("[data-pb-new-template]")!, { target: { value: "meeting" } });
+    fireEvent.click(view.getByRole("radio", { name: /^Meeting notes/ }));
     fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
 
     const post = await waitFor(() => {
@@ -462,16 +489,15 @@ describe("W6 new-page creation", () => {
     expect(parsed.body).toBe(MEETING_BODY);
   });
 
-  it("a no-op template re-select does NOT clobber a manual body edit", async () => {
-    const { view } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201));
-
-    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
-    fireEvent.change(view.container.querySelector<HTMLSelectElement>("[data-pb-new-template]")!, { target: { value: "meeting" } });
-    const textarea = view.container.querySelector<HTMLTextAreaElement>("[data-pb-new-body]")!;
-    fireEvent.change(textarea, { target: { value: `${MEETING_BODY}## Extra\n` } });
-    // Re-firing the SAME value is a no-op — the edit survives.
-    fireEvent.change(view.container.querySelector<HTMLSelectElement>("[data-pb-new-template]")!, { target: { value: "meeting" } });
-    expect(textarea.value).toBe(`${MEETING_BODY}## Extra\n`);
+  it("switching back to Blank removes the template body from the request", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ error: { code: "bad_request", message: "retry" } }, 400));
+    await waitFor(() => expect(view.getByRole("dialog", { name: "New page" })).toBeTruthy());
+    fireEvent.click(view.getByRole("radio", { name: /^Meeting notes/ }));
+    fireEvent.click(view.getByRole("radio", { name: /^Blank/ }));
+    submitCreate(view);
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+    const post = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(post[1]!.body as string).body).toBeUndefined();
   });
 
   it("a create collision surfaces page_exists with the server path", async () => {

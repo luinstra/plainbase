@@ -11,13 +11,13 @@ export function useDiscussionSelection(wrapper: RefObject<HTMLDivElement | null>
   useEffect(() => { candidate.current = null; }, [identity, hash]);
   useEffect(() => {
     const beginSelection = (event: PointerEvent) => {
-      const article = wrapper.current?.querySelector<HTMLElement>(".pb-prose");
+      const article = wrapper.current?.querySelector<HTMLElement>("[data-pb-selection-surface], .pb-prose");
       // Clicking blank space in the article can remove every range without leaving a caret.
       // Discard the previous passage; a new drag will repopulate it through selectionchange.
       if (event.target instanceof Node && article?.contains(event.target)) candidate.current = null;
     };
     const retain = () => {
-      const article = wrapper.current?.querySelector<HTMLElement>(".pb-prose");
+      const article = wrapper.current?.querySelector<HTMLElement>("[data-pb-selection-surface], .pb-prose");
       const selection = window.getSelection();
       const source = current.current;
       if (!article || !selection || selection.rangeCount !== 1 || !source.hash) return;
@@ -37,7 +37,7 @@ export function useDiscussionSelection(wrapper: RefObject<HTMLDivElement | null>
     const source = current.current;
     if (!source.ready || !source.hash || source.identity !== identity || source.hash !== hash)
       return { reason: "The page could not be read. Reload it before selecting a passage." };
-    const article = wrapper.current?.querySelector<HTMLElement>(".pb-prose");
+    const article = wrapper.current?.querySelector<HTMLElement>("[data-pb-selection-surface], .pb-prose");
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 1) return unavailable;
     if (article && selection?.rangeCount === 1) {
@@ -53,7 +53,7 @@ export function useDiscussionSelection(wrapper: RefObject<HTMLDivElement | null>
   const capture = (rejectOutsideSelection = false): SelectionCapture => captureIfSelected(rejectOutsideSelection) ?? unavailable;
   const reset = () => {
     candidate.current = null;
-    const article = wrapper.current?.querySelector<HTMLElement>(".pb-prose");
+    const article = wrapper.current?.querySelector<HTMLElement>("[data-pb-selection-surface], .pb-prose");
     const selection = window.getSelection();
     if (!article || !selection || selection.rangeCount !== 1) return;
     const range = selection.getRangeAt(0);

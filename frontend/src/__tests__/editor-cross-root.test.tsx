@@ -141,3 +141,51 @@ describe("editor mount identity across roots", () => {
     await waitFor(() => expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(true));
   });
 });
+
+it.each(["root", "path"])("cancels held diagnostics across %s identity changes and unmount", async (change) => {
+  const nextRoot = change === "root" ? "extra" : "docs";
+  const nextUrl = change === "root" ? EXTRA_URL : "/docs/permalink/other";
+  const nextRecord = { ...pageResponse(nextRoot, nextUrl, EXTRA),
+    id: change === "root" ? DUP_ID : "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+    path: change === "root" ? "permalink/hub.md" : "permalink/other.md" };
+  const held: { signal: AbortSignal; complete: (response: Response) => void }[] = [];
+  const diagnostic = (source: string, target: string) => {
+    const start = new TextEncoder().encode(source.slice(0, source.indexOf(source.includes("MAIN BODY") ? "MAIN BODY" : "EXTRA BODY"))).length;
+    return jsonResponse({ html: `<span data-pb-link-error="not_found" data-pb-link-src="${start}-${start + 4}" data-pb-link-target="${target}">broken</span>`, headings: [] });
+  };
+  const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/preview")) {
+      if (String(init?.body).includes("MAIN BODY") || String(init?.body).includes("hold-unmount")) {
+        return new Promise<Response>((complete) => { held.push({ signal: init!.signal as AbortSignal, complete }); });
+      }
+      return diagnostic(EXTRA, "current.md");
+    }
+    if (url.includes("/tree")) return jsonResponse(twoRoots);
+    return jsonResponse(nextRecord);
+  });
+  vi.stubGlobal("fetch", fetchSpy);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(treeQuery.queryKey, twoRoots);
+  client.setQueryData(pageByPathQuery("docs/permalink/hub").queryKey, pageResponse("docs", MAIN_URL, MAIN));
+  client.setQueryData(pageByPathQuery(nextUrl.slice(1)).queryKey, nextRecord);
+  const history = createMemoryHistory({ initialEntries: [`${MAIN_URL}?mode=edit`] });
+  const router = createAppRouter(client, history);
+  const view = render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
+  await waitFor(() => expect(held).toHaveLength(1));
+  await act(async () => { history.push(`${nextUrl}?mode=edit`); });
+  await waitFor(() => expect(view.getByRole("button", { name: "Broken link: current.md" })).toBeTruthy());
+  expect(held[0].signal.aborted).toBe(true);
+  await act(async () => held[0].complete(diagnostic(MAIN, "stale.md")));
+  expect(view.queryByRole("button", { name: "Broken link: stale.md" })).toBeNull();
+  expect(view.getByRole("button", { name: "Broken link: current.md" })).toBeTruthy();
+  expect(fetchSpy.mock.calls.some(([input]) => String(input).includes(`root=${nextRoot}`) && String(input).includes(encodeURIComponent(nextRecord.path)))).toBe(true);
+  await appendToBody(view, "hold-unmount");
+  expect(view.queryByRole("button", { name: "Broken link: current.md" })).toBeNull();
+  await waitFor(() => expect(held).toHaveLength(2));
+  view.unmount();
+  expect(held[1].signal.aborted).toBe(true);
+  await act(async () => held[1].complete(diagnostic(EXTRA, "after-unmount.md")));
+  expect(view.container.textContent).toBe("");
+  client.clear();
+});

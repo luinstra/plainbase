@@ -32,7 +32,7 @@ for (const width of [1280, 1848, 1024, 375]) {
     await gotoExpectStatus(page, "/extra/release-checklist");
     await read;
     const rail = page.locator("[data-pb-rail]");
-    const info = rail.locator("[data-pb-rail-meta]");
+    const info = page.locator("[data-pb-rail-meta]");
     const panel = rail.locator("[data-pb-discussion-panel]");
     await expect(panel.locator(".pb-discussion-list > li")).toHaveCount(2);
     await expect(info).toBeVisible();
@@ -43,15 +43,16 @@ for (const width of [1280, 1848, 1024, 375]) {
         const box = document.querySelector(selector)!.getBoundingClientRect();
         return { x: box.x, width: box.width, top: box.top, bottom: box.bottom };
       };
-      return { article: rect("[data-pb-page-article] .pb-prose"), main: rect("[data-pb-main]"),
+      return { article: rect("[data-pb-page-article] [data-pb-selection-surface]"), title: rect("[data-pb-page-article] h1"), main: rect("[data-pb-main]"),
         rail: rect("[data-pb-rail]"), info: rect("[data-pb-rail-meta]") };
     });
     const before = await geometry();
-    const newDiscussion = await panel.getByRole("button", { name: "New discussion" }).boundingBox();
-    const refresh = await panel.getByRole("button", { name: "Refresh", exact: true }).boundingBox();
-    expect(refresh!.x - (newDiscussion!.x + newDiscussion!.width)).toBeGreaterThanOrEqual(8);
-    const first = await panel.locator(".pb-discussion-list > li").first().boundingBox();
-    expect(before.info.bottom).toBeLessThanOrEqual(first!.y);
+    const newDiscussion = await panel.getByRole("button", { name: "Start a discussion" }).boundingBox();
+    await expect(panel.getByRole("button", { name: "Refresh", exact: true })).toHaveCount(0);
+    const filters = await panel.getByRole("group", { name: "Discussion status" }).boundingBox();
+    expect(filters!.y).toBeGreaterThanOrEqual(newDiscussion!.y + newDiscussion!.height);
+    expect(before.info.top).toBeGreaterThanOrEqual(before.title.bottom);
+    expect(before.info.bottom).toBeLessThan(before.article.bottom);
     if (width >= 1280) {
       await expect(page.locator("[data-pb-sidebar]")).toBeVisible();
       // Main's 48px left padding leaves breathing room beside the visible navigation sidebar.
@@ -60,10 +61,10 @@ for (const width of [1280, 1848, 1024, 375]) {
       await expect(rail.locator("[data-pb-toc]")).toBeVisible();
       expect(await rail.evaluate((node) => getComputedStyle(node).scrollbarGutter)).toBe("stable");
     } else {
-      expect(before.article.bottom).toBeLessThanOrEqual(before.info.top);
-      await expect(rail.locator("[data-pb-toc]")).toBeHidden();
+      expect(before.article.bottom).toBeLessThanOrEqual(before.rail.top);
+      await expect(rail.locator("[data-pb-toc]")).toBeVisible();
       expect(await rail.evaluate((node) => getComputedStyle(node).maxHeight)).toBe("none");
-      await expect(page.getByRole("button", { name: "New discussion" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Start a discussion" })).toBeVisible();
     }
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollbarGutter)).toBe("stable");
     expect(await panel.evaluate((node) => getComputedStyle(node).fontSize)).toBe("16px");
@@ -227,13 +228,13 @@ for (const width of [1280, 1848, 1024, 375]) {
       await stable();
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
       await expect(actions).toBeFocused();
-      // Clear the reattachment selection: New discussion now intentionally uses selected text.
+      // Clear the reattachment selection: Start a discussion now intentionally uses selected text.
       await page.locator("[data-pb-page-article] p").filter({ hasText: quote }).click();
       await expect.poll(() => page.evaluate(() => window.getSelection()?.isCollapsed)).toBe(true);
     }
     await page.getByRole("button", { name: "Close discussion" }).click();
     await expect(panel.locator(`[data-pb-discussion-id='${threadId}']`)).toBeFocused();
-    await page.getByRole("button", { name: "New discussion" }).click();
+    await page.getByRole("button", { name: "Start a discussion" }).click();
     await expect(page.getByRole("heading", { name: "New page discussion" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Comment" })).toBeFocused();
     await stable();
@@ -243,7 +244,9 @@ for (const width of [1280, 1848, 1024, 375]) {
         `---\ntitle: Release retrospective\nid: 01970000-0000-7000-8000-00000000f011\n---\n\n# Release retrospective\n\nA place to record what went well and what we should change for the next release.\n`);
       await expect.poll(async () => (await request.get("/api/v1/pages/by-path/extra/release-retrospective")).status()).toBe(200);
       await gotoExpectStatus(page, "/extra/release-retrospective");
-      await expect(page.getByText("Start the conversation")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Start a discussion", exact: true })).toHaveCount(1);
+      await expect(page.getByRole("button", { name: "Start a discussion", exact: true })).toBeVisible();
+      await expect(page.getByRole("group", { name: "Discussion status" })).toHaveCount(0);
       await themes("empty");
     }
   });
@@ -302,7 +305,7 @@ test("rooted discussion reads survive a page deletion and a duplicate id in anot
   const panelHeading = page.locator("[data-pb-discussion-panel] h3");
   await expect(panelHeading).toHaveText("Conversation");
   await expect(panelHeading).toBeFocused();
-  await openDiscussionActions(page, "Refresh");
+  await openDiscussionActions(page, "Resolve discussion");
   await expect(page.getByRole("link", { name: "Open full discussion" })).toBeVisible();
   await page.getByText("Discussion details", { exact: true }).click();
   await expect(page.locator("[data-pb-discussion-panel] h4").filter({ hasText: "Original anchor" })).toHaveCount(1);
@@ -358,7 +361,7 @@ test("selection preview, rooted creation, reply and stale-source recovery use re
   }
 
   await selectAna();
-  await page.getByRole("button", { name: "New discussion" }).click();
+  await page.getByRole("button", { name: "Start a discussion" }).click();
   await expect(page.getByText("Whole block selected")).toBeVisible();
   await expect(page.locator(".pb-discussion-panel .pb-discussion-quote")).toContainText("banana");
   await page.getByRole("button", { name: "Confirm passage" }).click();
@@ -390,7 +393,7 @@ test("selection preview, rooted creation, reply and stale-source recovery use re
   }).toBe(true);
 
   await page.getByRole("button", { name: "Close discussion" }).click();
-  await page.getByRole("button", { name: "New discussion" }).click();
+  await page.getByRole("button", { name: "Start a discussion" }).click();
   await page.getByRole("textbox", { name: "Comment" }).fill("Whole page discussion");
   const pagePost = page.waitForResponse((response) => response.url().includes(`/api/v1/pages/${pageId}/discussions?root=extra`) && response.request().method() === "POST");
   await page.getByRole("button", { name: "Create discussion" }).click();
@@ -403,7 +406,7 @@ test("selection preview, rooted creation, reply and stale-source recovery use re
   }).toBe("page");
 
   await selectAna();
-  await page.getByRole("button", { name: "New discussion" }).click();
+  await page.getByRole("button", { name: "Start a discussion" }).click();
   await expect(page.getByRole("button", { name: "Confirm passage" })).toBeVisible();
   await page.getByRole("button", { name: "Confirm passage" }).click();
   await page.getByRole("textbox", { name: "Comment" }).fill("Keep this draft on source change");
@@ -523,8 +526,7 @@ test("extra-root lifecycle reattaches twice, recovers a stale preview and retain
   const changed = initial.replace(originalQuote, "banana\n\nOther location 😀");
   writeFileSync(file, changed);
   await expect.poll(async () => (await (await request.get(detailUrl)).json()).discussion.state).toBe("changed");
-  await openDiscussionActions(page, "Refresh");
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByText("Was around here", { exact: true })).toBeVisible();
 
   async function selectPassage(text: string, start = 0, end = text.length) {
@@ -584,8 +586,7 @@ test("extra-root lifecycle reattaches twice, recovers a stale preview and retain
 
   rmSync(file);
   await expect.poll(async () => (await (await request.get(detailUrl)).json()).discussion.state).toBe("orphaned");
-  await openDiscussionActions(page, "Refresh");
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByText("Page no longer found", { exact: true })).toBeVisible();
   await openDiscussionActions(page, "Reattach");
   await page.getByRole("button", { name: "Reattach", exact: true }).click();

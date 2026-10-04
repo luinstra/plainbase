@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { useRouter, useRouterState } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 import { treeQuery } from "../api/queries";
 import type { RootTree, TreeDiagram, TreeFolder, TreeNode, TreePage } from "../api/types";
 import { readSidebarPreferences, writeSidebarPreferences } from "../lib/sidebarPreferences";
@@ -33,7 +33,7 @@ import { RootSelector } from "./RootSelector";
  * containing an internal root name is noise. A root that is not SERVING gets the outage notice
  * instead of its tree, never an empty list - see [RootSection].
  */
-export function Sidebar() {
+export function Sidebar({ showReview = false }: { showReview?: boolean }) {
   const { data } = useQuery(treeQuery);
   const router = useRouter();
   const currentPathname = useRouterState({ select: (s) => s.location.pathname });
@@ -66,15 +66,14 @@ export function Sidebar() {
     });
   };
 
-  if (!data) return <aside className="pb-sidebar w-[clamp(16rem,20vw,22rem)] shrink-0" data-pb-sidebar />;
   return (
     <aside
-      className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
+      className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-chrome max-lg:hidden"
       data-pb-sidebar
     >
-      {data.roots.length > 1 && selectedEntry && (
+      {roots.length > 1 && selectedEntry && (
         <RootSelector
-          entries={data.roots}
+          entries={roots}
           selected={selectedEntry}
           onSelect={(entry) => {
             if (!entry.tree.url) return;
@@ -95,6 +94,15 @@ export function Sidebar() {
           initialOpenFolders={preferences.openFolders[selectedEntry.root] ?? []}
           onOpenFoldersChange={(paths) => storeOpenFolders(selectedEntry.root, paths)}
         />
+      )}
+      {showReview && (
+        <nav aria-label="Workspace" className="mx-4 border-t border-edge py-3 text-sm">
+          <Link to="/review" aria-label="Review queue" data-pb-review-nav
+            className="pb-review-nav flex items-center rounded px-2 py-1.5 text-muted hover:bg-hovered hover:text-ink"
+            aria-current={currentPathname === "/review" || currentPathname.startsWith("/review/") ? "page" : undefined}>
+            Review queue
+          </Link>
+        </nav>
       )}
     </aside>
   );
@@ -168,16 +176,20 @@ export function SidebarNav({
   const [openFolders, setOpenFolders] = useState(
     () => new Set([...initialOpenFolders, ...ancestorFolderPaths(tree, root, currentPathname)]),
   );
+  const routeIdentity = JSON.stringify([root, currentPathname.replace(/\/+$/, "")]);
+  const applied = useRef({ identity: routeIdentity, paths: new Set(ancestorFolderPaths(tree, root, currentPathname)) });
   useEffect(() => {
-    const ancestors = ancestorFolderPaths(tree, root, currentPathname);
+    if (applied.current.identity !== routeIdentity) applied.current = { identity: routeIdentity, paths: new Set() };
+    const ancestors = ancestorFolderPaths(tree, root, currentPathname).filter((path) => !applied.current.paths.has(path));
     if (ancestors.length === 0) return;
+    ancestors.forEach((path) => applied.current.paths.add(path));
     // Navigation-derived ancestor opens are not persisted by this effect, but the next explicit
     // toggle stores the whole open set, ancestors included.
     setOpenFolders((current) => {
       if (ancestors.every((path) => current.has(path))) return current;
       return new Set([...current, ...ancestors]);
     });
-  }, [currentPathname, root, tree]);
+  }, [currentPathname, root, tree, routeIdentity]);
 
   // Compute-before-set is deliberate: the persist callback needs the next set, and a functional
   // updater would either nest the parent's setPreferences inside this updater or move persistence
@@ -300,7 +312,7 @@ function DiagramItem({
         aria-current={active ? "page" : undefined}
         className={active ? "flex items-center rounded px-2 py-1 text-ink" : "flex items-center rounded px-2 py-1 text-ink hover:bg-hovered"}
       >
-        <span className="min-w-0">{diagram.title}</span>
+        <span className="min-w-0 truncate" title={diagram.title}>{diagram.title}</span>
       </a>
     </li>
   );
@@ -344,7 +356,7 @@ function FolderItem({
   // Content paths are unique per folder; encodeURIComponent keeps that uniqueness (injective)
   // while clearing every id-hostile character (whitespace, quotes) from the DOM id.
   const childrenId = `pb-folder-children-${encodeURIComponent(folder.path)}`;
-  const labelContent = <span className="min-w-0">{label}</span>;
+  const labelContent = <span className="min-w-0 truncate" title={label}>{label}</span>;
   return (
     <li data-pb-nav-item="folder">
       <div className="flex items-center">
@@ -366,14 +378,14 @@ function FolderItem({
             aria-current={active ? "page" : undefined}
             className={
               active
-                ? "flex flex-1 items-center rounded px-2 py-1 font-semibold text-ink"
-                : "flex flex-1 items-center rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
+                ? "flex min-w-0 flex-1 items-center rounded px-2 py-1 font-semibold text-ink"
+                : "flex min-w-0 flex-1 items-center rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
             }
           >
             {labelContent}
           </a>
         ) : (
-          <span className="flex flex-1 items-center px-2 py-1 font-semibold text-ink">{labelContent}</span>
+          <span className="flex min-w-0 flex-1 items-center px-2 py-1 font-semibold text-ink">{labelContent}</span>
         )}
       </div>
       {open && expandable && (
@@ -424,7 +436,12 @@ function PageRow({
             : "flex items-center rounded px-2 py-1 text-ink hover:bg-hovered"
         }
       >
-        <span className="min-w-0">{label}</span>
+        <svg className="pb-nav-page-icon mr-2 shrink-0 text-faint" width="14" height="16" viewBox="0 0 18 20"
+          fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M10.5 2H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6.5L10.5 2Z" />
+          <path d="M10 2v5h5M6 11h6M6 14h4" />
+        </svg>
+        <span className="min-w-0 truncate" title={label}>{label}</span>
       </a>
     </li>
   );

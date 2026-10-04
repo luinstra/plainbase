@@ -19,13 +19,13 @@ function revealButton(options: ButtonOptions) {
 export function discussionButton(options: ButtonOptions) {
   revealButton(options);
   // Reselect is the existing passage action once creation has started.
-  if (options?.name === "New discussion" && !screen.queryByRole("button", options)) return screen.getByRole("button", { name: "Reselect" });
+  if (options?.name === "Start a discussion" && !screen.queryByRole("button", options)) return screen.getByRole("button", { name: "Reselect" });
   return screen.getByRole("button", options);
 }
 
 export async function findDiscussionButton(options: ButtonOptions) {
   const name = options?.name;
-  if (name === "New discussion" && !screen.queryByRole("button", options) && screen.queryByRole("button", { name: "Reselect" }))
+  if (name === "Start a discussion" && !screen.queryByRole("button", options) && screen.queryByRole("button", { name: "Reselect" }))
     return screen.getByRole("button", { name: "Reselect" });
   if (typeof name === "string" && ["Edit comment", "Retract comment", "Purge comment", "Purge comment (admin)"].includes(name)) {
     await screen.findByLabelText(/Actions for .*'s comment/);

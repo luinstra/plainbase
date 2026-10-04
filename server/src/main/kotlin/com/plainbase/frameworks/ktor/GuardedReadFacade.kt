@@ -215,9 +215,13 @@ class GuardedReadFacade(
         return payload
     }
 
-    override fun search(principal: Principal, q: String?, limit: String?, offset: String?): SearchService.Outcome {
+    override fun search(principal: Principal, q: String?, limit: String?, offset: String?, root: RootName?): SearchService.Outcome {
         policy.checkRead(principal, "search")
-        return searchService.search(q = q, limit = limit, offset = offset)
+        if (root != null) {
+            if (registry.byName(root) == null) return SearchService.Outcome.InvalidRoot("Unknown root: '${root.value}'")
+            requireAvailable(root)
+        }
+        return searchService.search(q = q, limit = limit, offset = offset, root = root)
     }
 
     override fun tree(principal: Principal): String {

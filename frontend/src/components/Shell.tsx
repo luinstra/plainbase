@@ -1,15 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, Outlet, useRouter, useRouterState } from "@tanstack/react-router";
+import { Link, Outlet, useRouter } from "@tanstack/react-router";
 import { useState, type MouseEvent } from "react";
 import { sessionQuery, treeQuery } from "../api/queries";
 import type { RootTree } from "../api/types";
 import { interceptableHref } from "../lib/links";
-import { entryFor, primaryEntry, rootAcceptsWrites, rootLabel, rootOfLocation } from "../lib/tree";
+import { entryFor, primaryEntry, rootAcceptsWrites, rootLabel } from "../lib/tree";
 import { ROOT_UNAVAILABLE } from "./ErrorView";
 import { PageActionsTarget } from "./PageActions";
 import { SearchPalette } from "./SearchPalette";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
+import { NewPageLink, NewPageProvider, useNewPageFlow } from "./NewPageFlow";
 
 /** Opens the (always-mounted) palette via its custom event — the click counterpart to Cmd/Ctrl+K. */
 function SearchTrigger() {
@@ -17,25 +18,27 @@ function SearchTrigger() {
     <button
       type="button"
       onClick={() => document.dispatchEvent(new CustomEvent("pb:search-open"))}
-      className="pb-search-trigger flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink"
+      className="pb-search-trigger flex min-w-0 items-center gap-2.5 rounded-md border border-edge bg-field px-3 py-2 text-sm text-muted hover:text-ink"
       data-pb-search-trigger
       aria-label="Search"
     >
-      <span aria-hidden="true">⌕</span>
-      <span className="max-sm:hidden">Search</span>
-      <kbd className="ml-2 rounded border border-edge px-1.5 font-mono text-xs text-faint max-sm:hidden">⌘K</kbd>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true" className="shrink-0">
+        <circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" />
+      </svg>
+      <span className="truncate max-sm:hidden">Search your docs…</span>
+      <kbd className="ml-auto rounded border border-edge px-1.5 font-mono text-xs text-faint max-sm:hidden">⌘K</kbd>
     </button>
   );
 }
 
 /** The "New" affordance's chrome, shared by the live link and its disabled twin (see [Shell]). */
-const NEW_PAGE_CLASS = "pb-new-page flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted";
+const NEW_PAGE_CLASS = "pb-new-page flex shrink-0 items-center gap-2 rounded-md border border-primary-edge bg-primary px-3 py-1.5 text-sm font-medium text-primary-ink";
 
 function NewPageLabel() {
   return (
     <>
       <span aria-hidden="true">+</span>
-      <span className="max-sm:hidden">New</span>
+      <span className="max-sm:hidden">New page</span>
     </>
   );
 }
@@ -59,6 +62,11 @@ function newPageBlockedReason(target: RootTree | null): string | undefined {
  * (lib/links.ts decides).
  */
 export function Shell() {
+  return <NewPageProvider><ShellContent /></NewPageProvider>;
+}
+
+function ShellContent() {
+  const creation = useNewPageFlow()!;
   const router = useRouter();
   const [pageActions, setPageActions] = useState<HTMLDivElement | null>(null);
   // F8: the only available auth signal is `authenticated` (SessionResponse carries no role) — agents/anonymous
@@ -67,29 +75,12 @@ export function Shell() {
   // that would need a server DTO change, out of scope for this frontend-only chunk).
   const session = useQuery(sessionQuery);
 
-  // WHERE a new page lands: the root the reader's ADDRESS names, or the root
-  // segment of a `/p/{root}/{id}` permalink - carried into `/new` as `?root=`. The wire `root` is REQUIRED and
-  // has no server-side default (an omitted one is a 400 `invalid_root`),
-  // so SOMETHING must name it: on an address that names none (a bare permalink, `/review`, `/admin`) the create
-  // has no root of its own and `NewPage` resolves it to the primary wire entry.
-  //
-  // Until the tree RESOLVES there is no answer at all — not even "no root": the roots and their url prefixes are
-  // exactly what the tree carries, so a `/new` link rendered in that window would look identical on an extra-root
-  // page and on `/review`, and land the bytes in the primary root either way. So the action is DISABLED rather than wrong: a
-  // reader who has to wait a beat has lost nothing, a reader whose page silently appeared in the wrong repository
-  // has. (Same reason the create payload threads the root explicitly — see api/types.ts `CreateRequest.root`.)
+  // Creation context follows the resolved page identity; its host waits for alias redirects.
+  // Root write flags govern the affordance, while the server still authorizes every request.
   const tree = useQuery(treeQuery);
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const roots = tree.data?.roots;
-  const currentRoot = roots ? rootOfLocation(roots, pathname) : null;
-  // WHETHER a new page can land there at all: the target root must be editable AND serving. Off root-content routes
-  // the target is the primary entry, so its bits decide, not "none". Read-only, down, and
-  // not-yet-known all get the SAME disabled twin, for one reason: an enabled action that can only end in a 403 or
-  // a 503 is a reader taken into the editor to lose their keystrokes at save. (`plainbase root add` defaults an
-  // extra root to `editable = false`, so the read-only case is the ordinary state of a CLI-added root, not a
-  // corner; the unavailable case is a root whose disk is not mounted, which the tree still LISTS.)
-  const target = roots ? (currentRoot ? entryFor(roots, currentRoot) : primaryEntry(roots)) : null;
-  const canCreate = target ? rootAcceptsWrites(roots, target.root) : false;
+  const target = roots ? (creation.root ? entryFor(roots, creation.root) : primaryEntry(roots)) : null;
+  const canCreate = target ? rootAcceptsWrites(roots, target.root) && creation.ready : false;
 
   const onClick = (event: MouseEvent) => {
     const href = interceptableHref(event.nativeEvent, roots);
@@ -102,19 +93,19 @@ export function Shell() {
   return (
     <div className="pb-shell min-h-screen bg-surface text-ink" data-pb-shell onClick={onClick}>
       <header
-        className="pb-header sticky top-0 z-10 flex h-14 items-center justify-between border-b border-edge bg-raised px-4"
+        className="pb-header sticky top-0 z-10 grid h-14 items-center gap-6 border-b border-edge bg-chrome px-6"
         data-pb-header
       >
         <a href="/" className="pb-logo-home flex items-center" aria-label="Plainbase" data-pb-home>
           <img className="pb-logo pb-logo-light" src="/plainbase-logo.svg" alt="" aria-hidden="true" />
           <img className="pb-logo pb-logo-dark" src="/plainbase-logo-dark.svg" alt="" aria-hidden="true" />
         </a>
-        <div className="flex items-center gap-3">
-          <SearchTrigger />
+        <SearchTrigger />
+        <div className="pb-header-actions flex items-center justify-end gap-3">
           {session.data?.authenticated && (
             <Link
               to="/review"
-              className="pb-review-nav flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink"
+              className="pb-review-nav flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink lg:hidden"
               data-pb-review-nav
               aria-label="Review queue"
             >
@@ -123,15 +114,15 @@ export function Shell() {
           )}
           <div ref={setPageActions} className="contents" />
           {canCreate ? (
-            <Link
-              to="/new"
-              search={currentRoot ? { root: currentRoot } : {}}
-              className={`${NEW_PAGE_CLASS} hover:text-ink`}
+            <NewPageLink
+              root={creation.root}
+              folder={creation.folder}
+              className={NEW_PAGE_CLASS}
               data-pb-new-page
               aria-label="New page"
             >
               <NewPageLabel />
-            </Link>
+            </NewPageLink>
           ) : (
             <button
               type="button"
@@ -144,16 +135,17 @@ export function Shell() {
               <NewPageLabel />
             </button>
           )}
+          <span className="h-5 border-l border-edge" aria-hidden="true" />
           <ThemeToggle />
         </div>
       </header>
       <div className="flex w-full">
-        <Sidebar />
+        <Sidebar showReview={session.data?.authenticated === true} />
         <main className="pb-main min-w-0 flex-1 px-4 py-8 lg:pl-12 lg:pr-8" data-pb-main>
           <PageActionsTarget.Provider value={pageActions}><Outlet /></PageActionsTarget.Provider>
         </main>
       </div>
-      <SearchPalette />
+      <SearchPalette disabled={creation.isOpen} />
     </div>
   );
 }

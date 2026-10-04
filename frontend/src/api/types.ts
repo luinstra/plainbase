@@ -100,6 +100,7 @@ export interface DiscussionItem {
   state: DiscussionState;
   reason: string | null;
   range: DiscussionRange | null;
+  range_content_hash?: string | null;
   candidates: DiscussionCandidates | null;
   placement: DiscussionPlacement | null;
   quote: string | null;

@@ -8,7 +8,7 @@
  */
 export function RootBadge({ root, label }: { root: string; label?: string }) {
   return (
-    <span className="shrink-0 rounded border border-edge px-1.5 font-mono text-[11px] text-muted" data-pb-root-badge={root}>
+    <span className={`shrink-0 rounded border border-edge px-1.5 text-xs text-muted ${label !== undefined && label !== root ? "font-sans" : "font-mono"}`} data-pb-root-badge={root}>
       {label ?? root}
     </span>
   );

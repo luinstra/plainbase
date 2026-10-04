@@ -6,12 +6,14 @@ This file records what was **intentionally deferred** — the items the handoff 
 forward-looking — so they aren't lost in commit messages or the gitignored `.crew/` chunk addenda.
 Each is a real backlog item with what's needed to unblock it.
 
+A second pass, [design handoff v2](handoff-v2/README.md), amends v1 (wayfinding, state, contrast,
+light-mode surfaces). Its own deferrals are listed at the end of this file.
+
 ## Forward-looking (needs a capability we don't have yet)
 
-- **Editor** (handoff §7) — browser markdown editing: CodeMirror 6 source + live preview, structured
-  frontmatter panel, and a **git-native save bar** (branch ref + commit message + Save). **Blocked on
-  a write/commit backend** — every REST route today is read-only except admin rescan/reindex. Lands
-  naturally alongside the Phase-3 Git layer.
+- **Editor** (handoff §7): **shipped**. CodeMirror 6 source, a preview overlay, a structured
+  properties form and CAS save. v2 replaces the v1 Split view with a Write / Preview switch and moves
+  properties into chips; see handoff v2 §7.
 
 - **"Edit this page" footer affordance** (Chunk 4) — omitted, not faked. Needs **both** a write
   backend **and** a repo-base-URL config to build an honest link target (`{repoBaseUrl}/{page.path}`).
@@ -54,3 +56,12 @@ Each is a real backlog item with what's needed to unblock it.
 - ADR-0007 — tree-node metadata: editorial dates now, provisional fields, Git last-modified distinct.
 - The per-chunk executor addenda (`.crew/plans/chunk-{1..5}-*-addendum.md`) carry the full build-time
   detail; they are gitignored and local-only.
+
+## Handoff v2 deferrals
+
+- **Mobile layout**: out of scope for v2. Below tablet width the sidebar is hidden with no menu
+  replacement, the outline is hidden, and one 471 px three-column table widens the page to 487 px on
+  a 375 px screen. Needs a drawer, an outline sheet and scroll frames for wide tables.
+- **Page summaries on folder landings**: the v2 landing shows one-line page summaries, but tree pages
+  carry no summary field. Needs a provisional field (frontmatter description, else the first sentence)
+  on the tree response, under ADR-0007.

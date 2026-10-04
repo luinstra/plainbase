@@ -4,6 +4,28 @@ import type { DiscussionItem, DiscussionListResponse, DiscussionReadAnchor } fro
 import { formatTime } from "../lib/datetime";
 import { permalinkOf } from "../lib/permalink";
 
+export type DiscussionStatusFilter = "all" | "open" | "resolved";
+
+export function DiscussionFilters({ value, onChange, more }: {
+  value: DiscussionStatusFilter; onChange: (value: DiscussionStatusFilter) => void; more: boolean;
+}) {
+  return <div className="pb-discussion-filters">
+    <div role="group" aria-label="Discussion status">{(["all", "open", "resolved"] as const).map((status) =>
+      <button key={status} type="button" className="pb-discussion-action pb-discussion-quiet" aria-pressed={value === status}
+        onClick={() => onChange(status)}>{status === "all" ? "All" : status === "open" ? "Open" : "Resolved"}</button>)}</div>
+    {more && <p className="pb-discussion-hint">Filtering loaded discussions. Load more to see additional results.</p>}
+  </div>;
+}
+
+export function DiscussionAvatar({ label }: { label: string }) {
+  const initials = label.trim().split(/\s+/u).filter(Boolean).slice(0, 2).map((part) => Array.from(part)[0]).join("").toLocaleUpperCase() || "?";
+  return <span className="pb-discussion-avatar" data-pb-discussion-avatar aria-hidden="true">{initials}</span>;
+}
+
+export function DiscussionStatus({ status }: { status: DiscussionItem["status"] }) {
+  return <span className="pb-discussion-status" data-status={status ?? "unknown"}>{status === "open" ? "Open" : status === "resolved" ? "Resolved" : "Status unavailable"}</span>;
+}
+
 export const DISCUSSION_STATES = ["page_level", "exact", "moved", "ambiguous", "changed", "orphaned", "unavailable", "unreadable", "incomplete"] as const;
 
 export function discussionAvailability(reason: string | null): string {
@@ -46,11 +68,11 @@ function DiscussionCardContent({ item, pageLocal }: { item: DiscussionItem; page
     <span className="pb-discussion-card-quote pb-discussion-preview">{item.state === "page_level" ? "About this page" :
       item.quote || "Discussion details unavailable"}</span>
     <span className="pb-discussion-meta">
-      {item.starter && <span className="pb-discussion-author">{item.starter.label}{item.starter.kind === "agent" ? " · Agent" : ""}</span>}
+      {item.starter && <span className="pb-discussion-author"><DiscussionAvatar label={item.starter.label} />{item.starter.label}{item.starter.kind === "agent" ? " · Agent" : ""}</span>}
       <span>{item.comment_count} {item.comment_count === 1 ? "comment" : "comments"}</span>
       {timestamp && <time dateTime={timestamp} title={timestamp}>{formatDiscussionTime(timestamp)}</time>}
     </span>
-    <DiscussionState item={item} />
+    <span className="pb-discussion-card-status"><DiscussionStatus status={item.status} /><DiscussionState item={item} /></span>
   </>;
 }
 
@@ -60,7 +82,7 @@ export function formatDiscussionTime(iso: string): string {
 
 export function DiscussionState({ item }: { item: DiscussionItem }) {
   return <span className="pb-discussion-state">
-    {item.status === "resolved" && <span>Resolved</span>}
+
     {item.state !== "exact" && item.state !== "page_level" && <span>{stateLabel(item.state)}</span>}
   </span>;
 }
@@ -71,11 +93,11 @@ export function DiscussionSummary({ item, root, showPreview = false, showState =
   const state = item.state;
   return <div className="min-w-0 space-y-2 text-sm text-muted">
     {showState && <p><strong className="text-ink">{stateLabel(state)}</strong>
-      {item.status ? ` · ${item.status === "resolved" ? "Resolved" : "Open"}` : ""}
+      <> · <DiscussionStatus status={item.status} /></>
       {` · ${item.comment_count} ${item.comment_count === 1 ? "comment" : "comments"}`}
     </p>}
     {showPreview && item.quote && <blockquote className="pb-discussion-quote pb-discussion-preview">{item.quote}</blockquote>}
-    {item.starter && <p>Started by {item.starter.label}{item.starter.kind === "agent" ? " · Agent" : ""}</p>}
+    {item.starter && <p className="pb-discussion-starter"><DiscussionAvatar label={item.starter.label} />Started by {item.starter.label}{item.starter.kind === "agent" ? " · Agent" : ""}</p>}
     {item.created && <p>Created <time dateTime={item.created} title={item.created}>{formatTime(item.created)}</time>
       {item.updated && item.updated !== item.created && <> · Updated <time dateTime={item.updated} title={item.updated}>{formatTime(item.updated)}</time></>}</p>}
     {item.reason && <>{state === "unreadable" && <p>Discussion details could not be read.</p>}
