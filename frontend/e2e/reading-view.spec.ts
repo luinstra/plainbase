@@ -4,6 +4,94 @@ import { expect, test } from "./smoke-fixtures";
 import { gotoExpectStatus } from "./helpers";
 
 for (const theme of ["light", "dark"] as const) {
+  test(`${theme} wide reading tables stay within the content column with every column reachable`, async ({ page, smokeServer }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const markdown = [
+      "# Configuration table", "", "## Reference", "",
+      "| Env var | Config path | Default | Source |", "|---|---|---|---|",
+      "| `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS` | `auth.agentDirectCommit.globs` | `[]` | ConfigDecoder.kt |",
+      "| `PLAINBASE_PROXY_IDENTITY_HEADER` | `auth.proxyIdentityHeader` | `X-Forwarded-User` | ConfigDecoder.kt |",
+      "| `PLAINBASE_LOG_LEVEL` | - | `INFO` | `logback.xml:8-9` (`${PLAINBASE_LOG_LEVEL:-INFO}`; not a PlainbaseConfig field) |",
+      "| `PLAINBASE_S3_SECRET_ACCESS_KEY` | (env only, never file) | none (required in object mode) | ConfigDecoder.kt |",
+      "", "## After the table", "", "Ordinary reading text keeps its original width.", "",
+      "> [!NOTE]", ">", "> | Key | Value |", "> |---|---|", "> | Short | Small table |", "",
+    ].join("\n");
+    writeFileSync(path.join(smokeServer.contentDir, "wide-table.md"), markdown);
+    await expect.poll(async () => (await page.request.get("/api/v1/pages/by-path/docs/wide-table")).status()).toBe(200);
+    const shots = path.resolve("../.crew/ui-reading-table-overflow-screenshots");
+    mkdirSync(shots, { recursive: true });
+    for (const width of [1280, 1700]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await gotoExpectStatus(page, "/docs/wide-table");
+      const table = page.getByRole("table").first();
+      await expect(table.getByRole("cell", { name: "PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS", exact: true })).toBeVisible();
+      await expect(page.locator("[data-pb-rail] [data-pb-toc]")).toBeVisible();
+      const geometry = await table.evaluate((node) => {
+        let visibleRight = node.getBoundingClientRect().right;
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          if (["auto", "scroll", "hidden", "clip"].includes(getComputedStyle(parent).overflowX)) {
+            visibleRight = Math.min(visibleRight, parent.getBoundingClientRect().right);
+          }
+        }
+        return {
+          tableWidth: node.getBoundingClientRect().width,
+          visibleRight,
+          columnRight: document.querySelector(".pb-reading-column")!.getBoundingClientRect().right,
+          railLeft: document.querySelector("[data-pb-rail]")!.getBoundingClientRect().left,
+        };
+      });
+      await page.screenshot({ path: path.join(shots, `${theme}-${width}.png`) });
+      expect(geometry.visibleRight, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.columnRight + 1);
+      expect(geometry.visibleRight).toBeLessThan(geometry.railLeft);
+      const scrollport = table.locator("..");
+      await expect(scrollport).toHaveAttribute("role", "region");
+      await expect(scrollport).toHaveAttribute("aria-label", "Scrollable table");
+      await scrollport.focus();
+      expect(await scrollport.evaluate((node) => getComputedStyle(node).outlineStyle)).not.toBe("none");
+      const following = page.getByText("Ordinary reading text keeps its original width.", { exact: true });
+      const followingBefore = await following.boundingBox();
+      await page.keyboard.press("ArrowRight");
+      await expect.poll(() => scrollport.evaluate((node) => node.scrollLeft)).toBeGreaterThan(0);
+      expect(await scrollport.evaluate((node) => { node.scrollLeft = node.scrollWidth; return node.scrollLeft; })).toBeGreaterThan(0);
+      const lastCell = table.getByRole("row").nth(1).getByRole("cell").last();
+      const lastBox = (await lastCell.boundingBox())!;
+      const portBox = (await scrollport.boundingBox())!;
+      expect(lastBox.x + lastBox.width).toBeLessThanOrEqual(portBox.x + portBox.width + 1);
+      expect((await following.boundingBox())!.x).toBe(followingBefore!.x);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      const calloutTable = page.locator(".pb-callout table");
+      expect(await calloutTable.evaluate((node) => getComputedStyle(node).marginBottom)).toBe("0px");
+      expect(await calloutTable.locator("..").evaluate((node) => getComputedStyle(node).marginBottom)).toBe("12px");
+      expect(await calloutTable.locator("..").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+      await table.getByRole("cell", { name: "PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS", exact: true }).evaluate((node) => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+        document.dispatchEvent(new Event("selectionchange"));
+      });
+      await page.getByRole("button", { name: "Start a discussion" }).click();
+      await expect(page.getByRole("heading", { name: "Discuss selected passage" })).toBeVisible();
+      await expect(page.locator("[data-pb-discussion-panel] blockquote")).toHaveText("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS");
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    }
+    await gotoExpectStatus(page, "/docs/wide-table?mode=edit");
+    const editor = page.locator("[data-pb-editor]");
+    await expect(editor.getByRole("status", { name: "Save state" })).toHaveText("Saved");
+    const source = await page.locator(".cm-content").textContent();
+    await editor.getByRole("button", { name: "Preview", exact: true }).click();
+    const preview = page.locator("[data-pb-preview]");
+    const previewTable = preview.getByRole("table").first();
+    await expect(previewTable).toBeVisible();
+    expect(await preview.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    expect(await previewTable.locator("..").evaluate((node) => { node.scrollLeft = node.scrollWidth; return node.scrollLeft; })).toBeGreaterThan(0);
+    await page.screenshot({ path: path.join(shots, `${theme}-preview.png`) });
+    await editor.getByRole("button", { name: "Write", exact: true }).click();
+    await expect(page.locator(".cm-content")).toBeFocused();
+    expect(await page.locator(".cm-content").textContent()).toBe(source);
+    await expect(editor.getByRole("status", { name: "Save state" })).toHaveText("Saved");
+  });
+}
+
+for (const theme of ["light", "dark"] as const) {
   test(`${theme} source links explain real outside-root versus missing-target outcomes`, async ({ page, smokeServer }) => {
     await page.emulateMedia({ colorScheme: theme });
     writeFileSync(path.join(smokeServer.contentDir, "source-links.md"), "# Source links\n\n[Source file](../server/src/main/kotlin/com/plainbase/domain/service/PageIdentityService.kt)\n\n[Missing local file](missing.kt)\n");

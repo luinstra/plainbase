@@ -8,6 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { highlightCodeBlocks, Prose } from "../components/Prose";
+import { captureSelectionAnchor } from "../lib/selectionAnchor";
 
 /**
  * `.pb-prose` stable-selector + presentation-enhancement checks. The HTML is what the
@@ -56,6 +57,38 @@ function renderRouted(children: ReactNode) {
 afterEach(cleanup);
 
 describe("Prose", () => {
+  it.each([false, true])("contains tables without changing their source content (metadata %s)", async (metadata) => {
+    function Fixture() {
+      const [value, setValue] = useState("Original identifier");
+      return <><button onClick={() => setValue("Refreshed identifier")}>Refresh table</button>
+        <Prose title="Table" metadata={metadata ? <div data-pb-selection-chrome>Properties</div> : undefined}
+          html={`<h1 id="table-title" data-pb-src="0-7">Table</h1><table id="source-table" data-pb-src="8-90"><thead><tr><th>Key</th></tr></thead><tbody><tr><td><code>${value}</code></td></tr></tbody></table>`} /></>;
+    }
+    const { container, unmount } = renderRouted(<Fixture />);
+    const region = await screen.findByRole("region", { name: "Scrollable table" });
+    const table = screen.getByRole("table");
+    expect(region.querySelector("table")).toBe(table);
+    expect(region.getAttribute("tabindex")).toBe("0");
+    expect(region.hasAttribute("data-pb-selection-chrome")).toBe(false);
+    expect(table.id).toBe("source-table");
+    expect(table.getAttribute("data-pb-src")).toBe("8-90");
+    expect(region.textContent).toBe("KeyOriginal identifier");
+    const range = document.createRange();
+    range.selectNodeContents(screen.getByRole("cell"));
+    const selection = window.getSelection()!;
+    selection.removeAllRanges(); selection.addRange(range);
+    expect(captureSelectionAnchor(container.querySelector("[data-pb-selection-surface]")!, selection, "saved-hash"))
+      .toEqual({ kind: "quote", content_hash: "saved-hash", block_start: 8, block_end: 90, selected_text: "Original identifier" });
+    selection.removeAllRanges();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh table" }));
+    await screen.findByRole("cell", { name: "Refreshed identifier" });
+    expect(screen.getAllByRole("region", { name: "Scrollable table" })).toHaveLength(1);
+    const refreshed = screen.getByRole("table");
+    const originalParent = refreshed.parentElement!.parentElement;
+    unmount();
+    expect(refreshed.parentElement).toBe(originalParent);
+    expect(refreshed.getAttribute("data-pb-src")).toBe("8-90");
+  });
   it("retains presentation controls when a refreshed title changes fragment placement", async () => {
     function Fixture() {
       const [title, setTitle] = useState("Other title");
