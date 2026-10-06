@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.Role
@@ -25,9 +26,10 @@ import kotlin.time.Clock
 
 /**
  * WI-9 (C1, MANDATORY): the byte-identical differential — a direct `POST /api/v1/pages` create and an
- * approve(create-proposal) of the SAME `{folder, title, slug?, body?}` inputs (with the SAME deterministic minted id)
+ * approve(create-proposal) of the SAME `{root, title, folder?, slug?, body?, type?}` inputs (with the SAME deterministic minted id)
  * must produce BYTE-IDENTICAL on-disk bytes, because both flow through the ONE shared `composeDocument` seam (the
  * direct path composes-and-writes; the degrade path composes-and-stores, then apply writes the stored bytes verbatim).
+ * Non-null type selects stricter header Unicode/body-surrogate validation; omitted/null type preserves legacy behavior.
  *
  * TWO ISOLATED content roots (one per flow): a single shared root is unrunnable — both flows create the SAME id/path,
  * so the second create would hit `AlreadyExists`. Each root gets its OWN deterministic [TestIdProvider] seeded to the
@@ -36,7 +38,7 @@ import kotlin.time.Clock
 class CreateApplyDifferentialTest : FunSpec({
 
     val json = ContentType.Application.Json
-    val createBody =
+    val legacyCreateBody =
         """{"root":"docs","folder":"guides","title":"Differential: A/B","slug":"diff-page","body":"# Hello\n\nbody & text > here\n"}"""
     val createdPath = TreePath.require("guides/diff-page.md")
 
@@ -49,68 +51,74 @@ class CreateApplyDifferentialTest : FunSpec({
         extract = fixedPrincipal(principal),
     )
 
-    test("a direct POST-create and a degrade->approve create produce byte-identical on-disk bytes (the shared composer)") {
-        // ---- Flow A (direct), root A: a Human EDITOR POST /pages, then read the on-disk bytes. ----
-        val rootA = Files.createTempDirectory("plainbase-diff-a")
-        val bytesA: ByteArray
-        try {
-            val storeA = LocalContentStore(rootA)
-            IndexHarness(rootA, contentStore = storeA).use { harness ->
-                harness.builder.rebuild()
-                harness.roleRepository.upsert("builtin", "editor", Role.EDITOR, Clock.System.now())
-                val ctx = harness.contextFor(storeA, Principal.Human("builtin", "editor"), enforced = true)
-                testApplication {
-                    application { plainbaseModule(ctx) }
-                    val resp = client.post("/api/v1/pages") {
-                        contentType(json)
-                        setBody(createBody)
+    for (type in listOf<String?>(null, "Reference")) {
+        val createBody = if (type == null) legacyCreateBody else legacyCreateBody.dropLast(1) + ",\"type\":\"$type\"}"
+        test("a ${type ?: "legacy"} direct POST-create and degrade->approve create produce byte-identical on-disk bytes") {
+            // ---- Flow A (direct), root A: a Human EDITOR POST /pages, then read the on-disk bytes. ----
+            val rootA = Files.createTempDirectory("plainbase-diff-a")
+            val bytesA: ByteArray
+            try {
+                val storeA = LocalContentStore(rootA)
+                IndexHarness(rootA, contentStore = storeA).use { harness ->
+                    harness.builder.rebuild()
+                    harness.roleRepository.upsert("builtin", "editor", Role.EDITOR, Clock.System.now())
+                    val ctx = harness.contextFor(storeA, Principal.Human("builtin", "editor"), enforced = true)
+                    testApplication {
+                        application { plainbaseModule(ctx) }
+                        val resp = client.post("/api/v1/pages") {
+                            contentType(json)
+                            setBody(createBody)
+                        }
+                        withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.Created }
                     }
-                    withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.Created }
+                    bytesA = storeA.read(createdPath)!!
                 }
-                bytesA = storeA.read(createdPath)!!
+            } finally {
+                rootA.toFile().deleteRecursively()
             }
-        } finally {
-            rootA.toFile().deleteRecursively()
-        }
 
-        // ---- Flow B (degrade -> apply), root B: an out-of-glob COMMIT agent POST /pages (202), then ADMIN approve. ----
-        val rootB = Files.createTempDirectory("plainbase-diff-b")
-        var bytesB: ByteArray? = null
-        try {
-            val storeB = LocalContentStore(rootB)
-            IndexHarness(rootB, contentStore = storeB).use { harness ->
-                harness.builder.rebuild()
-                harness.roleRepository.upsert("builtin", "admin", Role.ADMIN, Clock.System.now())
-                val agent = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.COMMIT).id)
-                var proposalId = ""
-                // 1) agent POST /pages → 202 degrade (the create-proposal's blob == composeDocument(id, ...)).
-                val agentCtx = harness.contextFor(storeB, agent, enforced = true)
-                testApplication {
-                    application { plainbaseModule(agentCtx) }
-                    val resp = client.post("/api/v1/pages") {
-                        contentType(json)
-                        setBody(createBody)
+            // ---- Flow B (degrade -> apply), root B: an out-of-glob COMMIT agent POST /pages (202), then ADMIN approve. ----
+            val rootB = Files.createTempDirectory("plainbase-diff-b")
+            var bytesB: ByteArray? = null
+            try {
+                val storeB = LocalContentStore(rootB)
+                IndexHarness(rootB, contentStore = storeB).use { harness ->
+                    harness.builder.rebuild()
+                    harness.roleRepository.upsert("builtin", "admin", Role.ADMIN, Clock.System.now())
+                    val agent = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.COMMIT).id)
+                    var proposalId = ""
+                    // 1) agent POST /pages → 202 degrade (the create-proposal's blob == composeDocument(id, ...)).
+                    val agentCtx = harness.contextFor(storeB, agent, enforced = true)
+                    testApplication {
+                        application { plainbaseModule(agentCtx) }
+                        val resp = client.post("/api/v1/pages") {
+                            contentType(json)
+                            setBody(createBody)
+                        }
+                        withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.Accepted }
+                        proposalId = Json.parseToJsonElement(resp.bodyAsText()).jsonObject.getValue("proposal_id").jsonPrimitive.content
                     }
-                    withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.Accepted }
-                    proposalId = Json.parseToJsonElement(resp.bodyAsText()).jsonObject.getValue("proposal_id").jsonPrimitive.content
+                    harness.proposalRepository.findById(ProposalId.require(proposalId))?.proposedContent shouldBe bytesA
+                    Files.exists(rootB.resolve(createdPath.value)) shouldBe false
+                    // 2) ADMIN approve over the SAME harness → the apply writes the stored bytes verbatim.
+                    val adminCtx = harness.contextFor(storeB, Principal.Human("builtin", "admin"), enforced = true)
+                    testApplication {
+                        application { plainbaseModule(adminCtx) }
+                        val resp = client.post("/api/v1/changes/$proposalId/approve")
+                        withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.OK }
+                    }
+                    bytesB = storeB.read(createdPath)!!
                 }
-                // 2) ADMIN approve over the SAME harness → the apply writes the stored bytes verbatim.
-                val adminCtx = harness.contextFor(storeB, Principal.Human("builtin", "admin"), enforced = true)
-                testApplication {
-                    application { plainbaseModule(adminCtx) }
-                    val resp = client.post("/api/v1/changes/$proposalId/approve")
-                    withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.OK }
-                }
-                bytesB = storeB.read(createdPath)!!
+            } finally {
+                rootB.toFile().deleteRecursively()
             }
-        } finally {
-            rootB.toFile().deleteRecursively()
-        }
 
-        // The deterministic id makes the `id:` line identical; composeDocument makes the rest identical.
-        val finalB = bytesB!!
-        withClue("direct=${bytesA.decodeToString()}\napply=${finalB.decodeToString()}") {
-            bytesA.contentEquals(finalB) shouldBe true
+            // The deterministic id makes the `id:` line identical; composeDocument makes the rest identical.
+            val finalB = bytesB!!
+            withClue("direct=${bytesA.decodeToString()}\napply=${finalB.decodeToString()}") {
+                bytesA.contentEquals(finalB) shouldBe true
+            }
+            if (type != null) independentHeaderType(finalB) shouldBe type
         }
     }
 })

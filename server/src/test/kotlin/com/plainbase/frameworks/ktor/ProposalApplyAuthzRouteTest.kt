@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.ProposalOperation
@@ -515,6 +516,29 @@ class ProposalApplyAuthzRouteTest : FunSpec({
     }
 
     // ---- create-apply (C1) ---------------------------------------------------------------------------
+
+    test("explicit typed create proposal gains only id and approval writes its stored bytes verbatim") {
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->
+            val authored = "---\ntype: Reference\ntitle: Authored\ncustom: untouched\n---\n\n# Authored\n"
+            val created = app.client.post("/api/v1/changes") {
+                contentType(json)
+                setBody(
+                    """{"operation":"create","root":"docs","target_path":"authored.md",""" +
+                        """"proposed_content":${Json.encodeToString(authored)},"rationale":"r"}""",
+                )
+            }
+            withClue(created.bodyAsText()) { created.status shouldBe HttpStatusCode.Created }
+            val proposalId = ProposalId.require(
+                Json.parseToJsonElement(created.bodyAsText()).jsonObject.getValue("id").jsonPrimitive.content,
+            )
+            val row = requireNotNull(harness.proposalRepository.findById(proposalId))
+            val expected = authored.replaceFirst("---\n", "---\nid: ${requireNotNull(row.pageId).value}\n").toByteArray()
+            row.proposedContent shouldBe expected
+            independentHeaderType(row.proposedContent) shouldBe "Reference"
+            app.client.post("/api/v1/changes/${proposalId.value}/approve").status shouldBe HttpStatusCode.OK
+            store.read(TreePath.require("authored.md")) shouldBe expected
+        }
+    }
 
     test("create-apply: ADMIN approve of a create-proposal MATERIALIZES the page; APPLIED; live bytes == proposed (id baked)") {
         withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->

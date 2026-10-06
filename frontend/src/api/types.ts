@@ -337,6 +337,8 @@ export interface CreatePageRequest {
   title: string;
   slug?: string | null;
   body?: string | null;
+  /** Opt into OKF-compatible concept frontmatter; omitted/null retains legacy creation. */
+  type?: string | null;
 }
 
 /**

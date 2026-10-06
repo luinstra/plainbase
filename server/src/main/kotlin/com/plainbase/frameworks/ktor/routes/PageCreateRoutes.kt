@@ -35,9 +35,11 @@ import io.ktor.server.routing.route
 import kotlinx.serialization.SerializationException
 
 /**
- * PB-WRITE-1: `POST /api/v1/pages` — new-page creation. A JSON request (`folder`, `title`,
- * optional `slug`/`body`); the SERVER mints the id, derives the on-disk path + filename via the frozen
- * §A4/PB-SLUG-1 machinery (the client never derives a path), composes a YAML-safe frontmatter+body
+ * PB-WRITE-1: `POST /api/v1/pages` — new-page creation. A JSON request with required `root`/`title` and
+ * optional `folder`/`slug`/`body`/`type`; non-null type selects stricter single-line header Unicode validation
+ * and paired body surrogates. Omitted/null type preserves legacy validation and composition bytes.
+ * The SERVER mints the id, derives the on-disk path + filename via the frozen
+ * §A4/PB-SLUG-1 machinery (the client never derives a path), composes a frontmatter+body
  * buffer, and writes it VERBATIM through [com.plainbase.domain.service.WritePipeline.create] - the same serialized
  * pipeline monitor every edit uses. Watcher rebuilds use the separate `IndexBuilder` monitor. A collision is a
  * race-safe pipeline outcome (the filesystem's own exclusive create), never a route pre-check.
@@ -77,7 +79,7 @@ fun Route.pageCreateRoutes(ctx: RouteContext) {
                         ErrorCodes.INVALID_CREATE_REQUEST,
                         // `root` is inside the required set, not the optional tail: an omitted root is a decode
                         // failure and lands here, which is the point - it must never be read as "main".
-                        "Request body must be JSON: {root, title, folder?, slug?, body?}",
+                        "Request body must be JSON: {root, title, folder?, slug?, body?, type?}",
                     )
 
                 if (request.title.isBlank()) {
@@ -91,12 +93,29 @@ fun Route.pageCreateRoutes(ctx: RouteContext) {
                 // (P3) title/slug are single-line metadata: a control char (newline/CR/tab/…) in either
                 // could inject a `---` delimiter line into the composed frontmatter (or otherwise corrupt
                 // the block), so REJECT them outright rather than emit ambiguous YAML.
+                // Keep these legacy title/slug diagnostics first, including for typed requests.
                 controlCharField(request.title, request.slug)?.let { field ->
                     return@guarded call.respondError(
                         HttpStatusCode.BadRequest,
                         ErrorCodes.INVALID_CREATE_REQUEST,
                         "$field must not contain control characters (newline, CR, tab, …)",
                     )
+                }
+
+                if (request.type != null) {
+                    invalidTypedCreateField(request.title, request.slug, request.type, request.body)?.let { field ->
+                        return@guarded call.respondError(
+                            HttpStatusCode.BadRequest,
+                            ErrorCodes.INVALID_CREATE_REQUEST,
+                            when {
+                                field == "body" -> "body must not contain unpaired Unicode surrogates"
+                                field == "type" && request.type.isBlank() -> "type must be non-blank"
+                                else ->
+                                    "$field must not contain ISO control characters, U+FFFE/U+FFFF, U+2028/U+2029, " +
+                                    "or unpaired Unicode surrogates"
+                            },
+                        )
+                    }
                 }
 
                 // A control or bidi-override char in a client-supplied folder is bad CREATE input — reject it
@@ -140,13 +159,20 @@ fun Route.pageCreateRoutes(ctx: RouteContext) {
 
                 // Server-owned path: the filename is the §A4-slugified slug intent (else the title), `.md`.
                 val filename = HeadingSlugger.slugify(request.slug ?: request.title, HeadingSlugger.PAGE_FALLBACK) + ".md"
+                if (request.type != null && (filename == "index.md" || filename == "log.md")) {
+                    return@guarded call.respondError(
+                        HttpStatusCode.BadRequest,
+                        ErrorCodes.INVALID_CREATE_REQUEST,
+                        "Type-bearing concepts cannot use $filename; choose another title or supply a non-reserved slug",
+                    )
+                }
                 val path = TreePath.childOf(folderPath, filename)
 
                 // NOTE: the canonical-URL/slug-collision check (page/folder/alias) is NOT a route pre-check —
                 // it lives in WritePipeline.create UNDER the create monitor (race-safe against a concurrent
                 // URL-colliding create), surfaced here as WriteOutcome.SlugConflict → 409 `slug_conflict`.
                 val id = ctx.idProvider.next()
-                val bytes = composeDocument(id.value, request.title, request.slug, request.body)
+                val bytes = composeDocument(id.value, request.title, request.slug, request.body, request.type)
 
                 // (P2) Composed-document cap — the server ADDS frontmatter, so a request just under the cap can
                 // compose a document OVER it (unlike PUT, where the capped body is exactly what lands). Enforce

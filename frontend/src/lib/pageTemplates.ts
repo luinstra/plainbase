@@ -2,7 +2,8 @@
  * Client-only body scaffolds offered on the `/new` form (C3, WI-3). Pure constants — no React, no DOM, no
  * server round-trip (a server-side template store stays deferred per the phase plan). Each `body` is short
  * NFC-plain ASCII Markdown ending in a trailing newline, like a real authored page; `Blank` (the default)
- * is `""`, so a Blank create POSTs no `body` field and is byte-identical to a plain create.
+ * is `""`, so a Blank create POSTs no `body` field. Ordinary pages opt into `type: Reference` in the
+ * dialog; section creation remains legacy regardless of the selected scaffold.
  */
 export interface PageTemplate {
   readonly id: string;

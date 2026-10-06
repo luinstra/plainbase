@@ -141,7 +141,8 @@ not routed through the logger.
   server, a worked search → read → propose session.
 - [HTTP agent workflow](docs/http-agent-workflow.md) - direct curl + jq search, read, propose, track,
   and optional guarded PUT examples without an MCP client.
-- [HTTP API reference](docs/http-api.md) - document read URLs, Markdown negotiation, caching, and write hashes.
+- [HTTP API reference](docs/http-api.md) - document read URLs, page creation, Markdown negotiation, caching, and write hashes.
+- [OKF-compatible documents](docs/okf-documents.md) - concept frontmatter, deliberate author repair, and producer boundaries.
 - [Design summary](docs/DESIGN_SUMMARY.md) - architecture & product framing.
 - [Backend architecture map](docs/backend-architecture.md) - current authority, transport and release behavior.
 - [Development](docs/DEVELOPMENT.md) - building, the CI gates, the native dependency spike,

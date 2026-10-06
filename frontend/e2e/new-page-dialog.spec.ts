@@ -1,7 +1,9 @@
-import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "./smoke-fixtures";
 import { gotoExpectStatus } from "./helpers";
+import { PAGE_TEMPLATES } from "../src/lib/pageTemplates";
 
 const current = "/docs/guides/deploy-guide";
 async function open(page: import("@playwright/test").Page) {
@@ -9,6 +11,29 @@ async function open(page: import("@playwright/test").Page) {
   await page.locator("[data-pb-new-page]").click();
   await expect(page.getByRole("dialog", { name: "New page" })).toBeVisible();
 }
+
+test("ordinary dialog creation persists typed frontmatter and the exact template bytes", async ({ page, smokeServer }) => {
+  // No route interception: these are the actual POST response and persisted server bytes.
+  await gotoExpectStatus(page, current);
+  await open(page);
+  await page.locator("[data-pb-new-title]").fill("OKF Reference Smoke");
+  await page.getByRole("radio", { name: /^Meeting notes/ }).check();
+  const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
+    && new URL(response.url()).pathname === "/api/v1/pages");
+  await page.locator("[data-pb-new-create]").click();
+  const response = await responsePromise;
+  expect(response.status()).toBe(201);
+  expect(response.request().postDataJSON().type).toBe("Reference");
+  const created = await response.json() as { id: string; content_hash: string; url: string };
+  const template = PAGE_TEMPLATES.find((candidate) => candidate.id === "meeting")!;
+  const expected = Buffer.from(`---\nid: ${created.id}\ntype: "Reference"\ntitle: "OKF Reference Smoke"\n---\n\n${template.body}`, "utf8");
+  const persisted = readFileSync(path.join(smokeServer.contentDir, "guides", "okf-reference-smoke.md"));
+  expect(persisted.equals(expected)).toBe(true);
+  expect(new TextDecoder("utf-8", { fatal: true }).decode(persisted)).toBe(expected.toString("utf8"));
+  expect(created.content_hash).toBe(`sha256:${createHash("sha256").update(persisted).digest("hex")}`);
+  await expect(page).toHaveURL(`${created.url}?mode=edit`);
+  await expect(page.locator(".cm-content")).toContainText("## Action items");
+});
 
 test("creation is a native modal over the page with history, focus, scroll and native-link behavior", async ({ page, context }) => {
   await gotoExpectStatus(page, current);

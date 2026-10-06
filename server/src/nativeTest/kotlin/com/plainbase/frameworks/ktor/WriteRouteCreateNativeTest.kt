@@ -56,4 +56,36 @@ class WriteRouteCreateNativeTest {
             }
         }
     }
+
+    @Test
+    fun `typed POST decodes its optional field and preserves astral metadata natively`() {
+        withRestServices { services ->
+            testApplication {
+                application { plainbaseModule(services) }
+                val client = noRedirectClient()
+                val created = client.post("/api/v1/pages") {
+                    contentType(json)
+                    setBody(
+                        """{"root":"docs","title":"Typed Native","type":"Type \uD83D\uDE00","body":"unicode \uD83D\uDE00"}""",
+                    )
+                }
+                assertEquals(HttpStatusCode.Created, created.status)
+                val id = Json.parseToJsonElement(created.bodyAsText()).jsonObject.getValue("id").jsonPrimitive.content
+                val read = client.get("/api/v1/pages/$id")
+                assertEquals(HttpStatusCode.OK, read.status)
+                val page = Json.parseToJsonElement(read.bodyAsText()).jsonObject
+                assertEquals("Type 😀", page.getValue("frontmatter").jsonObject.getValue("type").jsonPrimitive.content)
+                val rejected = client.post("/api/v1/pages") {
+                    contentType(json)
+                    setBody("""{"root":"docs","title":"Bad Native","type":"Reference","body":"\uD800"}""")
+                }
+                assertEquals(HttpStatusCode.BadRequest, rejected.status)
+                assertEquals(
+                    "invalid_create_request",
+                    Json.parseToJsonElement(rejected.bodyAsText()).jsonObject.getValue("error").jsonObject
+                        .getValue("code").jsonPrimitive.content,
+                )
+            }
+        }
+    }
 }

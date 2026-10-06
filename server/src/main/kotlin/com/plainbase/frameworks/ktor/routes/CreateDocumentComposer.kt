@@ -7,26 +7,26 @@ package com.plainbase.frameworks.ktor.routes
  * whole-doc blob with the surgical `FrontmatterPatcher` instead. create-apply does NOT call this either: it
  * writes the stored bytes VERBATIM (it is a downstream consumer of the bytes this composed at propose/degrade time).
  *
- * Pure stdlib (no framework/domain imports), so it stays frameworks-side where its only callers live (`DomainPurityTest`
- * unaffected). The OUTPUT is byte-frozen — the create golden + the differential test depend on the exact bytes.
+ * Pure stdlib, frameworks-side. Legacy output is byte-frozen; typed callers opt into the additional type line.
  */
 
 /**
- * Composes the minimal frontmatter block (the minted [id], [title], optional [slug]) + [body], written
- * VERBATIM. The `id:` line is plain ASCII (the patcher's shape); `title`/`slug` are emitted as
- * YAML double-quoted scalars (quote-always) with `\`, `"`, and control chars escaped, so a value bearing
- * `:`/`[`/`>`/`@`/`|`/`&`/`*`/`!`/quotes/backslashes/unicode/newlines composes to VALID YAML the reader
- * reads back EXACTLY (the inverse of ADR-0001: the writer must never PRODUCE ambiguous YAML).
+ * Composes minted [id], optional [type], [title], optional [slug], then the verbatim [body].
+ * Typed inputs pass the shared Unicode validator before quote-always emission; null type preserves
+ * the exact legacy output and its existing Unicode limitations.
  */
-internal fun composeDocument(id: String, title: String, slug: String?, body: String?): ByteArray =
-    buildString {
+internal fun composeDocument(id: String, title: String, slug: String?, body: String?, type: String? = null): ByteArray {
+    require(type == null || invalidTypedCreateField(title, slug, type, body) == null) { "Invalid typed document input" }
+    return buildString {
         append("---\n")
         append("id: ").append(id).append('\n')
+        if (type != null) append("type: ").append(yamlDoubleQuoted(type)).append('\n')
         append("title: ").append(yamlDoubleQuoted(title)).append('\n')
         if (slug != null) append("slug: ").append(yamlDoubleQuoted(slug)).append('\n')
         append("---\n\n")
         append(body.orEmpty())
     }.toByteArray(Charsets.UTF_8)
+}
 
 /**
  * A YAML double-quoted scalar: `"` + the value with `\`, `"`, and control chars escaped + `"`. `\n`/`\r`/`\t` use

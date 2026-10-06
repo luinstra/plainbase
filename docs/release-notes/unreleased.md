@@ -1,3 +1,4 @@
 # Unreleased
 
 - Wide tables scroll within the reading column and editor preview, keeping the outline and discussions clear while preserving every column and keyboard access.
+- Ordinary new-page creation now emits OKF-compatible concept frontmatter with `type: "Reference"` for blank and template pages. REST callers can supply an optional descriptive string `type`; omitted or null keeps legacy creation. Typed title/slug/type reject control characters, U+2028/U+2029, U+FFFE/U+FFFF, and lone surrogates, and typed body rejects lone surrogates. Names deriving to `index.md` or `log.md` require another title or a custom slug through **Edit URL**. Sections remain legacy; all save-as-new recovery remains legacy and drops old type and metadata. Existing documents and later edits are author-owned, and no content directory is certified or automatically migrated. See [OKF-compatible documents](../okf-documents.md).

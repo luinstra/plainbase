@@ -143,11 +143,13 @@ status filtering, notifications, or a fixed polling guarantee. Statuses are `PEN
 `APPLIED`, `REJECTED`, `CONFLICTED`, and `FAILED`.
 
 To propose a new page, use an explicit root and a root-relative `.md` target. The server assigns
-the page identity; omit `page_id` and `base_hash`.
+the page identity; omit `page_id` and `base_hash`. Include type frontmatter for new knowledge documents
+as described in the [OKF author guide](okf-documents.md); the minimal type-only header below is sufficient.
+Explicit proposals preserve author-supplied source, and headerless legacy proposals remain accepted.
 
 ```bash
 CREATE_MD="$WORK_DIR/new-page.md"
-printf '%s\n' '# New page' '' 'Created by an HTTP agent.' > "$CREATE_MD"
+printf '%s\n' '---' 'type: Reference' '---' '' '# New page' '' 'Created by an HTTP agent.' > "$CREATE_MD"
 CREATE_REQUEST="$WORK_DIR/create.json"
 jq -n --arg root "$ROOT" --arg target_path 'notes/new-page.md' \
   --rawfile proposed_content "$CREATE_MD" \
