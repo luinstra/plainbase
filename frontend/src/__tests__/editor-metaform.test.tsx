@@ -335,6 +335,43 @@ describe("C2 metadata form", () => {
     await waitFor(() => expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(true));
   });
 
+  it.each(["\n", "\r\n"])("an editorial edit preserves typed and nested frontmatter with %j line endings", async (eol) => {
+    const seed = ["---", `id: ${ID}`, "type: Reference", "title: Deploy Guide", "status: draft",
+      "sources:", "  - resource: notes/source.md", "    title: 'A: source'", "generated:", "  by: human:ada",
+      "  at: 2026-10-04T12:00:00Z", "custom:", "  nested: [one, two]", "---", "", "# Deploy Guide", "", "body.", ""].join(eol);
+    let putBody: string | null = null;
+    let saved = seed;
+    let ifMatch: string | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "PUT") {
+        putBody = saved = init.body as string;
+        ifMatch = new Headers(init.headers).get("if-match");
+        return jsonResponse({ content_hash: hashOf(saved), commit: null });
+      }
+      if (url.includes("/preview")) return jsonResponse({ html: "", headings: [] });
+      if (url.includes("/tree")) return jsonResponse(emptyTree);
+      return jsonResponse(pageResponse(saved));
+    }));
+    const { view } = renderSeeded(seed);
+    const status = await waitFor(() => {
+      const select = view.container.querySelector<HTMLSelectElement>("[data-pb-field-status]");
+      expect(select).not.toBeNull();
+      return select!;
+    });
+    fireEvent.change(status, { target: { value: "active" } });
+    const save = await waitFor(() => {
+      const button = view.container.querySelector<HTMLButtonElement>("[data-pb-save]")!;
+      expect(button.disabled).toBe(false);
+      return button;
+    });
+    fireEvent.click(save);
+    await waitFor(() => expect(putBody).not.toBeNull());
+    expect(putBody).toBe(seed.replace(`status: draft${eol}`, `status: active${eol}`));
+    expect(ifMatch).toBe(`"${hashOf(seed)}"`);
+    await waitFor(() => expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(true));
+  });
+
   it("a tag typed then committed via blur, then Save, lands in the PUT and leaves the editor clean (blur-vs-Save race #3)", async () => {
     let putBody: string | null = null;
     let saved = SEED;

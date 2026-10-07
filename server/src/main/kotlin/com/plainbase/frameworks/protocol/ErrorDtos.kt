@@ -81,7 +81,10 @@ object ErrorCodes {
     /** 409: POST /api/v1/pages targets a path that already exists on disk — nothing written; the body carries the path. */
     const val PAGE_EXISTS: String = "page_exists"
 
-    /** 400: a POST /api/v1/pages request is malformed — missing/blank title, an invalid folder, or unparseable JSON. */
+    /**
+     * 400: POST /api/v1/pages has unparseable JSON, missing required root/title, blank title, invalid title/slug
+     * controls or folder, or a non-null type with blank type, disallowed typed Unicode or a reserved filename.
+     */
     const val INVALID_CREATE_REQUEST: String = "invalid_create_request"
 
     /** 409: a POST /api/v1/pages would claim a canonical URL/slug another page already owns — nothing written; the body carries the URL. */

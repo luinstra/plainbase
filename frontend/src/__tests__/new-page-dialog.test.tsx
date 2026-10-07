@@ -64,6 +64,22 @@ describe("new page modal navigation", () => {
     const payload = JSON.parse(String(fetchSpy.mock.calls.find(([, init]) => init?.method === "POST")![1]?.body));
     expect(payload.folder).toBe("raw folder");
     expect(payload.root).toBe("docs");
+    expect(payload.type).toBe("Reference");
+  });
+
+  it.each([
+    "Type-bearing concepts cannot use index.md; choose another title or supply a non-reserved slug",
+    "title must not contain ISO control characters, U+FFFE/U+FFFF, U+2028/U+2029, or unpaired Unicode surrogates",
+    "An arbitrary server message passes through unchanged.",
+  ])("passes through the mocked typed-create route message: %s", async (message) => {
+    const { view, fetchSpy } = mount("/docs", { create: Promise.resolve(json({ error: { code: "invalid_create_request", message } }, 400)) });
+    await open(view);
+    fireEvent.change(view.getByRole("textbox", { name: "Title" }), { target: { value: "Index" } });
+    fireEvent.click(view.getByRole("button", { name: "Create page" }));
+    await waitFor(() => expect(view.getByRole("alert").textContent).toBe(message));
+    expect(view.getByRole("dialog", { name: "New page" })).toBeTruthy();
+    const post = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]?.body)).type).toBe("Reference");
   });
 
   it("preserves a supplied unknown folder and allows explicit custom folder creation", async () => {

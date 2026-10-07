@@ -119,7 +119,9 @@ describe("W6 new-page creation", () => {
     await waitFor(() => expect(new URLSearchParams(history.location.search).get("mode")).toBe("edit"));
     expect(history.location.pathname).toBe(NEW_URL);
     const post = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST")!;
-    expect(JSON.parse(post[1]!.body as string).body).toBe(template.body || undefined);
+    const payload = JSON.parse(post[1]!.body as string);
+    expect(payload.body).toBe(template.body || undefined);
+    expect(payload.type).toBe("Reference");
   });
 
   it("creating a page POSTs /api/v1/pages and navigates directly to the server-returned url", async () => {
@@ -426,7 +428,7 @@ describe("W6 new-page creation", () => {
     expect(view.container.querySelector("[data-pb-new-preview]")!.textContent).toBe("≈ /docs");
   });
 
-  it("a default (Blank) create omits the body field entirely (byte-identical to today)", async () => {
+  it("a default (Blank) create opts into Reference and omits the body field entirely", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("docs/guides/my-new-page").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID, "docs").queryKey, htmlResponse());
@@ -440,10 +442,12 @@ describe("W6 new-page creation", () => {
       expect(call).not.toBeUndefined();
       return call!;
     });
-    expect("body" in JSON.parse(post[1]!.body as string)).toBe(false);
+    const payload = JSON.parse(post[1]!.body as string);
+    expect("body" in payload).toBe(false);
+    expect(payload.type).toBe("Reference");
   });
 
-  it("selecting a template POSTs its unchanged scaffold without a body field", async () => {
+  it("selecting a template POSTs its unchanged scaffold without adding a body input", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("docs/guides/my-new-page").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID, "docs").queryKey, htmlResponse());
@@ -487,6 +491,7 @@ describe("W6 new-page creation", () => {
     const parsed = JSON.parse(post[1]!.body as string);
     expect(parsed.slug).toBe("index");
     expect(parsed.body).toBe(MEETING_BODY);
+    expect(parsed).not.toHaveProperty("type");
   });
 
   it("switching back to Blank removes the template body from the request", async () => {

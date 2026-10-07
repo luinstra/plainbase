@@ -2,9 +2,11 @@ import { EditorView } from "@codemirror/view";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
+import { splitFrontmatter } from "../lib/frontmatter";
 import { createAppRouter } from "../router";
 
 const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
@@ -185,6 +187,43 @@ describe("W6 conflict UX", () => {
     // …and the recovered page goes back into the root it was deleted FROM. Omitting `root` is not a no-op:
     // the server has no implicit primary-root default, so omitting it would not safely locate an extra root's page on its rescue path.
     expect(sent.root).toBe("docs");
+    expect(sent).not.toHaveProperty("type");
+  });
+
+  it.each([
+    { role: "typed ordinary page", path: "guides/procedure.md", title: "Procedure", type: "Playbook" },
+    { role: "deleted index titled Guides", path: "guides/index.md", title: "Guides", type: "Reference" },
+    { role: "ordinary page titled Index", path: "guides/ordinary.md", title: "Index", type: "Reference" },
+    { role: "ordinary page titled Log", path: "guides/ordinary.md", title: "Log", type: "Reference" },
+  ])("keeps save-as-new legacy for a $role", async ({ path, title, type }) => {
+    const buffer = `---\nid: ${ID}\ntype: ${type}\ntitle: ${title}\nsources:\n  - resource: notes/source.md\n---\n\n# ${title}\n\nrecovered text.\n`;
+    const contentHash = `sha256:${createHash("sha256").update(buffer, "utf8").digest("hex")}`;
+    const { view, fetchSpy } = renderEditor(
+      [jsonResponse({ error: { code: "conflict", reason: "page_deleted", message: "gone", current_content: null, current_hash: null, current_path: null } }, 409)],
+      jsonResponse({ error: { code: "page_exists", message: "Keep the recovery payload visible", path: "taken.md" } }, 409),
+      (qc) => qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, {
+        ...pageResponse(), path, title, markdown: buffer, content_hash: contentHash,
+        citation: { ...pageResponse().citation, path, content_hash: contentHash, uri: `plainbase://${ID}@${contentHash}` },
+      }),
+    );
+    await editAndSave(view);
+    const banner = await waitFor(() => {
+      const el = view.container.querySelector('[data-pb-conflict][data-pb-conflict-reason="page_deleted"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    fireEvent.click(banner.querySelector<HTMLButtonElement>("[data-pb-save-as-new]")!);
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([input, init]) => init?.method === "POST" && String(input).includes("/api/v1/pages"));
+      expect(call).toBeDefined();
+      return call!;
+    });
+    const sent = JSON.parse((post[1] as RequestInit).body as string);
+    // The real editor edit appended x; the old typed/nested header is stripped, with no source-role guess.
+    expect(sent).toEqual({ root: "docs", folder: "guides", title, body: splitFrontmatter(buffer).body + "x" });
+    expect(sent).not.toHaveProperty("type");
+    expect(sent).not.toHaveProperty("slug");
+    await waitFor(() => expect(banner.textContent).toContain("taken.md"));
   });
 
   it("save-as-new invalidates the destination by-path cache BEFORE navigating (no stale deleted page, FIX 1)", async () => {

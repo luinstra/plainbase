@@ -83,6 +83,7 @@ export function NewPageDialog({ root, initialFolder, onClose, canLeave }: {
     try {
       const result = await createPage({ root, folder: folderPath || undefined, title: title.trim(),
         slug: section ? "index" : slug.trim() || undefined,
+        type: section ? undefined : "Reference",
         body: PAGE_TEMPLATES.find((template) => template.id === templateId)?.body || undefined });
       if (!alive.current) return;
       if (result.kind === "created") {

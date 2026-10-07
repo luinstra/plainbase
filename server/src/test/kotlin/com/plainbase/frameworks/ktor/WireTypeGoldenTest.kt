@@ -454,7 +454,7 @@ class WireTypeGoldenTest : FunSpec({
 
     test("createPageRequest carries the client's declared root (multi-root C4) and defaults its other optionals") {
         RestJson.decodeFromString(CreatePageRequest.serializer(), fixture.getValue("createPageRequest").toString()) shouldBe
-            CreatePageRequest(root = "extra", folder = "", title = "Deploy Guide", slug = null, body = null)
+            CreatePageRequest(root = "extra", folder = "", title = "Deploy Guide", slug = null, body = null, type = null)
     }
 
     test("an omitted root does NOT decode - a create must SAY where the bytes land, and never be read as 'main'") {

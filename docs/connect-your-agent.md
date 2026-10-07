@@ -238,6 +238,11 @@ Anchor preview does not mutate anything, despite using POST, and is allowed for 
 on supported roots. Preview and all lifecycle operations remain REST-only; there are no extra MCP
 tools for them. Use [the endpoint/request reference](http-agent-workflow.md#discussion-endpoints-and-responses).
 
+For new knowledge documents, follow the [OKF author guide](okf-documents.md). REST creation accepts
+optional `type` (for example, `"Reference"`); see the [creation contract](http-api.md#page-creation).
+Explicit MCP/REST create proposals keep author-supplied Markdown: include type frontmatter going
+forward. Headerless proposals remain accepted; the server adds identity without adding a type.
+
 For the REST document URL matrix, opt-in Markdown representation, source-byte semantics, and the JSON `ETag` write
 base-hash rule, see the [HTTP API reference](http-api.md). MCP's `read_page` remains the structured JSON read contract.
 

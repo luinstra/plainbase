@@ -164,6 +164,8 @@ data class BodyTooLargeBody(val code: String, val message: String, @SerialName("
  * mints the id, derives the on-disk path + slug, and composes the frontmatter+body bytes. `folder` is
  * the content-relative parent (`""`/omitted = root); `title` is required non-blank; `slug` is the
  * optional author slug intent; `body` is the optional Markdown body (the server adds the frontmatter).
+ * Optional non-null `type` selects typed composition with stricter single-line header Unicode and paired body
+ * surrogates. Omitted/null type preserves legacy Unicode validation and composition bytes.
  *
  * `root` names WHICH document directory the page lands in, and it is REQUIRED - never defaulted. A default is
  * fine for a field whose wrong value is a cosmetic miss; this one decides WHOSE DISK the bytes land on, and it
@@ -181,6 +183,7 @@ data class CreatePageRequest(
     val title: String,
     val slug: String? = null,
     val body: String? = null,
+    val type: String? = null,
 )
 
 /**
