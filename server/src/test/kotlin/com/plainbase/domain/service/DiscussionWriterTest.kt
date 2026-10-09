@@ -335,6 +335,7 @@ class DiscussionWriterTest : FunSpec({
                     val policy = PolicyService(
                         roles, SqlDelightApiTokenRepository(db), SqlDelightAuditRepository(db),
                         IdProvider { PAGE.pageId }, fixedClock, enforced = true,
+                        discussionsEnabledOf = { true },
                     )
                     val grant = policy.checkDiscussion(
                         principal, operation, facts, RootedResource(ROOT, "discussion/${ID.value}/comment/${COMMENT_ID.value}"),

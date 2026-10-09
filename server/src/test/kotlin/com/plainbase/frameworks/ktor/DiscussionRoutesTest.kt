@@ -36,6 +36,7 @@ import com.plainbase.domain.service.SyncedDiscussionIndex
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.discussion.DiscussionDb
 import com.plainbase.frameworks.discussion.JdbcDiscussionRows
+import com.plainbase.frameworks.discussion.seedTransportDiscussion
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import io.kotest.core.spec.style.FunSpec
@@ -53,6 +54,8 @@ import io.ktor.http.contentType
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.testing.testApplication
+import io.mockk.spyk
+import io.mockk.verify
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -71,9 +74,9 @@ private class DiscussionHttpFixture(val harness: MultiRootRestHarness, rootPath:
     private val dataDir = Files.createTempDirectory("plainbase-c4-http")
     private val db = DiscussionDb(dataDir.resolve("discussions.db"))
     private val rows: DiscussionRows = JdbcDiscussionRows(db)
-    private val sync = DiscussionSyncState(harness.registry.roots.map { it.name })
+    private val sync = DiscussionSyncState(harness.registry.roots.filter { it.supportsDiscussions }.map { it.name })
     private val localStore = LocalDiscussionStore(
-        harness.registry.roots.associate { it.name to (it.localPath ?: rootPath) },
+        harness.registry.roots.filter { it.supportsDiscussions }.associate { it.name to (it.localPath ?: rootPath) },
     )
     val storeCalls = AtomicInteger()
     val failedListing = AtomicReference<DiscussionId?>(null)
@@ -90,7 +93,7 @@ private class DiscussionHttpFixture(val harness: MultiRootRestHarness, rootPath:
     }
     private val fullReads = DiscussionFullReads(store)
     private val index = SyncedDiscussionIndex(rows, store, fullReads, sync)
-    private val reads = DiscussionReads(rows, store, fullReads, sync, harness.availability)
+    val reads = spyk(DiscussionReads(rows, store, fullReads, sync, harness.availability))
     private val ids = object : DiscussionIdProvider {
         private val discussion = AtomicInteger(1)
         private val comment = AtomicInteger(101)
@@ -121,6 +124,7 @@ private class DiscussionHttpFixture(val harness: MultiRootRestHarness, rootPath:
             enforced = enforced,
             editableOf = { harness.registry.byName(it)?.editable == true },
             objectBackendOf = { harness.registry.byName(it)?.backend is RootBackend.Object },
+            discussionsEnabledOf = { harness.registry.byName(it)?.discussionsEnabled == true },
         )
         val projection = DiscussionReadProjection(
             reads, DiscussionPageResolver(sync, harness.availability, harness.index.absence),
@@ -151,6 +155,151 @@ private class DiscussionHttpFixture(val harness: MultiRootRestHarness, rootPath:
 }
 
 class DiscussionRoutesTest : FunSpec({
+    test("read-only plus configured false preserves HTTP topology precedence without discussion I/O") {
+        val root = Files.createTempDirectory("plainbase-discussions-readonly-disabled-rest")
+        try {
+            seedPage(root, "guide/example.md", "Example")
+            MultiRootRestHarness(listOf(testRoot("docs", root).copy(editable = false, discussionsEnabled = false))).use { harness ->
+                harness.boot()
+                val page = harness.builder.current.pages.single()
+                val id = DiscussionId.require("01900000-0000-7000-8000-000000000099")
+                val comment = CommentId.require("01900000-0000-7000-8000-000000000098")
+                seedTransportDiscussion(root, page, id, comment)
+                val before = discussionFiles(root)
+                DiscussionHttpFixture(harness, root).use { discussion ->
+                    val context = harness.services.withExtract({ PrincipalExtraction.Resolved(Principal.Anonymous) }, discussion.facade)
+                    testApplication {
+                        application { plainbaseModule(context) }
+                        listOf(
+                            "/api/v1/discussions?root=docs",
+                            "/api/v1/pages/${page.id.value}/discussions?root=docs",
+                            "/api/v1/discussions/${id.value}?root=docs",
+                        ).forEach { url ->
+                            val response = client.get(url)
+                            response.status shouldBe HttpStatusCode.OK
+                            val envelope = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                            envelope.getValue("reason").jsonPrimitive.content shouldBe "read_only_root"
+                            envelope.getValue("discussions_available").jsonPrimitive.content shouldBe "false"
+                            envelope.getValue("next").jsonPrimitive.content shouldBe "null"
+                            if (url.startsWith("/api/v1/discussions/${id.value}?")) {
+                                envelope.getValue("discussion").jsonPrimitive.content shouldBe "null"
+                                envelope.getValue("comments").jsonArray.size shouldBe 0
+                            } else {
+                                envelope.getValue("discussions").jsonArray.size shouldBe 0
+                            }
+                        }
+                        val quote = """{"kind":"quote","content_hash":"${page.contentHash}","selected_text":"Example"}"""
+                        val preview = client.post("/api/v1/pages/${page.id.value}/discussions/anchor-preview?root=docs") {
+                            contentType(ContentType.Application.Json)
+                            setBody(quote)
+                        }
+                        preview.status shouldBe HttpStatusCode.Forbidden
+                        errorCode(preview.bodyAsText()) shouldBe "root_not_editable"
+                        harness.audit.recent(10) shouldBe emptyList()
+                        val purge = client.post("/api/v1/discussions/${id.value}/comments/${comment.value}/purge?root=docs") {
+                            contentType(ContentType.Application.Json)
+                            setBody("{}")
+                        }
+                        purge.status shouldBe HttpStatusCode.Forbidden
+                        errorCode(purge.bodyAsText()) shouldBe "root_not_editable"
+                        harness.audit.recent(10).single().decision shouldBe "denied"
+                    }
+                    discussion.storeCalls.get() shouldBe 0
+                    verify(exactly = 0) { discussion.reads.claim(any(), any(), any()) }
+                    verify(exactly = 0) { discussion.reads.detail(any(), any(), any(), any()) }
+                    verify(exactly = 0) { discussion.reads.rootDiscussions(any(), any(), any(), any()) }
+                    verify(exactly = 0) { discussion.reads.pageDiscussions(any(), any(), any(), any(), any()) }
+                    discussionFiles(root) shouldBe before
+                }
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    test("disabled REST reads preview and eight writes preserve files and the missing-ID audit gate") {
+        val root = Files.createTempDirectory("plainbase-discussions-disabled-rest")
+        try {
+            seedPage(root, "guide/example.md", "Example")
+            MultiRootRestHarness(listOf(testRoot("docs", root).copy(discussionsEnabled = false))).use { harness ->
+                harness.boot()
+                val page = harness.builder.current.pages.single()
+                val id = DiscussionId.require("01900000-0000-7000-8000-000000000099")
+                val comment = CommentId.require("01900000-0000-7000-8000-000000000098")
+                seedTransportDiscussion(root, page, id, comment)
+                val before = discussionFiles(root)
+                DiscussionHttpFixture(harness, root).use { discussion ->
+                    val active = AtomicReference<Principal>(Principal.Anonymous)
+                    val context = harness.services.withExtract({ PrincipalExtraction.Resolved(active.get()) }, discussion.facade)
+                    testApplication {
+                        application { plainbaseModule(context) }
+                        listOf(
+                            "/api/v1/discussions?root=docs",
+                            "/api/v1/pages/${page.id.value}/discussions?root=docs",
+                            "/api/v1/discussions/${id.value}?root=docs",
+                        ).forEach { url ->
+                            val response = client.get(url)
+                            response.status shouldBe HttpStatusCode.OK
+                            response.bodyAsText() shouldContain "disabled_by_config"
+                            response.bodyAsText().contains("Preserved comment") shouldBe false
+                        }
+                        client.get("/api/v1/discussions/${id.value}").status shouldBe HttpStatusCode.NotFound
+                        val anchor = """{"kind":"page","content_hash":"${page.contentHash}"}"""
+                        val quote = """{"kind":"quote","content_hash":"${page.contentHash}","selected_text":"Example"}"""
+                        val preview = client.post("/api/v1/pages/${page.id.value}/discussions/anchor-preview?root=docs") {
+                            contentType(ContentType.Application.Json)
+                            setBody(quote)
+                        }
+                        preview.status shouldBe HttpStatusCode.Forbidden
+                        errorCode(preview.bodyAsText()) shouldBe "discussions_disabled"
+                        harness.audit.recent(100).size shouldBe 0
+                        val writes = listOf(
+                            "/pages/${page.id.value}/discussions" to """{"anchor":$anchor,"body":"start"}""",
+                            "/discussions/${id.value}/comments" to """{"body":"reply"}""",
+                            "/discussions/${id.value}/comments/${comment.value}/edit" to """{"body":"edit"}""",
+                            "/discussions/${id.value}/comments/${comment.value}/retract" to "{}",
+                            "/discussions/${id.value}/resolve" to "{}",
+                            "/discussions/${id.value}/reopen" to "{}",
+                            "/discussions/${id.value}/reattach" to """{"anchor":$quote}""",
+                            "/discussions/${id.value}/comments/${comment.value}/purge" to "{}",
+                        )
+                        writes.forEachIndexed { index, (url, body) ->
+                            val response = client.post("/api/v1$url?root=docs") {
+                                contentType(ContentType.Application.Json)
+                                setBody(body)
+                            }
+                            response.status shouldBe HttpStatusCode.Forbidden
+                            errorCode(response.bodyAsText()) shouldBe "discussions_disabled"
+                            harness.audit.recent(100).size shouldBe index + 1
+                            harness.audit.recent(1).single().decision shouldBe "denied"
+                        }
+                        writes.drop(1).forEach { (url, body) ->
+                            val response = client.post("/api/v1$url") {
+                                contentType(ContentType.Application.Json)
+                                setBody(body)
+                            }
+                            response.status shouldBe HttpStatusCode.NotFound
+                            errorCode(response.bodyAsText()) shouldBe "discussion_not_found"
+                            harness.audit.recent(1).single().decision shouldBe "allowed"
+                            harness.audit.recent(1).single().resource.startsWith("docs:") shouldBe false
+                        }
+                        active.set(Principal.Agent(harness.index.apiTokens.mint("read", AgentMode.READ_ONLY).id))
+                        writes.drop(1).forEach { (url, body) ->
+                            client.post("/api/v1$url") {
+                                contentType(ContentType.Application.Json)
+                                setBody(body)
+                            }.status shouldBe HttpStatusCode.Forbidden
+                            harness.audit.recent(1).single().decision shouldBe "denied"
+                        }
+                    }
+                    discussion.storeCalls.get() shouldBe 0
+                    discussionFiles(root) shouldBe before
+                }
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
     listOf(
         "arrays" to ("[".repeat(12_000) + "0" + "]".repeat(12_000)),
         "objects" to ("{\"next\":".repeat(12_000) + "0" + "}".repeat(12_000)),

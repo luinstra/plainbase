@@ -57,6 +57,10 @@ data class TreeResponse(val roots: List<RootTreeDto>)
  * `roots[0]`: D7 order is the operator's config order, so it sits wherever config declared it, and a client
  * deriving it positionally is wrong on any install that declared its primary second. Exactly one entry carries
  * `true`, guaranteed by `RootRegistry`'s construction-time resolution rather than by a search here.
+ *
+ * [discussionsEnabled] is the configured discussion flag, omitted when true and defaulted to true on decode.
+ * It is independent of editability, availability, backend and principal: false hides discussion UI; true
+ * grants no permission and does not make an unsupported root eligible.
  */
 @Serializable
 data class RootTreeDto(
@@ -66,6 +70,7 @@ data class RootTreeDto(
     val editable: Boolean,
     val primary: Boolean,
     val tree: TreeNodeDto,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val discussionsEnabled: Boolean = true,
 )
 
 /** A tree node; the `type` discriminator comes from the sealed serializer. */

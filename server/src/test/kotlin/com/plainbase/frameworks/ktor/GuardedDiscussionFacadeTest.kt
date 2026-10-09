@@ -40,6 +40,7 @@ import com.plainbase.domain.service.DiscussionClaim
 import com.plainbase.domain.service.DiscussionCommand
 import com.plainbase.domain.service.DiscussionFacts
 import com.plainbase.domain.service.DiscussionFullReads
+import com.plainbase.domain.service.DiscussionPageResolver
 import com.plainbase.domain.service.DiscussionReads
 import com.plainbase.domain.service.DiscussionWriteOutcome
 import com.plainbase.domain.service.DiscussionWriter
@@ -53,12 +54,14 @@ import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.frameworks.discussion.DiscussionWorld
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
+import com.plainbase.frameworks.protocol.DiscussionReadRefused
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.spyk
 import io.mockk.verify
 import java.io.IOException
 import java.nio.file.Files
@@ -395,6 +398,95 @@ class GuardedDiscussionFacadeTest : FunSpec({
             Files.readAllBytes(marker) shouldBe before
         }
     }
+    test("disabled pins deny every write and preview before claims author or bytes") {
+        val fixture = fixture(listOf(localRoot(root).copy(discussionsEnabled = false)), Role.ADMIN)
+        val pageId = PageId.require("01900000-0000-7000-8000-000000000010")
+        val quote = DiscussionAnchorRequest.Quote("sha256:" + "a".repeat(64), SelectionRequest.Agent("quote"))
+        every { fixture.indexBuilder.current } returns PageIndex.EMPTY
+        every { fixture.resolver.resolvePinned(root, pageId) } returns IdResolution.One(root)
+        val writes = listOf<() -> DiscussionWriteOutcome>(
+            { fixture.facade.start(human, pageId, root, DiscussionAnchorRequest.Page(quote.contentHash), "body") },
+            { fixture.facade.comment(human, id, root, "body") },
+            { fixture.facade.edit(human, id, root, comment, "body") },
+            { fixture.facade.retract(human, id, root, comment) },
+            { fixture.facade.resolve(human, id, root) },
+            { fixture.facade.reopen(human, id, root) },
+            { fixture.facade.reattach(human, id, root, quote) },
+            { fixture.facade.purge(human, id, root, comment) },
+        )
+        writes.forEach { write -> shouldThrow<AccessDenied>(write).reason shouldBe DenyReason.DISCUSSIONS_DISABLED }
+        fixture.audits.size shouldBe 8
+        fixture.audits.all { it.decision == "denied" && it.resource.startsWith("${root.value}:") } shouldBe true
+        fixture.facade.rootList(human, root, null, 50, null).reason shouldBe "disabled_by_config"
+        fixture.facade.pageList(human, pageId, root, null, 50).discussions shouldBe emptyList()
+        val detail = fixture.facade.detail(human, id, root, null, 50)
+        detail.reason shouldBe "disabled_by_config"
+        detail.discussion shouldBe null
+        detail.comments shouldBe emptyList()
+        detail.next shouldBe null
+        shouldThrow<AccessDenied> { fixture.facade.preview(human, pageId, root, quote) }.reason shouldBe DenyReason.DISCUSSIONS_DISABLED
+        fixture.audits.size shouldBe 8
+        verify(exactly = 0) { fixture.reads.claim(any(), any(), any()) }
+        verify(exactly = 0) { fixture.pages.resolve(any(), any(), any(), any()) }
+        verify(exactly = 0) { fixture.projection.pageList(any(), any(), any(), any(), any()) }
+        verify(exactly = 0) { fixture.projection.rootList(any(), any(), any(), any(), any()) }
+        verify(exactly = 0) { fixture.projection.detail(any(), any(), any(), any(), any()) }
+        verify(exactly = 0) { fixture.writer.write(any(), any()) }
+        verify(exactly = 0) { fixture.absence.read(any(), any()) }
+    }
+
+    test("disabled-only unpinned ID operations keep allowed null-root audit then missing") {
+        val fixture = fixture(listOf(localRoot(root).copy(discussionsEnabled = false)), Role.ADMIN)
+        every { fixture.indexBuilder.current } returns PageIndex.EMPTY
+        val quote = DiscussionAnchorRequest.Quote("sha256:" + "a".repeat(64), SelectionRequest.Agent("quote"))
+        val writes = listOf<() -> DiscussionWriteOutcome>(
+            { fixture.facade.comment(human, id, null, "body") },
+            { fixture.facade.edit(human, id, null, comment, "body") },
+            { fixture.facade.retract(human, id, null, comment) },
+            { fixture.facade.resolve(human, id, null) },
+            { fixture.facade.reopen(human, id, null) },
+            { fixture.facade.reattach(human, id, null, quote) },
+            { fixture.facade.purge(human, id, null, comment) },
+        )
+        writes.forEach { write ->
+            val outcome = write().shouldBeInstanceOf<DiscussionWriteOutcome.Refused>()
+            outcome.refusal.status shouldBe 404
+            outcome.refusal.code shouldBe "discussion_not_found"
+        }
+        fixture.audits.size shouldBe 7
+        fixture.audits.all { it.decision == "allowed" && !it.resource.startsWith("${root.value}:") } shouldBe true
+        shouldThrow<DiscussionReadRefused> { fixture.facade.detail(human, id, null, null, 50) }.refusal.status shouldBe 404
+        fixture.audits.size shouldBe 7
+        verify(exactly = 0) { fixture.reads.claim(any(), any(), any()) }
+        verify(exactly = 0) { fixture.writer.write(any(), any()) }
+    }
+
+    test("disabled claimant cannot add ambiguity or unknown-root refusal to enabled ID lookup") {
+        val fixture = fixture(listOf(localRoot(root), localRoot(otherRoot).copy(discussionsEnabled = false)), Role.ADMIN)
+        every { fixture.reads.claim(root, id, null) } returns DiscussionClaim.Present(DiscussionFacts.Known("ok", null, "open", null, null))
+        every { fixture.writer.write(any(), any()) } returns DiscussionWriteOutcome.Done(id, comment, null)
+        fixture.facade.comment(human, id, null, "reply").shouldBeInstanceOf<DiscussionWriteOutcome.Done>()
+        fixture.audits.single().resource shouldBe "${root.value}:discussion/${id.value}/comment"
+        verify(exactly = 0) { fixture.reads.claim(otherRoot, any(), any()) }
+    }
+
+    test("synthetic topology change exercises the defensive second detail check before projection") {
+        var checks = 0
+        val fixture = fixture(listOf(localRoot(root)), discussionsEnabledOf = { ++checks == 1 })
+        every { fixture.indexBuilder.current } returns PageIndex.EMPTY
+        every { fixture.reads.claim(root, id, null) } returns DiscussionClaim.Present(
+            DiscussionFacts.Known("ok", null, "open", null, null),
+        )
+        val detail = fixture.facade.detail(human, id, root, null, 50)
+        checks shouldBe 2
+        detail.reason shouldBe "disabled_by_config"
+        detail.discussionsAvailable shouldBe false
+        detail.discussion shouldBe null
+        detail.comments shouldBe emptyList()
+        detail.next shouldBe null
+        fixture.audits shouldBe emptyList()
+        verify(exactly = 0) { fixture.writer.write(any(), any()) }
+    }
 })
 
 private fun discussionFile(world: DiscussionWorld, id: DiscussionId, name: EntryName): Path =
@@ -415,6 +507,7 @@ private class DiscussionFacadeFixture(
     actualReads: DiscussionReads? = null,
     actualWriter: DiscussionWriter? = null,
     actualAvailability: RootAvailability? = null,
+    discussionsEnabledOf: ((RootName) -> Boolean)? = null,
 ) {
     val registry = RootRegistry.of(roots)
     val reads = actualReads ?: mockk<DiscussionReads>()
@@ -423,6 +516,8 @@ private class DiscussionFacadeFixture(
     val absence = mockk<AbsenceClassifier>()
     val indexBuilder = mockk<IndexBuilder>()
     val store = mockk<ContentStore>()
+    val pages = mockk<DiscussionPageResolver>()
+    val projection = spyk(DiscussionReadProjection(reads, pages, mockk(), absence, { store }))
     val availability = actualAvailability ?: RootAvailability(object : Clock {
         override fun now(): Instant = Instant.fromEpochMilliseconds(1_700_000_000_000)
     })
@@ -450,6 +545,7 @@ private class DiscussionFacadeFixture(
         enforced = true,
         editableOf = { registry.byName(it)?.editable == true },
         objectBackendOf = { registry.byName(it)?.backend is RootBackend.Object },
+        discussionsEnabledOf = discussionsEnabledOf ?: { registry.byName(it)?.discussionsEnabled == true },
     )
     val facade = GuardedDiscussionFacade(
         policy = policy,
@@ -462,6 +558,7 @@ private class DiscussionFacadeFixture(
         indexBuilder = indexBuilder,
         stores = { store },
         labeler = labeler,
+        projection = projection,
     )
 }
 
@@ -471,4 +568,5 @@ private fun fixture(
     reads: DiscussionReads? = null,
     writer: DiscussionWriter? = null,
     availability: RootAvailability? = null,
-): DiscussionFacadeFixture = DiscussionFacadeFixture(roots, role, reads, writer, availability)
+    discussionsEnabledOf: ((RootName) -> Boolean)? = null,
+): DiscussionFacadeFixture = DiscussionFacadeFixture(roots, role, reads, writer, availability, discussionsEnabledOf)

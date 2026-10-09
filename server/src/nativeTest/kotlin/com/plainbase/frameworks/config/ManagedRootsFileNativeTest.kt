@@ -41,6 +41,30 @@ class ManagedRootsFileNativeTest {
     )
 
     @Test
+    fun `false discussion setting survives atomic managed rewrite without default-byte drift`() {
+        val base = Files.createTempDirectory("pb-managed-discussion-config")
+        try {
+            val data = Files.createDirectories(base.resolve("data"))
+            val enabled = root("notes", base.resolve("notes").toString())
+            val defaultBytes = ManagedRootsFile.serialize(listOf(enabled))
+            assertEquals(defaultBytes, ManagedRootsFile.serialize(listOf(enabled.copy(discussionsEnabled = true))))
+            assertTrue(!defaultBytes.contains("discussionsEnabled"))
+            val disabled = enabled.copy(discussionsEnabled = false)
+            ManagedRootsFile.writeAtomically(data.resolve("roots.conf"), ManagedRootsFile.serialize(listOf(disabled)))
+            val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString())
+            val parsed = ConfigLoader.fromEnvAndFile(env).roots.extras.single()
+            assertEquals(disabled, parsed)
+            val added = root("other", base.resolve("other").toString())
+            ManagedRootsFile.writeAtomically(data.resolve("roots.conf"), ManagedRootsFile.serialize(listOf(parsed, added)))
+            assertEquals(listOf(false, true), ConfigLoader.fromEnvAndFile(env).roots.extras.map { it.discussionsEnabled })
+            ManagedRootsFile.writeAtomically(data.resolve("roots.conf"), ManagedRootsFile.serialize(listOf(parsed)))
+            assertEquals(disabled, ConfigLoader.fromEnvAndFile(env).roots.extras.single())
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `a path carrying a non-ASCII character, a quote and a backslash round-trips through the REAL loader`() {
         val base = Files.createTempDirectory("pb-managed-native")
         try {

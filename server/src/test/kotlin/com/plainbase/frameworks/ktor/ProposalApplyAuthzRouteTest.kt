@@ -165,6 +165,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     com.plainbase.domain.service.UuidV7IdProvider(),
                     Clock.System,
                     enforced = enforced,
+                    discussionsEnabledOf = { true },
                 )
                 val labeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
                 val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { _, p, b, a, c -> history.commit(p, b, a, c)?.sha }
@@ -403,6 +404,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     com.plainbase.domain.service.UuidV7IdProvider(),
                     Clock.System,
                     enforced = true,
+                    discussionsEnabledOf = { true },
                 )
             val mutate =
                 GuardedMutatingFacade(
@@ -463,6 +465,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     com.plainbase.domain.service.UuidV7IdProvider(),
                     Clock.System,
                     enforced = true,
+                    discussionsEnabledOf = { true },
                 )
             val proposalService =
                 ProposalService(
@@ -873,6 +876,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                         com.plainbase.domain.service.UuidV7IdProvider(),
                         Clock.System,
                         enforced = true,
+                        discussionsEnabledOf = { true },
                     )
                 val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { _, p, b, a, c -> history.commit(p, b, a, c)?.sha }
                 val pipeline = harness.writePipeline(pipelineHook, store)

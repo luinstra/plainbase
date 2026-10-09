@@ -66,6 +66,8 @@ class PolicyService(
      */
     private val editableOf: (RootName) -> Boolean = { true },
     private val objectBackendOf: (RootName) -> Boolean = { false },
+    /** Required so every composition explicitly wires the registry flag; a default could silently bypass configuration. */
+    private val discussionsEnabledOf: (RootName) -> Boolean,
 ) {
 
     /** READ gate: throws [AccessDenied] on deny (no grant type for reads per the owner decision). Not audited. */
@@ -124,6 +126,7 @@ class PolicyService(
     private fun discussionTopology(root: RootName, writeClass: WriteClass): DenyReason? = when {
         writeClass.gatedByEditable && !editableOf(root) -> DenyReason.ROOT_NOT_EDITABLE
         objectBackendOf(root) -> DenyReason.DISCUSSIONS_UNSUPPORTED
+        !discussionsEnabledOf(root) -> DenyReason.DISCUSSIONS_DISABLED
         else -> null
     }
 
@@ -330,7 +333,7 @@ enum class DiscussionAction(val auditAction: Action) {
  * grant) means a caller cannot accidentally ignore a deny and still get a grant — there is no grant on this path.
  *
  * [reason] distinguishes the role×action matrix deny ([DenyReason.POLICY], today's 401/403) from the
- * per-root topology denies ([DenyReason.ROOT_NOT_EDITABLE] or [DenyReason.DISCUSSIONS_UNSUPPORTED], both 403).
+ * per-root topology denies (read-only, unsupported backend, or configured-disabled discussions, all 403).
  * It defaults to POLICY,
  * so every pre-C4 throw site is unchanged.
  */
@@ -341,8 +344,8 @@ class AccessDenied(
     val reason: DenyReason = DenyReason.POLICY,
 ) : RuntimeException("access denied: $action on '$resource' for ${principal::class.simpleName} ($reason)")
 
-/** Why an [AccessDenied] fired: policy, non-editable root, or unsupported discussion backend. */
-enum class DenyReason { POLICY, ROOT_NOT_EDITABLE, DISCUSSIONS_UNSUPPORTED }
+/** Why an [AccessDenied] fired: policy, non-editable root, unsupported backend, or configured-disabled discussions. */
+enum class DenyReason { POLICY, ROOT_NOT_EDITABLE, DISCUSSIONS_UNSUPPORTED, DISCUSSIONS_DISABLED }
 
 /**
  * A rooted operation whose root is NOT SERVING (ADR-0011 D5): its disk vanished, its watcher died, it was

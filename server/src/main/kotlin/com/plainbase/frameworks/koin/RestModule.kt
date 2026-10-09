@@ -106,6 +106,7 @@ internal fun createRestModule(
             // Fails CLOSED on an unknown name - a belt behind the wire-level `invalid_root` check.
             editableOf = { registry.byName(it)?.editable == true },
             objectBackendOf = { registry.byName(it)?.backend is RootBackend.Object },
+            discussionsEnabledOf = { registry.byName(it)?.discussionsEnabled == true },
         )
     }
     // A4a session/login/setup/admin services. Session id ROTATES on login/change/reset (§5); the TTLs use the

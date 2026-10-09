@@ -178,6 +178,7 @@ private class GuardedTestGraph(
         clock = kotlin.time.Clock.System,
         enforced = false,
         editableOf = { harness.rootRegistry.byName(it)?.editable == true },
+        discussionsEnabledOf = { harness.rootRegistry.byName(it)?.discussionsEnabled == true },
     )
     private val auth = harness.authServices(policy)
     val writePipeline: WritePipeline = mockk(relaxed = true)

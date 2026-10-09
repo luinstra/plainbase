@@ -92,7 +92,7 @@ describe("doc reading metadata rail (chunk-4)", () => {
       quote: null, comment_count: 0, starter: null, created: null, updated: null };
     client.setQueryData(pageQuery(PAGE_ID, null).queryKey, pageResponse(PAGE_ID, {}));
     client.setQueryData(pageHtmlQuery(PAGE_ID, null).queryKey, htmlResponse(PAGE_ID, []));
-    client.setQueryData(treeQuery.queryKey, { roots: [] });
+    client.setQueryData(treeQuery.queryKey, { roots: [{ root: "docs", primary: true, available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] });
     client.setQueryData(sessionQuery.queryKey, { authenticated: false, auth_mode: "off", username: null, csrf_token: null });
     const queryKey = pageDiscussionsQuery("docs", PAGE_ID).queryKey;
     client.setQueryData(queryKey, { pages: [
@@ -139,7 +139,7 @@ describe("doc reading metadata rail (chunk-4)", () => {
     client.setQueryData(pageHtmlQuery(PAGE_ID, null).queryKey, htmlResponse(PAGE_ID, [
       { id: "a", level: 2, text: "Alpha" }, { id: "b", level: 2, text: "Beta" },
     ]));
-    client.setQueryData(treeQuery.queryKey, { roots: [] });
+    client.setQueryData(treeQuery.queryKey, { roots: [{ root: "docs", primary: true, available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] });
     client.setQueryData(sessionQuery.queryKey, { authenticated: false, auth_mode: "off", username: null, csrf_token: null });
     const router = createAppRouter(client, createMemoryHistory({ initialEntries: [`/p/${PAGE_ID}`] }));
     const { container } = render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
@@ -262,7 +262,8 @@ describe("doc reading metadata rail (chunk-4)", () => {
     // loudly instead of being answered 200 by a permissive stub. (Codex P2.) The urls are recorded anyway:
     // the throw proves SOMETHING unexpected fired, the record names it.
     const calls: string[] = [];
-    const emptyRoot = { root: { type: "folder", name: "", title: null, path: "", url: "/docs", children: [] } };
+    const emptyRoot = { roots: [{ root: "docs", primary: true, available: true, editable: true,
+      tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
     const session = { authenticated: false, username: null, csrf_token: null, auth_mode: "off" };
     const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

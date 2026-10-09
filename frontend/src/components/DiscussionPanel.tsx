@@ -6,6 +6,7 @@ import { pageDiscussionsQuery, previewDiscussionAnchor, refreshDiscussionViews, 
 import { sessionQuery } from "../api/queries";
 import { useDiscussionRefresh } from "../lib/useDiscussionRefresh";
 import { focusDiscussionElement } from "../lib/discussionFocus";
+import { retireDiscussionDraft, useDiscussionDraft } from "../lib/useDiscussionDraft";
 import type { DiscussionDetail, DiscussionPreviewResponse, DiscussionQuoteRequestAnchor, DiscussionRequestAnchor } from "../api/types";
 import { DiscussionComposer, commentValidation, discussionPreviewError, discussionWriteError, discussionWriteRecovery } from "./DiscussionComposer";
 import { DiscussionAvailability, DiscussionFilters, type DiscussionStatusFilter, DiscussionListRows, DiscussionReadError, uniqueDiscussionItems } from "./DiscussionRead";
@@ -15,7 +16,10 @@ import type { DiscussionSourceConnection } from "./DiscussionReattach";
 export interface PassageRequest { nonce: number; root: string; pageId: string; anchor: DiscussionQuoteRequestAnchor }
 
 export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceBusy, request, pageRequestNonce,
-  onReselect, onReload, onPostingChange, source, onActionChange, onStart, startDisabled, active = true, onPassageChange }: {
+  onReselect, onReload, onPostingChange, source, onActionChange, onStart, startDisabled, active = true,
+  onPassageChange, onThreadSelect, drafts }: {
+  drafts?: Map<string, string>;
+  onThreadSelect?: (id: string) => void;
   active?: boolean; onPassageChange?: (detail: DiscussionDetail | null) => void;
   root: string; pageId: string; sourceHash: string | null; sourceReady: boolean; sourceBusy: boolean;
   request: PassageRequest | null; pageRequestNonce: number; onReselect: () => void; onReload: () => Promise<boolean>;
@@ -43,8 +47,12 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
   }, [publishActivity]);
   const [statusFilter, setStatusFilter] = useState<DiscussionStatusFilter>("all");
   const [selected, setSelected] = useState<string | null>(null);
+  const threadSelection = useRef(onThreadSelect);
+  threadSelection.current = onThreadSelect;
+  useEffect(() => { if (selected) threadSelection.current?.(selected); }, [selected]);
   const [mode, setMode] = useState<"page" | "quote" | null>(null);
-  const [body, setBody] = useState("");
+  const draftKey = JSON.stringify([root, pageId, "create"]);
+  const [body, setBody] = useDiscussionDraft(drafts, draftKey);
   const [capture, setCapture] = useState<DiscussionQuoteRequestAnchor | null>(null);
   const [preview, setPreview] = useState<DiscussionPreviewResponse | null>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -196,11 +204,12 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
     if (mode === "quote" && (!capture || !preview || !confirmed || capture.content_hash !== sourceHash)) return;
     if (mode !== "page" && mode !== "quote") return;
     const anchor: DiscussionRequestAnchor = mode === "quote" ? capture! : { kind: "page", content_hash: sourceHash };
-    const submitted = { root, pageId, anchor, body };
+    const submitted = { root, pageId, anchor, body, draftKey };
     posting.current = true; setWriting(true); publishActivity();
     setError(null); setCreationRecovery(null); setStatus("Posting…"); setRefreshFailed(false);
     try {
       const result = await startMutation.mutateAsync({ anchor: submitted.anchor, body: submitted.body });
+      retireDiscussionDraft(drafts, submitted.draftKey, submitted.body);
       if (alive.current) {
         setBody((current) => current === submitted.body ? "" : current);
         setMode(null); setCapture(null); setPreview(null); setConfirmed(false);
@@ -296,7 +305,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
         requestAnimationFrame(() => focusDiscussionElement(Array.from(panel.current?.querySelectorAll<HTMLButtonElement>("[data-pb-discussion-id]") ?? [])
           .find((button) => button.dataset.pbDiscussionId === id) ?? panel.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]') ?? panel.current));
       }}>← All discussions</button>
-      <DiscussionThread key={`${root}/${selected}`} root={root} id={selected} inPanel source={source} active={active} onPassageChange={onPassageChange} creationPending={writing} onActionChange={threadActivity} />
+      <DiscussionThread key={`${root}/${selected}`} root={root} id={selected} inPanel source={source} active={active} drafts={drafts} onPassageChange={onPassageChange} creationPending={writing} onActionChange={threadActivity} />
       {threadActive && <p className="pb-discussion-hint">Finish this action before returning to the list.</p>}
       {first?.discussions_available && <button type="button" className="pb-discussion-action pb-discussion-quiet"
         data-pb-new-discussion disabled={startDisabled} onClick={onStart}>Start a discussion</button>}

@@ -62,6 +62,7 @@ class AuthRouteHarness(
             idProvider = UuidV7IdProvider(),
             clock = Clock.System,
             enforced = enforced,
+            discussionsEnabledOf = { true },
         )
         val auth = harness.authServices(policy)
         val resolver = PageRootResolver(harness.idMap, harness.rootRegistry, policies)

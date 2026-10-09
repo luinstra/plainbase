@@ -75,6 +75,17 @@ export function entryFor(roots: RootTree[], root: string): RootTree | null {
   return roots.find((entry) => entry.root === root) ?? null;
 }
 
+/** Page activation waits for owning metadata, including on initial failure; known omitted flags default on. */
+export function rootDiscussionsEnabled(roots: RootTree[] | undefined, root: string | null): boolean {
+  const entry = roots && root ? entryFor(roots, root) : null;
+  return !!entry && entry.discussionsEnabled !== false;
+}
+
+/** Configuration hiding is independent of storage and editability. */
+export function rootDiscussionsDisabled(roots: RootTree[] | undefined, root: string | null): boolean {
+  return !!roots && !!root && entryFor(roots, root)?.discussionsEnabled === false;
+}
+
 /** Human-facing root label; keep the server-issued root slug for every URL and lookup. */
 export function rootLabel(entry: Pick<RootTree, "root" | "displayName">): string {
   return entry.displayName ?? entry.root;

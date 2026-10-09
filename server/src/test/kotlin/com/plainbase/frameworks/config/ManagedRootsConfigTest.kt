@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.config
 
 import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.RootBackend
+import com.plainbase.domain.root.RootName
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -224,6 +226,22 @@ class ManagedRootsConfigTest : FunSpec({
         withFiles(rootsConf = """roots { repo { path = "/roots/repo", history = auto } }""") { env ->
             shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")) }
                 .message shouldContain "history = auto is not allowed on an extra root"
+        }
+    }
+    test("managed discussion false survives unrelated add and remove serialization") {
+        withFiles(rootsConf = """roots { notes { path = "/roots/notes", editable = true, discussionsEnabled = false } }""") { env ->
+            val before = ConfigLoader.fromEnvAndFile(env).roots
+            before.primary.discussionsEnabled shouldBe true
+            val disabled = before.extras.single()
+            disabled.discussionsEnabled shouldBe false
+            val sibling = disabled.copy(
+                name = RootName.require("sibling"), backend = RootBackend.Local(Path.of("/roots/sibling")), discussionsEnabled = true,
+            )
+            val afterAdd = ConfigLoader.fromEnvAndCandidateRoots(ManagedRootsFile.serialize(listOf(disabled, sibling)), env).roots
+            afterAdd.extras.map { it.discussionsEnabled } shouldBe listOf(false, true)
+            val afterRemove = ConfigLoader.fromEnvAndCandidateRoots(ManagedRootsFile.serialize(afterAdd.extras.take(1)), env).roots
+            afterRemove.extras shouldBe listOf(disabled)
+            afterRemove.managed shouldBe before.managed
         }
     }
 })

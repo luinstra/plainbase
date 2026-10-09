@@ -18,16 +18,16 @@ const item = (state: string, id = state) => ({
   created: null, updated: null,
 });
 
-function mount(at: string, withTree = true, strict = false) {
+function mount(at: string, withTree = true, strict = false, disabled = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
   if (withTree) client.setQueryData(treeQuery.queryKey, { roots: [
     { root: "docs", primary: true, available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } },
-    { root: "extra", primary: false, available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/extra", page_count: 0, children: [] } },
+    { root: "extra", ...(disabled ? { discussionsEnabled: false } : {}), primary: false, available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/extra", page_count: 0, children: [] } },
   ] });
   const router = createAppRouter(client, createMemoryHistory({ initialEntries: [at] }));
   const app = <QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>;
-  return { ...render(strict ? <StrictMode>{app}</StrictMode> : app), history: router.history };
+  return { ...render(strict ? <StrictMode>{app}</StrictMode> : app), history: router.history, client };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -248,4 +248,38 @@ it("filters loaded lifecycle status without losing unknown rows or later cursor 
   expect(screen.getByText("Status unavailable")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
   expect(document.querySelector('[data-pb-discussion-avatar]')?.textContent).toBe("H");
+});
+
+it.each(["/discussions/extra", "/discussions/extra/shared"])("hides a configured-disabled direct URL %s before any discussion request", async (url) => {
+  const calls: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => { calls.push(String(input)); throw new Error("No discussion fetch"); }));
+  mount(url, true, false, true);
+  expect(await screen.findByText("Discussions are disabled for this root")).toBeTruthy();
+  expect(screen.queryByLabelText("Match state")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  expect(calls.filter((call) => call.includes("discussions"))).toEqual([]);
+});
+
+it("omits only explicit-false roots from the chooser", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("No extra reads"); }));
+  const view = mount("/discussions", true, false, true);
+  await screen.findByRole("heading", { name: "Discussions" });
+  const list = view.container.querySelector<HTMLElement>(".pb-discussion-list")!;
+  expect(within(list).queryByRole("link", { name: "extra" })).toBeNull();
+  expect(within(list).getByRole("link", { name: "docs" })).toBeTruthy();
+});
+
+it("a later disabled envelope suppresses cached rows and pagination", async () => {
+  let disabled = false;
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json(disabled
+    ? { discussions: [], next: null, discussions_available: false, reason: "disabled_by_config" }
+    : { discussions: [item("exact", "secret")], next: "more", discussions_available: true, reason: null })));
+  const view = mount("/discussions/extra");
+  await screen.findByRole("button", { name: "Load more" });
+  disabled = true;
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ["discussions"] }); });
+  await screen.findByText("Discussions are disabled for this root");
+  expect(screen.queryByText("Original quote")).toBeNull();
+  expect(screen.queryByLabelText("Match state")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
 });

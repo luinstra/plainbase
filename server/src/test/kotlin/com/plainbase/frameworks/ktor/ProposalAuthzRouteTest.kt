@@ -107,6 +107,7 @@ class ProposalAuthzRouteTest : FunSpec({
                     idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
                     clock = Clock.System,
                     enforced = true,
+                    discussionsEnabledOf = { true },
                 )
                 val facade = GuardedProposalFacade(
                     policy = policy,

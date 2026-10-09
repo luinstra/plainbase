@@ -5,7 +5,7 @@ import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { clearCsrfToken } from "../api/csrf";
-import { discussionDetailQuery } from "../api/discussions";
+import { discussionDetailQuery, pageDiscussionsQuery } from "../api/discussions";
 import { pageByPathQuery, pageHtmlQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { DiscussionDetailResponse } from "../api/types";
 import { createAppRouter } from "../router";
@@ -24,13 +24,15 @@ function envelope(): DiscussionDetailResponse {
 }
 const page = { id: "page", root: "extra", path: "note.md", url: "/extra/note", title: "Note", markdown: "Text",
   frontmatter: {}, content_hash: "sha256:current", commit: null };
-const source = { ...page, html: '<p data-pb-src="0-14">banana 😀</p><p data-pb-src="16-26">Next quote</p>', headings: [] };
-function mount(fetcher: typeof fetch, at = "/discussions/extra/thread", strict = false, builtin = false) {
+const source = { ...page, slug: "note", citation: { page_id: page.id, heading_id: null, path: page.path,
+  content_hash: page.content_hash, commit: null, uri: "plainbase://page/page" },
+  html: '<p data-pb-src="0-14">banana 😀</p><p data-pb-src="16-26">Next quote</p>', headings: [] };
+function mount(fetcher: typeof fetch, at = "/discussions/extra/thread", strict = false, builtin = false, disabled = false, primeTree = true) {
   vi.stubGlobal("fetch", fetcher);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   client.setQueryData(sessionQuery.queryKey, { authenticated: builtin, username: builtin ? "Admin" : null,
     csrf_token: null, auth_mode: builtin ? "builtin" : "off" });
-  client.setQueryData(treeQuery.queryKey, { roots: ["extra", "docs"].map((root) => ({ root, primary: root === "extra",
+  if (primeTree) client.setQueryData(treeQuery.queryKey, { roots: ["extra", "docs"].map((root) => ({ root, ...(disabled && root === "extra" ? { discussionsEnabled: false } : {}), primary: root === "extra",
     available: true, editable: true, tree: { type: "folder" as const, name: "", title: null, description: null, path: "", url: `/${root}`, page_count: 0, children: [] } })) });
   const router = createAppRouter(client, createMemoryHistory({ initialEntries: [at] }));
   const app = <QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>;
@@ -191,6 +193,299 @@ it.each(["reply", "edit"])("keeps recovery beside a retained uncertain %s notice
   expect(within(notice).getByRole("button", { name: "Refresh" }).closest("details")).toBeNull();
   expect(field).toHaveProperty("value", "Keep this reply for inspection");
   expect(f.calls).toHaveLength(1);
+});
+
+it.each(["reply", "edit"])("fresh disabled metadata preserves a page-panel %s buffer without reopening its action", async (kind) => {
+  const data = envelope();
+  const other = envelope(); other.discussion!.id = "other"; other.discussion!.quote = "Other evidence";
+  other.comments[0].id = "other-comment"; other.comments[0].markdown = "Other raw comment";
+  const f = fixture(data);
+  const view = mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/discussions/other?")) return Response.json(other);
+    if (url.includes("/pages/page/discussions")) return Response.json({ discussions: [data.discussion, other.discussion],
+      next: null, discussions_available: true, reason: null });
+    return f.fetcher(input, init);
+  }) as typeof fetch, "/extra/note");
+  const open = async (id = "thread") => {
+    await waitFor(() => expect(view.container.querySelector(`[data-pb-discussion-id="${id}"]`)).not.toBeNull());
+    fireEvent.click(view.container.querySelector(`[data-pb-discussion-id="${id}"]`)!);
+    await screen.findByText("Rendered body");
+  };
+  await open();
+  if (kind === "reply") fireEvent.click(await findDiscussionButton({ name: "Reply" }));
+  else fireEvent.click(await findDiscussionButton({ name: "Edit comment" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: `Preserve my ${kind}` } });
+  const setEnabled = async (enabled: boolean) => {
+    await act(async () => { view.client.setQueryData(treeQuery.queryKey, { roots: [{ root: "extra", primary: true,
+      available: true, editable: true, discussionsEnabled: enabled, tree: { type: "folder", name: "", title: null,
+        description: null, path: "", url: "/extra", page_count: 0, children: [] } }] }); });
+  };
+  await setEnabled(false);
+  await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions")).toBeNull());
+  expect(screen.queryByRole("textbox")).toBeNull();
+  await setEnabled(true);
+  await open();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  // All discussions is nondestructive; visiting another thread cannot inherit this thread's buffer.
+  fireEvent.click(screen.getByRole("button", { name: "Close discussion" }));
+  await open("other");
+  if (kind === "reply") fireEvent.click(await findDiscussionButton({ name: "Reply" }));
+  else fireEvent.click(await findDiscussionButton({ name: "Edit comment" }));
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", kind === "reply" ? "" : "Other raw comment");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close discussion" }));
+  await open();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  if (kind === "reply") fireEvent.click(await findDiscussionButton({ name: "Reply" }));
+  else fireEvent.click(await findDiscussionButton({ name: "Edit comment" }));
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", `Preserve my ${kind}`);
+  if (kind === "edit") expect(screen.getByText("Restored unsaved edit. Compare it with the current comment before saving.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close discussion" }));
+  await open();
+  if (kind === "reply") fireEvent.click(await findDiscussionButton({ name: "Reply" }));
+  else fireEvent.click(await findDiscussionButton({ name: "Edit comment" }));
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", kind === "reply" ? "" : data.comments[0].markdown);
+  expect(screen.queryByText("Restored unsaved edit. Compare it with the current comment before saving.")).toBeNull();
+  expect(f.calls).toHaveLength(0);
+});
+
+it.each(["create", "reply", "edit"])("retires a successful %s draft completed while configured disabled", async (kind) => {
+  const data = envelope();
+  let finish!: (response: Response) => void;
+  const f = fixture(data, async () => new Promise<Response>((resolve) => { finish = resolve; }));
+  const view = mount(f.fetcher, "/extra/note", true);
+  const open = async () => {
+    if (kind !== "create") {
+      await waitFor(() => expect(view.container.querySelector('[data-pb-discussion-id="thread"]')).not.toBeNull());
+      fireEvent.click(view.container.querySelector('[data-pb-discussion-id="thread"]')!);
+      await screen.findByText("Rendered body");
+    }
+    fireEvent.click(await findDiscussionButton({ name: kind === "create" ? "Start a discussion" : kind === "reply" ? "Reply" : "Edit comment" }));
+  };
+  const setEnabled = async (enabled: boolean) => {
+    await act(async () => { view.client.setQueryData(treeQuery.queryKey, { roots: [{ root: "extra", primary: true,
+      available: true, editable: true, discussionsEnabled: enabled, tree: { type: "folder", name: "", title: null,
+        description: null, path: "", url: "/extra", page_count: 0, children: [] } }] }); });
+    await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions") !== null).toBe(enabled));
+  };
+  await open();
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: `Submitted ${kind}` } });
+  fireEvent.click(screen.getByRole("button", { name: kind === "create" ? "Create discussion" : kind === "reply" ? "Post reply" : "Save comment" }));
+  await waitFor(() => expect(f.calls).toHaveLength(1));
+  await setEnabled(false);
+  const ordinaryLink = screen.getByRole("link", { name: "Edit this page" });
+  ordinaryLink.focus();
+  if (kind === "edit") data.comments[0].markdown = "Canonical saved edit\n";
+  await act(async () => { finish(Response.json({ id: "thread", comment_id: null, commit: null }, { status: kind === "edit" ? 200 : 201 })); });
+  await waitFor(() => expect(view.client.isMutating()).toBe(0));
+  await waitFor(() => expect(view.client.isFetching()).toBe(0));
+  expect(view.container.querySelector(".pb-margin-discussions")).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull();
+  expect(document.activeElement).toBe(ordinaryLink);
+  await setEnabled(true);
+  expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull();
+  await open();
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", kind === "edit" ? data.comments[0].markdown : "");
+  expect(f.calls).toHaveLength(1);
+});
+
+it.each(["create", "reply", "edit"])("preserves a newer %s buffer when the prior request succeeds after another disable", async (kind) => {
+  const data = envelope();
+  let finish!: (response: Response) => void;
+  const f = fixture(data, async () => new Promise<Response>((resolve) => { finish = resolve; }));
+  const view = mount(f.fetcher, "/extra/note", true);
+  const open = async () => {
+    if (kind !== "create") {
+      await waitFor(() => expect(view.container.querySelector('[data-pb-discussion-id="thread"]')).not.toBeNull());
+      fireEvent.click(view.container.querySelector('[data-pb-discussion-id="thread"]')!);
+      await screen.findByText("Rendered body");
+    }
+    fireEvent.click(await findDiscussionButton({ name: kind === "create" ? "Start a discussion" : kind === "reply" ? "Reply" : "Edit comment" }));
+  };
+  const setEnabled = async (enabled: boolean) => {
+    await act(async () => { view.client.setQueryData(treeQuery.queryKey, { roots: [{ root: "extra", primary: true,
+      available: true, editable: true, discussionsEnabled: enabled, tree: { type: "folder", name: "", title: null,
+        description: null, path: "", url: "/extra", page_count: 0, children: [] } }] }); });
+    await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions") !== null).toBe(enabled));
+  };
+  await open();
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: `Old ${kind}` } });
+  fireEvent.click(screen.getByRole("button", { name: kind === "create" ? "Create discussion" : kind === "reply" ? "Post reply" : "Save comment" }));
+  await waitFor(() => expect(f.calls).toHaveLength(1));
+  await setEnabled(false);
+  await setEnabled(true);
+  await open();
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: `New unsaved ${kind}` } });
+  await setEnabled(false);
+  await act(async () => { finish(Response.json({ id: "thread", comment_id: null, commit: null }, { status: kind === "edit" ? 200 : 201 })); });
+  await waitFor(() => expect(view.client.isMutating()).toBe(0));
+  await waitFor(() => expect(view.client.isFetching()).toBe(0));
+  await setEnabled(true);
+  expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull();
+  await open();
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", `New unsaved ${kind}`);
+  expect(f.calls).toHaveLength(1);
+});
+
+it.each(["create", "reply", "edit"])("preserves a failed %s submission completed while configured disabled", async (kind) => {
+  let finish!: (response: Response) => void;
+  const f = fixture(envelope(), async () => new Promise<Response>((resolve) => { finish = resolve; }));
+  const view = mount(f.fetcher, "/extra/note", true);
+  const open = async () => {
+    if (kind !== "create") {
+      await waitFor(() => expect(view.container.querySelector('[data-pb-discussion-id="thread"]')).not.toBeNull());
+      fireEvent.click(view.container.querySelector('[data-pb-discussion-id="thread"]')!);
+      await screen.findByText("Rendered body");
+    }
+    fireEvent.click(await findDiscussionButton({ name: kind === "create" ? "Start a discussion" : kind === "reply" ? "Reply" : "Edit comment" }));
+  };
+  const setEnabled = async (enabled: boolean) => {
+    await act(async () => { view.client.setQueryData(treeQuery.queryKey, { roots: [{ root: "extra", primary: true,
+      available: true, editable: true, discussionsEnabled: enabled, tree: { type: "folder", name: "", title: null,
+        description: null, path: "", url: "/extra", page_count: 0, children: [] } }] }); });
+    await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions") !== null).toBe(enabled));
+  };
+  await open();
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: `Failed ${kind}` } });
+  fireEvent.click(screen.getByRole("button", { name: kind === "create" ? "Create discussion" : kind === "reply" ? "Post reply" : "Save comment" }));
+  await waitFor(() => expect(f.calls).toHaveLength(1));
+  await setEnabled(false);
+  await act(async () => { finish(Response.json({ error: { code: "discussions_disabled", message: "Disabled" } }, { status: 403 })); });
+  await waitFor(() => expect(view.client.isMutating()).toBe(0));
+  await setEnabled(true);
+  expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull();
+  await open();
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", `Failed ${kind}`);
+  expect(f.calls).toHaveLength(1);
+});
+
+it.each(["root", "page"])("detail disablement and its draft stay scoped when the %s owner changes", async (change) => {
+  const data = envelope(); const f = fixture(data);
+  const next = change === "root" ? { ...page, root: "docs", url: "/docs/note" } : { ...page, id: "other", path: "other.md", url: "/extra/other" };
+  const nextDetail = envelope(); nextDetail.discussion!.page = { id: next.id, path: next.path, resolution: "by_id" };
+  if (change === "page") nextDetail.discussion!.id = "other-thread";
+  const view = mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/pages/page") return Response.json({ ...page, url: null });
+    if (url === "/api/v1/pages/page/html") return Response.json({ ...source, url: null });
+    if (url.includes("/pages/by-path/extra/other")) return Response.json(next);
+    if (url.includes("/pages/other/html")) return Response.json({ ...source, ...next });
+    if (url.includes("/pages/other/discussions") || (url.includes("/pages/page/discussions") && url.includes("root=docs")))
+      return Response.json({ discussions: [nextDetail.discussion], next: null, discussions_available: true, reason: null });
+    if (url.includes("/discussions/thread?") && url.includes("root=docs")) return Response.json(nextDetail);
+    if (url.includes("/discussions/other-thread?")) return Response.json(nextDetail);
+    return f.fetcher(input, init);
+  }) as typeof fetch, change === "root" ? "/p/page" : "/extra/note");
+  await waitFor(() => expect(view.container.querySelector('[data-pb-discussion-id="thread"]')).not.toBeNull());
+  fireEvent.click(view.container.querySelector('[data-pb-discussion-id="thread"]')!);
+  fireEvent.click(await findDiscussionButton({ name: "Reply" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Only the old workspace" } });
+  const unavailable = { discussion: null, comments: [], next: null, discussions_available: false, reason: "disabled_by_config" };
+  await act(async () => { view.client.setQueryData(discussionDetailQuery("extra", "thread").queryKey,
+    { pages: [unavailable], pageParams: [null] }); });
+  await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions")).toBeNull());
+  if (change === "root") await act(async () => { view.client.setQueryData(pageHtmlQuery("page", null).queryKey, { ...source, ...next }); });
+  else act(() => view.history.push(next.url));
+  await screen.findByRole("region", { name: "Page discussions" });
+  await act(async () => { view.client.setQueryData(discussionDetailQuery("extra", "thread").queryKey,
+    { pages: [unavailable], pageParams: [null] }); });
+  expect(screen.getByRole("region", { name: "Page discussions" })).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull();
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", "");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(view.container.querySelector(`[data-pb-discussion-id="${nextDetail.discussion!.id}"]`)).not.toBeNull());
+  fireEvent.click(view.container.querySelector(`[data-pb-discussion-id="${nextDetail.discussion!.id}"]`)!);
+  fireEvent.click(await findDiscussionButton({ name: "Reply" }));
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", "");
+  expect(f.calls).toHaveLength(0);
+});
+
+it.each(["create", "reply", "edit"])("detail-only disablement hides the whole page workspace and retains its %s draft", async (kind) => {
+  const data = envelope();
+  data.discussion!.range = { byte_start: 0, byte_end: 14 };
+  data.discussion!.range_content_hash = source.content_hash;
+  const enabledList = { discussions: [data.discussion], next: null, discussions_available: true, reason: null };
+  const f = fixture(data);
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).includes("/pages/page/discussions")
+    ? Response.json(enabledList) : f.fetcher(input, init)) as typeof fetch;
+  const view = mount(fetcher, "/extra/note");
+  const openThread = async () => {
+    await waitFor(() => expect(view.container.querySelector('[data-pb-discussion-id="thread"]')).not.toBeNull());
+    fireEvent.click(view.container.querySelector('[data-pb-discussion-id="thread"]')!);
+    await screen.findByText("Rendered body");
+  };
+  await openThread();
+  await waitFor(() => expect(view.container.querySelector(".pb-discussion-passage")).not.toBeNull());
+  if (kind === "create") fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
+  else fireEvent.click(await findDiscussionButton({ name: kind === "reply" ? "Reply" : "Edit comment" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: `Preserve detail-only ${kind}` } });
+  const cachedTree = view.client.getQueryData(treeQuery.queryKey);
+  const cachedList = view.client.getQueryData(pageDiscussionsQuery("extra", "page").queryKey);
+  const unavailable = { discussion: null, comments: [], next: null, discussions_available: false, reason: "disabled_by_config" };
+  if (kind === "create") {
+    // A detail answer can reach the cache after returning to creation; its owner remains this workspace.
+    await act(async () => { view.client.setQueryData(discussionDetailQuery("extra", "thread").queryKey,
+      { pages: [unavailable], pageParams: [null] }); });
+  } else {
+    Object.assign(data, unavailable);
+    await act(async () => { await view.client.invalidateQueries({ queryKey: discussionDetailQuery("extra", "thread").queryKey }); });
+  }
+  await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions")).toBeNull());
+  expect(view.container.querySelector(".pb-discussion-passage")).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Start a discussion" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Close discussion" })).toBeNull();
+  expect(screen.getByText("banana 😀")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Edit this page" })).toBeTruthy();
+  expect(view.client.getQueryData(treeQuery.queryKey)).toBe(cachedTree);
+  expect(view.client.getQueryData(pageDiscussionsQuery("extra", "page").queryKey)).toBe(cachedList);
+  const reads = (fetcher as ReturnType<typeof vi.fn>).mock.calls.length;
+  fireEvent(window, new Event("focus")); fireEvent(window, new Event("online"));
+  const selection = window.getSelection()!;
+  const range = document.createRange(); range.selectNodeContents(screen.getByText("banana 😀").firstChild!);
+  selection.removeAllRanges(); selection.addRange(range); fireEvent(document, new Event("selectionchange"));
+  await act(async () => { await Promise.resolve(); });
+  expect((fetcher as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(reads);
+  expect(f.calls).toHaveLength(0);
+  // A deliberate fresh enabled answer restores eligibility, never the previous active action.
+  Object.assign(data, envelope());
+  await act(async () => { view.client.setQueryData(discussionDetailQuery("extra", "thread").queryKey,
+    { pages: [data], pageParams: [null] }); });
+  await screen.findByRole("region", { name: "Page discussions" });
+  expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Close discussion" })).toBeNull();
+  selection.removeAllRanges();
+  if (kind === "create") fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
+  else {
+    await openThread();
+    fireEvent.click(await findDiscussionButton({ name: kind === "reply" ? "Reply" : "Edit comment" }));
+  }
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", `Preserve detail-only ${kind}`);
+  expect(f.calls).toHaveLength(0);
+});
+
+it("detail-only disablement also hides the discussion escape link after a same-page HTML failure", async () => {
+  let sourceFailed = false;
+  const f = fixture();
+  const view = mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+    sourceFailed && String(input).includes("/pages/page/html")
+      ? Response.json({ error: { code: "root_unavailable", message: "Source unavailable" } }, { status: 503 })
+      : f.fetcher(input, init)) as typeof fetch, "/extra/note");
+  await waitFor(() => expect(view.container.querySelector('[data-pb-discussion-id="thread"]')).not.toBeNull());
+  fireEvent.click(view.container.querySelector('[data-pb-discussion-id="thread"]')!);
+  await screen.findByText("Rendered body");
+  await act(async () => { view.client.setQueryData(discussionDetailQuery("extra", "thread").queryKey, { pages: [{
+    discussion: null, comments: [], next: null, discussions_available: false, reason: "disabled_by_config",
+  }], pageParams: [null] }); });
+  await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions")).toBeNull());
+  sourceFailed = true;
+  await act(async () => { await view.client.invalidateQueries({ queryKey: pageHtmlQuery("page", "extra").queryKey }); });
+  await screen.findByText("Source unavailable");
+  expect(screen.queryByRole("link", { name: "Discussions in extra" })).toBeNull();
+  expect(screen.getByText("File")).toBeTruthy();
 });
 
 it("keeps focus on the margin toggle when a delayed edit succeeds while hidden", async () => {
@@ -1330,4 +1625,100 @@ it.each(['root', 'page'] as const)('clears a visible passage and aborts held old
   await act(async () => release(Response.json(data)));
   expect(document.querySelector('.pb-discussion-passage')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Close discussion' })).toBeNull();
+});
+
+it("disabled page hides the entire workspace while cached content and ordinary editing remain", async () => {
+  const f = fixture();
+  const view = mount(f.fetcher, "/extra/note", false, false, true);
+  await screen.findByText("banana 😀");
+  expect(view.container.querySelector(".pb-margin-discussions")).toBeNull();
+  expect(view.container.querySelector(".pb-discussion-passage")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Start a discussion" })).toBeNull();
+  expect(screen.getByRole("link", { name: "Edit this page" })).toBeTruthy();
+  expect(f.fetcher).not.toHaveBeenCalledWith(expect.stringContaining("/discussions"), expect.anything());
+  expect((f.fetcher as ReturnType<typeof vi.fn>).mock.calls.some(([input]) => String(input).includes("/discussions"))).toBe(false);
+});
+
+it("bare page waits for tree metadata and activates default-on workspace on that render", async () => {
+  let finish!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => { finish = resolve; });
+  const calls: string[] = [];
+  const base = fixture().fetcher;
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input); calls.push(url);
+    if (url === "/api/v1/tree") return pending;
+    if (url === "/api/v1/pages/page") return Response.json({ ...page, url: null });
+    if (url === "/api/v1/pages/page/html") return Response.json({ ...source, url: null });
+    return base(input, init);
+  }) as typeof fetch;
+  mount(fetcher, "/p/page", false, false, false, false);
+  await screen.findByText("banana 😀");
+  expect(calls.some((url) => url.includes("/discussions"))).toBe(false);
+  await act(async () => { finish(Response.json({ roots: [{ root: "extra", primary: true, available: true, editable: true,
+    tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/extra", page_count: 0, children: [] } }] })); });
+  await screen.findByRole("region", { name: "Page discussions" });
+  expect(calls.filter((url) => url === "/api/v1/pages/page/html")).toHaveLength(1);
+  expect(calls.some((url) => url.includes("/pages/page/discussions?root=extra"))).toBe(true);
+});
+
+it.each([false, true])("initial page metadata failure offers retry while preserving explicit-false %s precedence", async (disabled) => {
+  let failed = true;
+  const base = fixture().fetcher;
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/tree") return failed ? new Response(null, { status: 503 }) : Response.json({ roots: [{ root: "extra",
+      primary: true, available: true, editable: true, ...(disabled ? { discussionsEnabled: false } : {}),
+      tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/extra", page_count: 0, children: [] } }] });
+    if (url === "/api/v1/pages/page") return Response.json({ ...page, url: null });
+    if (url === "/api/v1/pages/page/html") return Response.json({ ...source, url: null });
+    return base(input, init);
+  }) as typeof fetch;
+  const view = mount(fetcher, "/p/page", false, false, false, false);
+  const retry = await screen.findByRole("button", { name: "Retry discussion availability" });
+  expect(screen.getByText("banana 😀")).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Page discussions" })).toBeNull();
+  expect((fetcher as ReturnType<typeof vi.fn>).mock.calls.some(([input]) => String(input).includes("/discussions"))).toBe(false);
+  failed = false; fireEvent.click(retry);
+  await waitFor(() => expect(view.client.getQueryState(treeQuery.queryKey)?.status).toBe("success"));
+  expect(screen.queryByRole("button", { name: "Retry discussion availability" })).toBeNull();
+  if (disabled) {
+    expect(screen.queryByRole("region", { name: "Page discussions" })).toBeNull();
+    expect((fetcher as ReturnType<typeof vi.fn>).mock.calls.some(([input]) => String(input).includes("/discussions"))).toBe(false);
+  } else await screen.findByRole("region", { name: "Page discussions" });
+});
+
+it.each([false, true])("cached owning metadata still governs page capability after a tree error (disabled %s)", async (disabled) => {
+  const base = fixture().fetcher;
+  const view = mount(vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input) === "/api/v1/tree"
+    ? new Response(null, { status: 503 }) : base(input, init)) as typeof fetch, "/extra/note", false, false, disabled);
+  await screen.findByText("banana 😀");
+  await act(async () => { await view.client.invalidateQueries({ queryKey: treeQuery.queryKey }); });
+  expect(view.client.getQueryState(treeQuery.queryKey)?.status).toBe("error");
+  expect(screen.queryByRole("button", { name: "Retry discussion availability" })).toBeNull();
+  if (disabled) expect(screen.queryByRole("region", { name: "Page discussions" })).toBeNull();
+  else expect(await screen.findByRole("region", { name: "Page discussions" })).toBeTruthy();
+});
+
+it("fresh configured-disable metadata hides cached success and a late thread response", async () => {
+  const f = fixture(); const view = mount(f.fetcher);
+  await screen.findByText("Rendered body");
+  await act(async () => { view.client.setQueryData(treeQuery.queryKey, { roots: [{ root: "extra", primary: true,
+    available: true, editable: true, discussionsEnabled: false, tree: { type: "folder", name: "", title: null,
+      description: null, path: "", url: "/extra", page_count: 0, children: [] } }] }); });
+  await screen.findByText("Discussions are disabled for this root");
+  await act(async () => { view.client.setQueryData(discussionDetailQuery("extra", "thread").queryKey, { pages: [envelope()], pageParams: [null] }); });
+  expect(screen.queryByText("Rendered body")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+});
+
+it("configured-disable mutation error retains an old client's reply draft", async () => {
+  const f = fixture(envelope(), async () => Response.json({ error: { code: "discussions_disabled", message: "Disabled" } }, { status: 403 }));
+  mount(f.fetcher);
+  fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
+  const field = screen.getByRole("textbox", { name: "Comment" });
+  fireEvent.change(field, { target: { value: "Keep my reply" } });
+  fireEvent.click(screen.getByRole("button", { name: "Post reply" }));
+  await screen.findByText(/Discussions are disabled for this root. Your draft is still here/);
+  expect(field).toHaveProperty("value", "Keep my reply");
+  expect(f.calls).toHaveLength(1);
 });

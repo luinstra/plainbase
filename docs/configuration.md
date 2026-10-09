@@ -164,6 +164,7 @@ Per-root keys:
 | `path` | the directory the root serves (**required**, non-blank) | - | - |
 | `editable` | whether pages in this root can be edited/created. **Topology, not authorization**: it is enforced in EVERY auth mode, `off` included, and a write to a read-only root answers 403 `root_not_editable` | `true` | `false` |
 | `history` | `off` \| `auto` \| `native` git history mode | `auto` (today's repo auto-detection) | `off` (Plainbase never commits into a repo it does not own) |
+| `discussionsEnabled` | discussion topology: false disables access and hides discussion UI for this root; preserves files and history | `true` | `true` |
 | `displayName` | optional human-facing label for the root; the root name remains the URL and identity | omitted | omitted |
 | `includes` | optional list of JDK glob patterns selecting files; omitted keeps the legacy default, while `[]` selects no files | omitted | omitted |
 | `excludes` | list of JDK glob patterns subtracted from the selected files | `[]` | `[]` |
@@ -348,7 +349,7 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error (the same conventi
 - **Restart to apply.** `root add`/`remove` edit a file; they do not talk to a running server, and the
   server does not hot-reload topology. Nothing changes until the next restart.
 
-The root CLI has no flags for `displayName`, `includes`, `excludes`, or `folderLabels`. To add those settings to an
+The root CLI has no flags for `discussionsEnabled`, `displayName`, `includes`, `excludes`, or `folderLabels`. To add those settings to an
 existing managed root, stop `serve`, run `plainbase root remove <name>`, then declare that same name and path with the
 new settings in `plainbase.conf` before restarting. Declare the required `docs` root there as well when using an
 explicit `roots {}` block. Do not hand-edit `roots.conf`, and do not leave the same root name in both files: removal
@@ -500,17 +501,57 @@ then restart the server.
 
 | Root configuration | Lists and root-pinned detail | Preview and mutations |
 |---|---|---|
-| Editable local root | Available | Subject to principal policy |
+| Editable local root, enabled | Available | Subject to principal policy |
+| Editable local root, disabled | `200`, `discussions_available=false`, `reason="disabled_by_config"` | `403 discussions_disabled` |
 | Read-only root | `200`, `discussions_available=false`, `reason="read_only_root"` | Refused with `root_not_editable` |
-| Editable object-mode root | `200`, `discussions_available=false`, `reason="object_storage"` | Refused with `discussions_unsupported` |
+| Synthesized editable object primary | `200`, `discussions_available=false`, `reason="object_storage"` | Refused with `discussions_unsupported` |
 
-Unpinned discussion-ID lookup scans only editable local roots. An ID present only in an unsupported
+Unpinned discussion-ID lookup scans only enabled editable local roots. An ID present only in an unsupported
 root returns `404 discussion_not_found` unless another eligible root has an uncertain claim; pin that
 root for disabled detail or an ID mutation's topology refusal. Read-only refusal takes precedence when
 both restrictions apply. Local defaults stay `editable=true`, `history=auto` for `docs`, and
-`editable=false`, `history=off` for extra roots. Discussion watcher coverage requires editable local
+`editable=false`, `history=off` for extra roots. Discussion watcher coverage requires enabled editable local
 roots available at boot. Added roots need restart before discussion watcher/index coverage; a root
 missing at boot also needs restoration and restart for watcher coverage. Object-mode Discussions remain deferred.
+
+### Per-root discussion access
+
+Discussions default to enabled. Set `discussionsEnabled = false` in the root's declaring `plainbase.conf`, then restart the
+server and reload browser tabs:
+
+```hocon
+roots {
+  docs {
+    path = "/home/me/docs"
+  }
+  project {
+    path = "/home/me/project"
+    editable = true
+    history = off
+    discussionsEnabled = false
+  }
+}
+```
+
+An explicit roots block must include the primary `docs` declaration; a block containing only an extra toggle is invalid.
+For a CLI-managed root, use the move-to-declaring-file procedure above. `roots.conf` remains CLI-owned; editing it is not a
+supported settings workflow. The parser accepts the existing trimmed, case-insensitive `true`/`false` and `1`/`0` spellings.
+
+Explicit configured roots are local-only in this release. The synthesized object primary remains default-on; this setting
+is not a way to configure object roots. The flag grants no permission, including in auth mode `off`. Authentication precedes
+topology checks; read-only and object-backend refusal precede configured-disable refusal.
+
+Disabled-root discussion files, comments, IDs and Git history remain intact. Page browsing, search, editing, proposals and
+content watching continue under their existing rules. No discussion claim lookup, store access, reparse or discussion watcher
+runs for a disabled root. The global derived database can still be truncated/rebuilt at boot. An unpinned ID held only in
+disabled roots returns `404 discussion_not_found` for a permitted caller; a valid pin gives the known-root topology outcome.
+ID mutations retain their ordinary policy/audit ordering, so a permitted missing-ID request can have one allowed null-root
+audit decision followed by 404, with no mutation. Reads and preview do not audit.
+
+Remove the setting or change it to true, restart the server, then reload browser tabs to re-enable. Boot reparses the preserved
+files and restores access. The root registry is immutable for each server run; existing tabs can retain cached availability
+until reloaded. Availability changes require this restart/reload workflow, not a live browser transition.
+Back up every root's authoritative files regardless of this flag. There is no runtime hot reload, global switch or CLI settings flag.
 
 The root name `discussions` is now reserved. Before upgrading, rename any such root in the file that
 declares it: `plainbase.conf` or `DATA_DIR/roots.conf`. The root-removal command cannot run while that

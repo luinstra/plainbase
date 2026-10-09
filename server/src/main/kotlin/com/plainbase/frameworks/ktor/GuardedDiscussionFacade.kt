@@ -19,7 +19,6 @@ import com.plainbase.domain.principal.DiscussionGrant
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.principal.SubjectKey
 import com.plainbase.domain.root.RootAvailability
-import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
@@ -28,6 +27,7 @@ import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.CitationFactory
+import com.plainbase.domain.service.DenyReason
 import com.plainbase.domain.service.DiscussionAction
 import com.plainbase.domain.service.DiscussionAnchorRequest
 import com.plainbase.domain.service.DiscussionClaim
@@ -77,7 +77,7 @@ class GuardedDiscussionFacade(
             is IdResolution.Ambiguous -> throw DiscussionReadRefused(DiscussionRefusal(409, "ambiguous_page_id", resolution.candidates))
             IdResolution.None -> throw DiscussionReadRefused(404, "page_not_found")
         }
-        if (topology != null) return DiscussionListDto(emptyList(), null, false, unavailableReason(owner))
+        if (topology != null) return DiscussionListDto(emptyList(), null, false, unavailableReason(topology))
         val page = page(snapshot, owner, pageId) ?: throw DiscussionReadRefused(404, "page_not_found")
         return checkNotNull(projection).pageList(owner, page, snapshot, after, limit)
     }
@@ -86,7 +86,7 @@ class GuardedDiscussionFacade(
         val snapshot = indexBuilder.current
         val topology = policy.checkDiscussionRead(principal, RootedResource(root, "discussions"))
         if (registry.byName(root) == null) throw DiscussionReadRefused(400, "invalid_root")
-        if (topology != null) return DiscussionListDto(emptyList(), null, false, unavailableReason(root))
+        if (topology != null) return DiscussionListDto(emptyList(), null, false, unavailableReason(topology))
         return checkNotNull(projection).rootList(root, snapshot, after, limit, state)
     }
 
@@ -94,10 +94,13 @@ class GuardedDiscussionFacade(
         val snapshot = indexBuilder.current
         if (pin != null && registry.byName(pin) != null) {
             val topology = policy.checkDiscussionRead(principal, RootedResource(pin, "discussion/${id.value}"))
-            if (topology != null) return DiscussionDetailDto(null, emptyList(), null, false, unavailableReason(pin))
+            if (topology != null) return DiscussionDetailDto(null, emptyList(), null, false, unavailableReason(topology))
         }
         val target = target(id, pin, null)
-        policy.checkDiscussionRead(principal, RootedResource(target.root, "discussion/${id.value}"))
+        // Deliberate defense after resolution. Immutable production topology normally refuses an
+        // ineligible pin above and scans only eligible unpinned roots; retain the actual reason mapping.
+        val topology = policy.checkDiscussionRead(principal, RootedResource(target.root, "discussion/${id.value}"))
+        if (topology != null) return DiscussionDetailDto(null, emptyList(), null, false, unavailableReason(topology))
         target.unknownRoots.firstOrNull { !availability.current().isAvailable(it) }?.let(::requireAvailable)
         target.refusal?.let { throw DiscussionReadRefused(it) }
         return checkNotNull(projection).detail(
@@ -147,8 +150,12 @@ class GuardedDiscussionFacade(
         return page to bytes
     }
 
-    private fun unavailableReason(root: RootName): String =
-        if (registry.byName(root)?.editable == false) "read_only_root" else "object_storage"
+    private fun unavailableReason(reason: DenyReason): String = when (reason) {
+        DenyReason.ROOT_NOT_EDITABLE -> "read_only_root"
+        DenyReason.DISCUSSIONS_UNSUPPORTED -> "object_storage"
+        DenyReason.DISCUSSIONS_DISABLED -> "disabled_by_config"
+        DenyReason.POLICY -> error("Authorization refusal is not discussion topology")
+    }
 
     override fun start(
         principal: Principal,
@@ -281,7 +288,7 @@ class GuardedDiscussionFacade(
     private fun target(id: DiscussionId, pin: RootName?, commentId: CommentId?): Target {
         if (pin != null) {
             val declared = registry.byName(pin) ?: return Target(null, DiscussionFacts.Unknown, DiscussionRefusal(400, "invalid_root"))
-            if (!declared.editable || declared.backend !is RootBackend.Local) {
+            if (!declared.supportsDiscussions) {
                 return Target(pin, DiscussionFacts.Unknown, null)
             }
             return when (val claim = reads.claim(pin, id, commentId)) {
@@ -290,7 +297,7 @@ class GuardedDiscussionFacade(
                 DiscussionClaim.Unknown -> Target(null, DiscussionFacts.Unknown, DiscussionRefusal(503, "content_unreadable"), listOf(pin))
             }
         }
-        val claims = registry.roots.filter { it.editable && it.backend is RootBackend.Local }
+        val claims = registry.roots.filter { it.supportsDiscussions }
             .map { it.name to reads.claim(it.name, id, commentId) }
         val present = claims.filter { it.second is DiscussionClaim.Present }
         val unknown = claims.filter { it.second == DiscussionClaim.Unknown }.map { it.first }

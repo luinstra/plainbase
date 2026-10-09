@@ -56,7 +56,12 @@ data class Root(
     val excludes: List<String> = emptyList(),
     /** Exact NFC-normalized relative folder paths to their display labels. */
     val folderLabels: Map<String, String> = emptyMap(),
+    /** Discussion topology only; disabling preserves authoritative files and page capabilities. */
+    val discussionsEnabled: Boolean = true,
 ) {
+    /** Discussion-only eligibility; ordinary content and history keep their own rules. */
+    val supportsDiscussions: Boolean get() = discussionsEnabled && editable && backend is RootBackend.Local
+
     /** The root's local filesystem path, or null for an object-backed root - saves caller-side casts in the wiring. */
     val localPath: Path? get() = (backend as? RootBackend.Local)?.path
 }

@@ -51,6 +51,8 @@ function scenarioFor(projectName: string): SmokeScenario {
     case "auth":
     case "auth-caret":
       return { authMode: "builtin", roots: "single" };
+    case "discussion-config":
+      return { authMode: "off", roots: "discussion-config" };
     case "multi-root":
       return { authMode: "off", roots: "multi" };
     case "multi-root-unavailable":

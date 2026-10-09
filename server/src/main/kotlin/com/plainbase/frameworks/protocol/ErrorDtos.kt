@@ -126,6 +126,8 @@ object ErrorCodes {
     /** 403: the target root is declared `editable = false` — page-mutation writes are refused there in EVERY auth mode. */
     const val ROOT_NOT_EDITABLE: String = "root_not_editable"
 
+    /** 403: configured-disabled discussion topology refuses writes and preview in every auth mode, including off. */
+    const val DISCUSSIONS_DISABLED: String = "discussions_disabled"
     const val DISCUSSIONS_UNSUPPORTED: String = "discussions_unsupported"
 
     // Discussion transport grammar and selection refusals.

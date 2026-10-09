@@ -14,7 +14,6 @@ import com.plainbase.domain.history.CommitOutcome
 import com.plainbase.domain.history.HistoryChange
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.root.RootAvailability
-import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ContentWriteMonitor
@@ -41,7 +40,7 @@ class DiscussionBoot(
     private val clock: Clock,
     private val identity: CommitIdentity = CommitIdentity("Plainbase", "plainbase@localhost"),
 ) {
-    private val scopedRoots = registry.roots.filter { it.editable && it.backend is RootBackend.Local }
+    private val scopedRoots = registry.roots.filter { it.supportsDiscussions }
 
     fun run() {
         rows.writing { truncate() }

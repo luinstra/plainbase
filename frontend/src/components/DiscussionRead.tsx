@@ -30,6 +30,7 @@ export const DISCUSSION_STATES = ["page_level", "exact", "moved", "ambiguous", "
 
 export function discussionAvailability(reason: string | null): string {
   if (reason === "read_only_root") return "Discussions are not available on this read-only root";
+  if (reason === "disabled_by_config") return "Discussions are disabled for this root";
   if (reason === "object_storage") return "Discussions are not available for this storage type";
   return "Discussions are not available on this root";
 }

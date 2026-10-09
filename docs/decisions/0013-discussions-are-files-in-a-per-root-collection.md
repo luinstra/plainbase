@@ -22,10 +22,10 @@ and reference contract before any code exists. Four forces shaped it:
 ## Decision
 
 **Location.** A root's discussions live in one collection at `<root>/.plainbase/discussions/`, not beside
-each folder. Discussions exist only on editable local roots; the UI and API say so explicitly for
-the others. Top-level `.plainbase/` is never page content, with NFC-normalized, case-insensitive
-reservation. Includes with that first literal-prefix segment are refused at boot; runtime hiding
-also prevents wildcard includes from exposing it.
+each folder. Enabled editable local roots support discussion access; the UI and API report access
+unavailable for the others. Disabling a root preserves its existing collection files. Top-level `.plainbase/`
+is never page content, with NFC-normalized, case-insensitive reservation. Includes with that first literal-prefix
+segment are refused at boot; runtime hiding also prevents wildcard includes from exposing it.
 On git-history roots, earlier commits keep the purged text; purge does not rewrite history.
 
 **Layout.** One directory per discussion, `<discussion-id>/`, holding `discussion.md` (frontmatter: page
@@ -63,7 +63,9 @@ ship in a later slice; until then object-mode roots report Discussions unavailab
 
 **Authority.** Files are the authority. The server keeps a derived, deletable discussion index, rebuilt
 from the files and kept current by a separate watcher over `.plainbase` and `.plainbase/discussions/`
-on editable local roots available at boot. Added roots require restart for watcher coverage; roots
+on discussion-enabled editable local roots available at boot. Configured-disabled roots are excluded from
+rebuilds and discussion watchers; their authoritative files remain preserved and must still be backed up.
+Re-enable plus restart reparses those files. Added roots require restart for watcher coverage; roots
 missing at boot require restoration and restart.
 Full reparses scheduled every 60 seconds detect edits inside existing discussion folders; this is
 not a freshness deadline. Unsynced reads consult files, while new creates fail closed until indexed

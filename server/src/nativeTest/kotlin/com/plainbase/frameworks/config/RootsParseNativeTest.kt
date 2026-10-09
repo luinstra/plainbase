@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.config
 
+import com.typesafe.config.ConfigException
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
 import kotlin.test.Test
@@ -59,6 +60,29 @@ class RootsParseNativeTest {
             assertTrue(failure.message.orEmpty().contains("resolve to the same directory"), "unexpected message: ${failure.message}")
         } finally {
             Files.walk(base).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
+
+    @Test
+    fun `discussion Boolean decoding preserves independent defaults in native`() {
+        val data = Files.createTempDirectory("pb-native-discussion-config")
+        try {
+            val env = mapOf("DATA_DIR" to data.toString())
+            for ((value, expected) in listOf("false" to false, "0" to false, "1" to true, "\" TrUe \"" to true)) {
+                Files.writeString(
+                    data.resolve("plainbase.conf"),
+                    """roots { docs { path = "/roots/docs" }, extra { path = "/roots/extra", discussionsEnabled = $value } }""",
+                )
+                val config = ConfigLoader.fromEnvAndFile(env)
+                assertEquals(true, config.roots.primary.discussionsEnabled)
+                assertEquals(expected, config.roots.extras.single().discussionsEnabled)
+            }
+            Files.writeString(data.resolve("plainbase.conf"), """roots { docs { path = "/roots/docs", discussionsEnabled = yes } }""")
+            assertFailsWith<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
+            Files.writeString(data.resolve("plainbase.conf"), """roots { docs { path = "/roots/docs", discussionsEnabled = [] } }""")
+            assertFailsWith<ConfigException.WrongType> { ConfigLoader.fromEnvAndFile(env) }
+        } finally {
+            data.toFile().deleteRecursively()
         }
     }
 }

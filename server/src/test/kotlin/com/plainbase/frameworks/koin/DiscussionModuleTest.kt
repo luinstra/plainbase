@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.koin
 
+import com.plainbase.domain.discussion.DiscussionId
 import com.plainbase.domain.discussion.DiscussionIndex
 import com.plainbase.domain.discussion.DiscussionRows
 import com.plainbase.domain.discussion.DiscussionStore
@@ -12,22 +13,28 @@ import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ContentWriteMonitor
 import com.plainbase.domain.service.DiscussionFacade
 import com.plainbase.domain.service.DiscussionFullReads
+import com.plainbase.domain.service.DiscussionReparser
+import com.plainbase.domain.service.DiscussionSyncState
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageReindexListener
 import com.plainbase.domain.service.SyncedDiscussionIndex
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.discussion.DiscussionBoot
+import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.ktor.GuardedDiscussionFacade
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.runtime.HistoryProviders
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeSameInstanceAs
 import io.mockk.mockk
 import org.koin.core.qualifier.named
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Clock
 
@@ -99,6 +106,40 @@ class DiscussionModuleTest : FunSpec({
             indexReads shouldBeSameInstanceAs application.koin.get<DiscussionFullReads>()
         } finally {
             application.close()
+        }
+    }
+    test("real discussion module scope excludes disabled local roots from store sync and reparser") {
+        val base = Files.createTempDirectory("pb-discussion-module-scope")
+        val enabled = Root(RootName.PRIMARY, RootBackend.Local(base.resolve("docs")), true, HistoryMode.OFF)
+        val disabled =
+            Root(RootName.require("extra"), RootBackend.Local(base.resolve("extra")), true, HistoryMode.OFF, discussionsEnabled = false)
+        Files.createDirectories(enabled.localPath)
+        Files.createDirectories(disabled.localPath)
+        val owner = ServerResourceOwner()
+        val app = createOwnedTestKoinApplication(
+            owner,
+            listOf(
+                createDiscussionModule(owner),
+                module {
+            single { RootRegistry.of(listOf(enabled, disabled)) }
+            single { RootAvailability(Clock.System) }
+            single { PlainbaseConfig(base.resolve("docs"), base.resolve("data"), "127.0.0.1", 8080) }
+            single<DiscussionRows> { mockk(relaxed = true) }
+        },
+            ),
+        )
+        try {
+            val sync = app.koin.get<DiscussionSyncState>()
+            sync.scopeRoots shouldBe setOf(enabled.name)
+            val reparser = app.koin.get<DiscussionReparser>()
+            shouldThrow<IllegalArgumentException> { reparser.reparseRoot(disabled.name, true) }
+            val store = app.koin.get<LocalDiscussionStore>()
+            shouldThrow<IllegalArgumentException> {
+                store.read(disabled.name, DiscussionId.require("01900000-0000-7000-8000-000000000001"))
+            }
+        } finally {
+            owner.close()
+            base.toFile().deleteRecursively()
         }
     }
 })

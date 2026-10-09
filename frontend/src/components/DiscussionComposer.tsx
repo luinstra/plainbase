@@ -22,6 +22,7 @@ export function discussionActionError(error: unknown, action: "edit" | "retract"
   if (error.status >= 500) return "The outcome is unclear. Refresh and inspect whether the change happened before trying again.";
   if (error.status === 401) return "Your session needs attention. Your text and selection are still here.";
   if (error.code === "root_not_editable") return "This root is configured read-only. Your action is still here for review or canceling.";
+  if (error.code === "discussions_disabled") return "Discussions are disabled for this root. Your text and selection are still here.";
   if (error.code === "discussions_unsupported") return "Discussions are unavailable here. Your action is still here.";
   if (error.status === 403) {
     const target = action === "edit" || action === "purge" || action === "retract" ? "this comment" : "this discussion";
@@ -73,6 +74,7 @@ export function discussionWriteError(error: unknown): string {
     case "discussion_unreadable": return "This discussion cannot be read right now. Refresh before trying again.";
     case "page_not_found": case "discussion_not_found": return "The page or discussion could not be found. Your draft is still here.";
     case "ambiguous_page_id": return "This page has more than one location. Return to the page and try again.";
+    case "discussions_disabled": return "Discussions are disabled for this root. Your draft is still here.";
     case "discussions_unsupported": return "Discussions are unavailable here. Your draft is still here.";
     case "discussion_path_refused": return "This discussion could not be saved here. Your draft is still here.";
     case "root_unavailable": case "absence_unverified": return "This root is unavailable. Refresh and check before trying again.";
@@ -104,6 +106,7 @@ export function discussionPreviewError(error: unknown): string {
       case "anchor_too_large": return "That passage is too large. Select less text or discuss the whole page.";
       case "anchor_not_found": case "invalid_anchor": return "That passage could not be found. Reselect it or discuss the whole page.";
       case "ambiguous_page_id": return "This page has more than one location. Return to the page and try again.";
+      case "discussions_disabled": return "Discussions are disabled for this root. Your selection is still here.";
       case "discussions_unsupported": return "Discussions are unavailable here.";
     }
   }
