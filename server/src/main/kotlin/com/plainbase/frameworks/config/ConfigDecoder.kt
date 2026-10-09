@@ -358,6 +358,7 @@ private object RootsConfigParser {
             includes = parseRootGlobs(entry, "includes", key, refuseReservedPrefix = true),
             excludes = parseRootGlobs(entry, "excludes", key).orEmpty(),
             folderLabels = parseFolderLabels(entry, key),
+            discussionsEnabled = entry.boolStrict("discussionsEnabled", "roots.$key.discussionsEnabled") ?: true,
         )
     }
 

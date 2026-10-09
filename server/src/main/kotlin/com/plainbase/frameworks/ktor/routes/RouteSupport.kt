@@ -370,6 +370,8 @@ internal suspend inline fun ApplicationCall.guarded(remedy: AmbiguityRemedy = Am
                     ErrorCodes.DISCUSSIONS_UNSUPPORTED,
                     "Discussions are unavailable for object-backed roots",
                 )
+            denied.reason == DenyReason.DISCUSSIONS_DISABLED ->
+                respondError(HttpStatusCode.Forbidden, ErrorCodes.DISCUSSIONS_DISABLED, "Discussions are disabled for this root")
             denied.principal is Principal.Anonymous ->
                 respondError(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, "Authentication required")
             else -> respondError(HttpStatusCode.Forbidden, ErrorCodes.FORBIDDEN, "You do not have permission for this action")

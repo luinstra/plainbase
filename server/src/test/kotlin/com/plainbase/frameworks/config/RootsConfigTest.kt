@@ -451,4 +451,31 @@ class RootsConfigTest : FunSpec({
         failure.message shouldContain "assets"
         failure.message shouldContain "reserved"
     }
+    test("discussion configuration is default-on and independent for each root") {
+        val forms = listOf("true" to true, "false" to false, "1" to true, "0" to false, "\" TrUe \"" to true, "\" FaLsE \"" to false)
+        forms.forEach { (value, expected) ->
+            val text = """
+                roots {
+                  docs { path = "/roots/docs" }
+                  extra { path = "/roots/extra", editable = true, discussionsEnabled = $value }
+                }
+            """.trimIndent()
+            withDataDir(text) { env ->
+                val config = ConfigLoader.fromEnvAndFile(env)
+                config.roots.primary.discussionsEnabled shouldBe true
+                config.roots.extras.single().discussionsEnabled shouldBe expected
+                config.roots.extras.single().supportsDiscussions shouldBe expected
+            }
+        }
+        withDataDir(null) { env -> ConfigLoader.fromEnvAndFile(env).roots.primary.discussionsEnabled shouldBe true }
+        withDataDir("""roots { docs { path = "/roots/docs", discussionsEnabled = false } }""") { env ->
+            ConfigLoader.fromEnvAndFile(env).roots.primary.discussionsEnabled shouldBe false
+        }
+        withDataDir("""roots { docs { path = "/roots/docs", discussionsEnabled = yes } }""") { env ->
+            shouldThrow<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }.message shouldContain "roots.docs.discussionsEnabled"
+        }
+        root("docs").supportsDiscussions shouldBe true
+        root("docs").copy(editable = false).supportsDiscussions shouldBe false
+        root("docs").copy(backend = RootBackend.Object("bucket", "")).supportsDiscussions shouldBe false
+    }
 })

@@ -581,6 +581,29 @@ class AnchorPrecomputeTest : FunSpec({
             contentReads.get() shouldBe 1
         }
     }
+    test("publication and reindex exclude disabled scope even with seeded derived rows") {
+        withPrecomputeWorld({ writePage(it, "guide.md", "# Guide\n\nseeded quote.\n") }) { world ->
+            val page = world.snapshot.pages.single()
+            val id = world.addQuote(199, page, "seeded quote")
+            val alarm = TestAlarm()
+            val excluded = DiscussionSyncState(emptyList())
+            val precompute = AnchorPrecompute(
+                world.rows, world.discussions,
+                { error("excluded roots must not request a content store") }, world.fullReads, world.harness.absence,
+                excluded, world.harness.availability, { world.snapshot }, alarm,
+            )
+            try {
+                precompute.reindexed(ROOT, page)
+                alarm.delays shouldBe emptyList()
+                precompute.published(world.snapshot, emptySet())
+                alarm.runNext()
+                world.rows.cached(ROOT, id).shouldBeNull()
+                excluded.scopeRoots shouldBe emptySet()
+            } finally {
+                precompute.close()
+            }
+        }
+    }
 })
 
 private class PrecomputeWorld(

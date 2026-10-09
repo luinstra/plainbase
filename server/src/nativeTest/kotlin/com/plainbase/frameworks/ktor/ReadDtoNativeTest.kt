@@ -4,6 +4,8 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
+import com.plainbase.frameworks.ktor.dto.RootTreeDto
+import com.plainbase.frameworks.ktor.dto.TreeNodeDto
 import com.plainbase.frameworks.protocol.BrokenLinkDto
 import com.plainbase.frameworks.protocol.HeadingDto
 import com.plainbase.frameworks.protocol.PageMetadataResponse
@@ -12,6 +14,8 @@ import com.plainbase.frameworks.protocol.ValidateLinksResponse
 import org.junit.jupiter.api.Tag
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * PB-READ-2 native gate (P2): the closed-world image would otherwise never compile the agent-read DTO serializers.
@@ -24,6 +28,18 @@ import kotlin.test.assertEquals
  */
 @Tag("native")
 class ReadDtoNativeTest {
+
+    @Test
+    fun `tree discussion false round-trips and default true stays omitted in native`() {
+        val tree = TreeNodeDto.Folder("", null, null, "", "/docs", 0, emptyList())
+        val root = RootTreeDto("docs", available = true, editable = true, primary = true, tree = tree)
+        val enabled = RestJson.encodeToString(RootTreeDto.serializer(), root)
+        assertFalse(enabled.contains("discussionsEnabled"))
+        assertTrue(RestJson.decodeFromString(RootTreeDto.serializer(), enabled).discussionsEnabled)
+        val disabled = RestJson.encodeToString(RootTreeDto.serializer(), root.copy(discussionsEnabled = false))
+        assertTrue(disabled.contains("\"discussionsEnabled\":false"))
+        assertRoundTrips(RootTreeDto.serializer(), root.copy(discussionsEnabled = false))
+    }
 
     private fun <T> assertRoundTrips(serializer: kotlinx.serialization.KSerializer<T>, value: T) {
         assertEquals(value, RestJson.decodeFromString(serializer, RestJson.encodeToString(serializer, value)))

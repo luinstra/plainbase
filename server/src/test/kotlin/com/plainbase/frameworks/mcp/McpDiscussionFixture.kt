@@ -34,6 +34,7 @@ import com.plainbase.domain.service.SyncedDiscussionIndex
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.discussion.DiscussionDb
 import com.plainbase.frameworks.discussion.JdbcDiscussionRows
+import com.plainbase.frameworks.discussion.seedTransportDiscussion
 import com.plainbase.frameworks.filesystem.LocalDiscussionStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.ktor.DiscussionReadProjection
@@ -62,8 +63,9 @@ internal class McpDiscussionFixture(
     private val dataDir = Files.createTempDirectory("plainbase-mcp-discussions")
     private val db = DiscussionDb(dataDir.resolve("discussions.db"))
     private val rows: DiscussionRows = JdbcDiscussionRows(db)
-    private val sync = DiscussionSyncState(harness.rootRegistry.roots.map { it.name })
-    private val localStore = LocalDiscussionStore(rootPaths)
+    private val scope = harness.rootRegistry.roots.filter { it.supportsDiscussions }.map { it.name }.toSet()
+    private val sync = DiscussionSyncState(scope)
+    private val localStore = LocalDiscussionStore(rootPaths.filterKeys { it in scope })
     private val failedListing = AtomicReference<DiscussionId?>(null)
     private val unexpectedDetail = AtomicBoolean(false)
     val storeCalls = AtomicInteger()
@@ -114,6 +116,7 @@ internal class McpDiscussionFixture(
             enforced = enforced,
             editableOf = { harness.rootRegistry.byName(it)?.editable == true },
             objectBackendOf = { harness.rootRegistry.byName(it)?.backend is RootBackend.Object },
+            discussionsEnabledOf = { harness.rootRegistry.byName(it)?.discussionsEnabled == true },
         )
         val projection = DiscussionReadProjection(
             reads, DiscussionPageResolver(sync, harness.availability, absence),
@@ -162,6 +165,19 @@ internal class McpDiscussionFixture(
     }
 
     fun auditRows() = harness.auditRepository.recent(100)
+
+    fun seedDisabledThread(id: DiscussionId, comment: CommentId): Map<String, List<Byte>> {
+        val root = requireNotNull(rootPaths[RootName.PRIMARY])
+        seedTransportDiscussion(root, harness.builder.current.pages.single(), id, comment)
+        return threadBytes(id)
+    }
+
+    fun threadBytes(id: DiscussionId): Map<String, List<Byte>> {
+        val directory = requireNotNull(rootPaths[RootName.PRIMARY]).resolve(".plainbase/discussions/${id.value}")
+        return Files.walk(directory).use { paths ->
+            paths.filter(Files::isRegularFile).toList().associate { it.fileName.toString() to Files.readAllBytes(it).toList() }
+        }
+    }
 
     fun failDetailListing(id: DiscussionId) {
         failedListing.set(id)

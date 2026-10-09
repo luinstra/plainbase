@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { useDiscussionHighlight } from "../lib/useDiscussionHighlight";
 import type { DiscussionDetail } from "../api/types";
-import { pageDiscussionsQuery } from "../api/discussions";
+import { discussionDetailQuery, pageDiscussionsQuery } from "../api/discussions";
 import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlKey, pageHtmlQuery, pageKey, pageQuery, treeQuery } from "../api/queries";
 import type { DiscussionQuoteRequestAnchor, PageHtmlResponse, PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
 import { focusDiscussionElement } from "../lib/discussionFocus";
@@ -18,6 +18,8 @@ import {
   landingPage,
   pageHref,
   rootAcceptsWrites,
+  rootDiscussionsEnabled,
+  rootDiscussionsDisabled,
   rootLabel,
   rootLabelFor,
   entryFor,
@@ -384,6 +386,7 @@ function PermalinkError({ error, id, root }: { error: Error; id: string; root: s
  */
 function PageContent({ id, root, page: seeded }: { id: string; root: string | null; page?: PageResponse }) {
   const [passage, setPassage] = useState<{ workspace: string; detail: DiscussionDetail } | null>(null);
+  const [observedThread, setObservedThread] = useState<{ workspace: string; id: string } | null>(null);
   const [discussionOpen, setDiscussionOpen] = useState(true);
   const discussionBodyId = `pb-page-discussions-${useId()}`;
   const [passageRequest, setPassageRequest] = useState<PassageRequest | null>(null);
@@ -395,6 +398,7 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   const articleWrapper = useRef<HTMLDivElement>(null);
   const requestNumber = useRef(0);
   const reloading = useRef<string | null>(null);
+  const discussionDrafts = useRef(new Map<string, string>());
   const html = useQuery(pageHtmlQuery(id, root));
   const lastSource = useRef<{ id: string; root: string | null; hash: string; data: PageHtmlResponse } | null>(null);
   if (html.isSuccess) lastSource.current = { id, root, hash: html.data.content_hash, data: html.data };
@@ -402,19 +406,33 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   const railSource = sourceHash !== null ? lastSource.current!.data : null;
   const displayedRoot = railSource?.root ?? root;
   const workspaceId = JSON.stringify([displayedRoot, id]);
-  const [presentationWorkspace, setPresentationWorkspace] = useState(workspaceId);
+  const tree = useQuery(treeQuery);
+  const discussions = useInfiniteQuery({ ...pageDiscussionsQuery(displayedRoot ?? "", id), enabled: false });
+  // Retain this workspace's detail observation when its panel unmounts. A refusal must gate the entire
+  // workspace, and a deliberate fresh enabled answer can restore eligibility without reopening actions.
+  const observedId = observedThread?.workspace === workspaceId ? observedThread.id : "";
+  const thread = useInfiniteQuery({ ...discussionDetailQuery(displayedRoot ?? "", observedId), enabled: false });
+  // Unlike an already-addressed discussion route, page activation first needs its owning tree entry.
+  // A failed initial tree read cannot establish that owner capability; the rail offers an explicit retry.
+  const discussionWorkspace = rootDiscussionsEnabled(tree.data?.roots, displayedRoot) &&
+    !discussions.data?.pages.some((page) => !page.discussions_available && page.reason === "disabled_by_config") &&
+    !(observedId && thread.data?.pages.some((page) => !page.discussions_available && page.reason === "disabled_by_config"));
+  // Cold owning metadata deliberately changes presentation once, resetting activation before the first workspace frame.
+  const presentationId = JSON.stringify([workspaceId, discussionWorkspace]);
+  const [presentationWorkspace, setPresentationWorkspace] = useState(presentationId);
   useDiscussionHighlight(articleWrapper, { root: displayedRoot, id, path: html.data?.path ?? "", hash: html.data?.content_hash ?? null,
-    html: html.data?.html ?? "", ready: discussionOpen && html.isSuccess && !html.isFetching },
+    html: html.data?.html ?? "", ready: discussionWorkspace && discussionOpen && html.isSuccess && !html.isFetching },
   passage?.workspace === workspaceId ? passage.detail : null);
   // A bare permalink keeps its unqualified query keys even when fresh HTML resolves another root.
   // Reset before rendering the new keyed panel so old requests cannot activate it or steal focus.
-  if (presentationWorkspace !== workspaceId) {
-    setPresentationWorkspace(workspaceId);
+  if (presentationWorkspace !== presentationId) {
+    setPresentationWorkspace(presentationId);
+    setPassage(null);
     setDiscussionOpen(true); setSelectionHelp(null); setPassageRequest(null); setPageRequest(null);
     setPostingFor(null); setActionFor(null);
   }
   const { capture, captureIfSelected, reset: resetSelection } = useDiscussionSelection(
-    articleWrapper, workspaceId, html.data?.content_hash ?? null, html.isSuccess,
+    articleWrapper, workspaceId, html.data?.content_hash ?? null, discussionWorkspace && html.isSuccess,
   );
   const queryClient = useQueryClient();
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
@@ -423,16 +441,14 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   // The page names its own root; the TREE is what says whether that root takes writes. Read-only, down, and
   // not-yet-known roots get no Edit affordance - the same call Shell makes for "New", and for the same
   // reason: the alternative is an editor session that can only end in a 403 (or a 503) at save.
-  const tree = useQuery(treeQuery);
   const editable = rootAcceptsWrites(tree.data?.roots, html.data?.root ?? null);
   const rootEntry = tree.data?.roots.find((entry) => entry.root === displayedRoot);
   const knownUnsupported = !!rootEntry && (!rootEntry.available || !rootEntry.editable);
   // Observe an existing page-list answer without fetching solely to decide whether to offer creation.
-  const discussions = useInfiniteQuery({ ...pageDiscussionsQuery(displayedRoot ?? "", id), enabled: false });
-  const canStartDiscussion = !knownUnsupported && discussions.data?.pages[0]?.discussions_available !== false;
-  const discussionCount = discussions.data?.pages[0]?.discussions_available && !discussions.isError
+  const canStartDiscussion = discussionWorkspace && !knownUnsupported && discussions.data?.pages[0]?.discussions_available !== false;
+  const discussionCount = discussionWorkspace && discussions.data?.pages[0]?.discussions_available && !discussions.isError
     ? uniqueDiscussionItems(discussions.data.pages).length : null;
-  const moreDiscussions = discussions.data?.pages.at(-1)?.next != null;
+  const moreDiscussions = discussionWorkspace && discussions.data?.pages.at(-1)?.next != null;
 
   const title = html.data?.title;
   useEffect(() => {
@@ -498,10 +514,15 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
         panel?.querySelector<HTMLElement>("[data-pb-action-focus]") ?? panel?.querySelector<HTMLElement>("textarea"));
     });
   }
-  const retainedPanel = sourceHash !== null && displayedRoot !== null;
+  const retainedPanel = discussionWorkspace && sourceHash !== null && displayedRoot !== null;
   const frontmatter = page?.frontmatter;
   const rail = <aside className="pb-rail pb-reading-rail" data-pb-rail>
     {railSource && <Toc headings={railSource.headings} />}
+    {railSource && !rootEntry && tree.isError && <p role="alert" className="pb-discussion-notice">
+      Could not check discussion availability for this page.
+      <button type="button" className="pb-discussion-action" disabled={tree.isFetching}
+        onClick={() => void tree.refetch()}>Retry discussion availability</button>
+    </p>}
     {retainedPanel && <section className="pb-margin-discussions" aria-label="Discussions">
       <div className="pb-discussion-margin-header">
         <h2 className="pb-rail-head">Discussions {discussionCount !== null && <span className="pb-discussion-count"
@@ -520,7 +541,8 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
             disabled={posting || activeAction || !html.isSuccess || html.isFetching}
             onClick={discussWholePage}>Discuss the whole page instead</button>
         </p>}
-        <DiscussionPanel key={workspaceId} root={displayedRoot} pageId={id} active={discussionOpen}
+        <DiscussionPanel key={workspaceId} root={displayedRoot} pageId={id} active={discussionOpen} drafts={discussionDrafts.current}
+          onThreadSelect={(threadId) => setObservedThread({ workspace: workspaceId, id: threadId })}
           onPassageChange={(detail) => setPassage(detail ? { workspace: workspaceId, detail } : null)}
           onStart={() => startDiscussion()}
           startDisabled={posting || activeAction || !html.isSuccess || html.isFetching || !canStartDiscussion}
@@ -545,7 +567,7 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
         <div className="pb-reading-column">
           {html.isPending ? <PagePending /> : html.isError ? <>
             {railSource && <DocRail frontmatter={frontmatter} path={railSource.path} />}
-            <PageError error={html.error} root={root} />
+            <PageError error={html.error} root={root} discussionWorkspace={discussionWorkspace} />
           </> : <>
             <PageEditAction url={page?.url ?? null} editable={editable} />
             <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
@@ -726,14 +748,17 @@ function PagePending() {
   );
 }
 
-function PageError({ error, root }: { error: Error; root?: string | null }) {
-  if (error instanceof ApiError && (error.isNotFound || error.status === 400)) return <><NotFoundView /><DiscussionEscape root={root} /></>;
+function PageError({ error, root, discussionWorkspace = true }: { error: Error; root?: string | null; discussionWorkspace?: boolean }) {
+  const escape = discussionWorkspace ? <DiscussionEscape root={root} /> : null;
+  if (error instanceof ApiError && (error.isNotFound || error.status === 400)) return <><NotFoundView />{escape}</>;
   // Everything else - including the outage arriving the other way (a 503 on the page request rather than the tree's
   // flag) - is the shared query-error surface's call, not this one's.
-  return <><QueryErrorView error={error} /><DiscussionEscape root={root} /></>;
+  return <><QueryErrorView error={error} />{escape}</>;
 }
 
 function DiscussionEscape({ root }: { root?: string | null }) {
+  const tree = useQuery(treeQuery);
+  if (rootDiscussionsDisabled(tree.data?.roots, root ?? null)) return null;
   return <p className="mt-4 text-center text-sm">{root ?
     <Link to="/discussions/$root" params={{ root }} className="text-link hover:underline">Discussions in {root}</Link> :
     <Link to="/discussions" className="text-link hover:underline">Browse discussions</Link>}</p>;

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { rootDiscussionsQuery } from "../api/discussions";
 import { treeQuery } from "../api/queries";
 import { useDiscussionRefresh } from "../lib/useDiscussionRefresh";
-import { rootLabel } from "../lib/tree";
+import { rootDiscussionsDisabled, rootLabel } from "../lib/tree";
 import { DISCUSSION_STATES, DiscussionFilters, type DiscussionStatusFilter, DiscussionAvailability, DiscussionListRows, DiscussionReadError, ReadWindow, stateLabel, uniqueDiscussionItems } from "./DiscussionRead";
 
 export function DiscussionsIndex({ root }: { root?: string }) {
@@ -16,7 +16,7 @@ function DiscussionsChooser() {
   return <ReadWindow><h1 className="text-3xl font-bold">Discussions</h1>
     {tree.isPending && <p role="status">Loading roots…</p>}
     {tree.isError && <DiscussionReadError error={tree.error} retry={() => void tree.refetch()} />}
-    {tree.data && <ul className="pb-discussion-list">{tree.data.roots.map((entry) => <li key={entry.root} className="pb-discussion-card">
+    {tree.data && <ul className="pb-discussion-list">{tree.data.roots.filter((entry) => entry.discussionsEnabled !== false).map((entry) => <li key={entry.root} className="pb-discussion-card">
       <Link to="/discussions/$root" params={{ root: entry.root }} className="pb-discussion-title">{rootLabel(entry)}</Link>
       <p className="text-sm text-muted">{!entry.available ? "Root not serving" : entry.editable ? "Serving" : "Read-only root"}</p>
     </li>)}</ul>}
@@ -26,12 +26,20 @@ function DiscussionsChooser() {
 function RootDiscussions({ root }: { root: string }) {
   const [state, setState] = useState<string | null>(null);
   const [status, setStatus] = useState<DiscussionStatusFilter>("all");
-  const query = useInfiniteQuery(rootDiscussionsQuery(root, state));
+  const tree = useQuery(treeQuery);
+  const configuredDisabled = rootDiscussionsDisabled(tree.data?.roots, root);
+  const query = useInfiniteQuery({ ...rootDiscussionsQuery(root, state), enabled: (!!tree.data || tree.isError) && !configuredDisabled });
   const first = query.data?.pages[0];
-  useDiscussionRefresh(query, first?.discussions_available !== false);
+  const unavailable = query.data?.pages.find((page) => !page.discussions_available);
+  useDiscussionRefresh(query, (!!tree.data || tree.isError) && !configuredDisabled && !unavailable);
   const latest = query.data?.pages.at(-1);
   const items = uniqueDiscussionItems(query.data?.pages ?? []);
   const visible = items.filter((item) => status === "all" || item.status === status);
+  if (configuredDisabled || unavailable?.reason === "disabled_by_config") return <ReadWindow>
+    <Link to="/discussions" className="text-sm text-link">All roots</Link>
+    <h1 className="text-3xl font-bold break-words">Discussions in {root}</h1>
+    <DiscussionAvailability reason="disabled_by_config" />
+  </ReadWindow>;
   return <ReadWindow>
     <Link to="/discussions" className="text-sm text-link">All roots</Link>
     <h1 className="text-3xl font-bold break-words">Discussions in {root}</h1>
@@ -44,8 +52,8 @@ function RootDiscussions({ root }: { root: string }) {
     </div>
     {query.isPending && <p role="status">Loading discussions…</p>}
     {query.isError && !query.data && <DiscussionReadError error={query.error} retry={() => void query.refetch()} />}
-    {first && !first.discussions_available && <DiscussionAvailability reason={first.reason} />}
-    {first?.discussions_available && <>
+    {unavailable && <DiscussionAvailability reason={unavailable.reason} />}
+    {first?.discussions_available && !unavailable && <>
       {query.isRefetchError && <p role="alert">Refresh failed. Showing earlier results; retry before relying on them. <button type="button" className="pb-discussion-action" onClick={() => void query.refetch()}>Retry</button></p>}
       {items.length === 0 && !query.hasNextPage && <p>No discussions in this view.</p>}
       {latest?.discussions.length === 0 && query.hasNextPage && <p>No matches in this window. Load more to continue the scan.</p>}

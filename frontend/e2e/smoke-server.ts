@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
@@ -18,7 +19,7 @@ export type SmokeSeed = { setupToken: string; agentToken: string };
 
 export type SmokeScenario = {
   authMode: "off" | "builtin";
-  roots: "single" | "multi" | "multi-missing";
+  roots: "single" | "multi" | "multi-missing" | "discussion-config";
 };
 
 export type SmokeServer = {
@@ -109,7 +110,27 @@ export async function startSmokeServer(
 
     const permalinkFixture = path.join(frontendDir, "e2e", "fixtures", "permalink");
     cpSync(permalinkFixture, path.join(contentDir, "permalink"), { recursive: true });
-    if (scenario.roots !== "single") {
+    if (scenario.roots === "discussion-config") {
+      // Temporary roots have no owned Git repository; keep history coherently off for this scenario.
+      mkdirSync(extraDir, { recursive: true });
+      for (const [root, directory, tail] of [["docs", contentDir, "901"], ["extra", extraDir, "902"]]) {
+        const pageId = `01970000-0000-7000-8000-000000000${tail}`;
+        const discussionId = `01970000-0000-7000-8000-000000000${root === "docs" ? "911" : "912"}`;
+        const commentId = `01970000-0000-7000-8000-000000000${root === "docs" ? "921" : "922"}`;
+        const source = `---\ntitle: Config ${root}\nid: ${pageId}\n---\n\n# Config ${root}\n\n## Content\n\nOrdinary ${root} content.\n\n## More\n\nMore ordinary content.\n`;
+        writeFileSync(path.join(directory, "discussion-config.md"), source);
+        const collection = path.join(directory, ".plainbase", "discussions", discussionId);
+        mkdirSync(collection, { recursive: true });
+        const hash = `sha256:${createHash("sha256").update(source).digest("hex")}`;
+        writeFileSync(path.join(collection, "discussion.md"),
+          `---\nformat: "plainbase-discussion/1"\nid: "${discussionId}"\npage_id: "${pageId}"\npage_path: "discussion-config.md"\nstatus: "open"\ncreated: "2026-09-28T00:00:00.000Z"\nstarted_by_issuer: "anonymous"\nstarted_by_id: "local"\nstarted_by_label: "Local"\nstarted_by_kind: "anonymous"\nanchor_kind: "page"\nanchor_content_hash: "${hash}"\n---\n`);
+        writeFileSync(path.join(collection, `${commentId}.md`),
+          `---\nformat: "plainbase-comment/1"\nid: "${commentId}"\ndiscussion_id: "${discussionId}"\nauthor_issuer: "anonymous"\nauthor_id: "local"\nauthor_label: "Local"\nauthor_kind: "anonymous"\ncreated: "2026-09-28T00:00:00.000Z"\n---\nPreserved ${root} comment.\n`);
+      }
+      writeFileSync(path.join(dataDir, "plainbase.conf"), ["roots {",
+        `  docs { path = ${JSON.stringify(contentDir)}, history = off }`,
+        `  extra { path = ${JSON.stringify(extraDir)}, editable = true, history = off, discussionsEnabled = false }`, "}", ""].join("\n"));
+    } else if (scenario.roots !== "single") {
       if (scenario.roots === "multi") {
         cpSync(path.join(repoRoot, "fixtures", "demo-docs", "guides"), path.join(extraDir, "guides"), { recursive: true });
         cpSync(permalinkFixture, path.join(extraDir, "permalink"), { recursive: true });
@@ -137,7 +158,7 @@ export async function startSmokeServer(
       CONTENT_DIR: contentDir,
       DATA_DIR: dataDir,
       PLAINBASE_AUTH_MODE: scenario.authMode,
-      PLAINBASE_GIT_ENABLED: "true",
+      PLAINBASE_GIT_ENABLED: scenario.roots === "discussion-config" ? "false" : "true",
       PLAINBASE_HOST: "127.0.0.1",
       PLAINBASE_LOG_LEVEL: "INFO",
       PLAINBASE_PORT: String(port),
@@ -152,7 +173,7 @@ export async function startSmokeServer(
     const baseURL = `http://127.0.0.1:${port}`;
     await waitForOwnedBind(processState, logs, startupDeadline);
     await waitForHealth(processState, baseURL, logs, startupDeadline);
-    return { baseURL, seed, contentDir, extraDir: scenario.roots === "multi" ? extraDir : null, stop };
+    return { baseURL, seed, contentDir, extraDir: scenario.roots === "multi" || scenario.roots === "discussion-config" ? extraDir : null, stop };
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     try {

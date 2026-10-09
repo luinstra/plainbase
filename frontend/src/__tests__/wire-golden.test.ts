@@ -446,4 +446,10 @@ describe("wire golden (types.ts twins)", () => {
   it.each(Object.keys(twins))("%s matches the shared wire golden", (key) => {
     expect(fixture[key]).toEqual(twins[key]);
   });
+  it("keeps omitted discussion tree settings default-on and represents explicit false", () => {
+    const enabled: TreeResponse = treeResponse;
+    expect(enabled.roots[0].discussionsEnabled).toBeUndefined();
+    const disabled: TreeResponse = { roots: [{ ...enabled.roots[0], discussionsEnabled: false }] };
+    expect(JSON.parse(JSON.stringify(disabled)).roots[0].discussionsEnabled).toBe(false);
+  });
 });

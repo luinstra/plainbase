@@ -70,6 +70,8 @@ export interface RootTree {
    * `plainbase root add` defaults an extra root to `false`, so a read-only root is the common case, not the odd one.
    */
   editable: boolean;
+  /** Omitted means enabled; explicit false hides the complete discussion workspace. */
+  discussionsEnabled?: boolean;
   /**
    * Whether this is the reserved PRIMARY root (ADR-0011 D1). Server-issued because the primary is NOT `roots[0]`:
    * D7 order is the operator's config order, so a positional guess is wrong on any install that declared its

@@ -15,7 +15,6 @@ import com.plainbase.domain.root.DetachedRoots
 import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
-import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
@@ -431,7 +430,7 @@ private fun runOwnedServer(
 internal fun watcherRoots(registry: RootRegistry, availability: RootAvailability): List<Root> {
     val snapshot = availability.current()
     return registry.roots.filter { root ->
-        root.editable && root.backend is RootBackend.Local && snapshot.isAvailable(root.name)
+        root.supportsDiscussions && snapshot.isAvailable(root.name)
     }
 }
 

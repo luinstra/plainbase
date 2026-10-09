@@ -419,6 +419,8 @@ private fun deniedResult(denied: AccessDenied): CallToolResult = when {
         )
     denied.reason == DenyReason.DISCUSSIONS_UNSUPPORTED ->
         errorResult(ErrorCodes.DISCUSSIONS_UNSUPPORTED, "Discussions are unavailable for object-backed roots")
+    denied.reason == DenyReason.DISCUSSIONS_DISABLED ->
+        errorResult(ErrorCodes.DISCUSSIONS_DISABLED, "Discussions are disabled for this root")
     denied.principal is Principal.Anonymous -> errorResult("unauthorized", "Authentication required")
     else -> errorResult("forbidden", "You do not have permission for this action")
 }

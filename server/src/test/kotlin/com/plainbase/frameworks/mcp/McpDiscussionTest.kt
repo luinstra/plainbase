@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.mcp
 
+import com.plainbase.domain.discussion.CommentId
 import com.plainbase.domain.discussion.DiscussionId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.RootName
@@ -32,6 +33,42 @@ class McpDiscussionTest : FunSpec({
         mapOf("page_id" to page, "anchor" to anchor(hash), "body" to "  first 😀  ") +
             (root?.let { mapOf("root" to it) } ?: emptyMap())
     fun id(result: String): String = Json.parseToJsonElement(result).jsonObject.getValue("id").jsonPrimitive.content
+
+    test("all four tools honor configured disable without consulting an excluded sync root") {
+        McpHarness(discussionsEnabled = false).use { harness ->
+            val discussion = DiscussionId.require("01900000-0000-7000-8000-000000000099")
+            val comment = CommentId.require("01900000-0000-7000-8000-000000000098")
+            val before = harness.discussions.seedDisabledThread(discussion, comment)
+            harness.session(harness.proposeBearer) { client ->
+                val reads = listOf(
+                    client.call("list_discussions", mapOf("root" to "docs")),
+                    client.call("list_discussions", mapOf("page_id" to harness.seedPageId)),
+                    client.call("get_discussion", mapOf("id" to discussion.value, "root" to "docs")),
+                )
+                reads.forEach {
+                    it.isErr() shouldBe false
+                    it.text() shouldContain "disabled_by_config"
+                    it.text() shouldContain "\"discussions_available\":false"
+                    it.text().contains("Preserved comment") shouldBe false
+                }
+                client.call("get_discussion", mapOf("id" to discussion.value)).text() shouldContain "discussion_not_found"
+                harness.discussions.auditRows().size shouldBe 0
+                listOf(
+                    client.call("start_discussion", start(harness.seedPageId, harness.seedBaseHash)),
+                    client.call("add_comment", mapOf("id" to discussion.value, "root" to "docs", "body" to "reply")),
+                ).forEach {
+                    it.isErr() shouldBe true
+                    it.text() shouldContain "discussions_disabled"
+                }
+                harness.discussions.auditRows().map { it.decision } shouldBe listOf("denied", "denied")
+                client.call("add_comment", mapOf("id" to discussion.value, "body" to "reply"))
+                    .text() shouldContain "discussion_not_found"
+                harness.discussions.auditRows().first().decision shouldBe "allowed"
+            }
+            harness.discussions.storeCalls.get() shouldBe 0
+            harness.discussions.threadBytes(discussion) shouldBe before
+        }
+    }
 
     test("should advertise bounded closed discussion schemas over listTools") {
         McpHarness().use { harness ->

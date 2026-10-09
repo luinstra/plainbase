@@ -65,7 +65,7 @@ internal fun createDiscussionModule(resourceOwner: ServerResourceOwner) = module
     single<DiscussionRows> { JdbcDiscussionRows(get<DiscussionDb>()) }
     single<LocalDiscussionStore> {
         val registry = get<RootRegistry>()
-        val scopedRoots = registry.roots.filter { it.editable && it.backend is RootBackend.Local }
+        val scopedRoots = registry.roots.filter { it.supportsDiscussions }
         val roots = scopedRoots.associate { root -> root.name to (root.backend as RootBackend.Local).path }
         val probes = roots.values.associate { path ->
             val normalized = path.toAbsolutePath().normalize()
@@ -81,7 +81,7 @@ internal fun createDiscussionModule(resourceOwner: ServerResourceOwner) = module
     single<DiscussionStore> { get<LocalDiscussionStore>() }
     single {
         val roots = get<RootRegistry>().roots
-            .filter { it.editable && it.backend is RootBackend.Local }
+            .filter { it.supportsDiscussions }
             .map { it.name }
         DiscussionSyncState(roots)
     }
@@ -131,7 +131,7 @@ internal fun createDiscussionModule(resourceOwner: ServerResourceOwner) = module
     single<DiscussionIndex> { get<SyncedDiscussionIndex>() }
     single {
         val scopeRoots = get<RootRegistry>().roots
-            .filter { it.editable && it.backend is RootBackend.Local }
+            .filter { it.supportsDiscussions }
             .mapTo(linkedSetOf()) { it.name }
         DiscussionReparser(scopeRoots, get(), get(), get())
     }

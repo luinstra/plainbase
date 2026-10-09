@@ -194,6 +194,7 @@ fun IndexHarness.testRouteContext(
         clock = authClock,
         enforced = enforced,
         editableOf = { rootRegistry.byName(it)?.editable == true },
+        discussionsEnabledOf = { rootRegistry.byName(it)?.discussionsEnabled == true },
     )
     // Only roots backed by the builder's actual source subset enter the view; history overrides remain per-root.
     val historiesByName: (RootName) -> HistoryProvider =

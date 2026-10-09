@@ -184,7 +184,7 @@ operation, or `CreatePageRequest.root` over REST. Omitting it is a 400 `invalid_
 permission to write into `docs`.
 
 A root can be unavailable or read-only, and a page id can be held by more than one root - the server tells you
-which with a code, not a guess. Seven wire shapes to recognize:
+which with a code, not a guess. Wire shapes to recognize:
 
 | code | status | what it means | what you must do |
 |---|---|---|---|
@@ -192,6 +192,8 @@ which with a code, not a guess. Seven wire shapes to recognize:
 | `absence_unverified` | **503**; `Retry-After: 30` on some REST paths | The page is still bound, but its content absence has not been proven. Discussion source admission refuses before persistence and can omit the header. | **Keep your citations and provenance.** Retry reads after observations or an absence proof converge, honoring the header when supplied; inspect uncertain writes before another action. |
 | `server_shutting_down` | **503** | The server is draining and this request was rejected before business work began. | Keep your citations and retry once an available server returns. There is no `Retry-After` promise; an admitted write follows the shutdown drain instead. |
 | `root_not_editable` | **403** | The root is declared `editable = false`. Page writes are refused there in **every** auth mode - this is topology, not a permission you might be granted. | Do not retry. Do not propose a write into this root; read-only means read-only for every agent, always. |
+| `discussions_disabled` | **403** (REST); MCP tool error | Discussions are disabled on a known editable local root, in every auth mode. | Ask the operator to re-enable discussions and restart before retrying. See [discussion errors](http-agent-workflow.md#discussion-errors). |
+| `discussions_unsupported` | **403** (REST); MCP tool error | The editable root's backend does not support discussions. Read-only topology takes precedence. | Use a supported enabled editable local root; see [discussion errors](http-agent-workflow.md#discussion-errors). |
 | `invalid_root` | **400** (REST); MCP tool error | Malformed/repeated REST root pin, or an unknown root for MCP/discussions. Ordinary REST page reads use `404 page_not_found` for a legal unknown pin. | Fix the name - check the `root` a `search`/`read_page` hit actually carries, or what `GET /healthz` lists. |
 | `ambiguous_page_id` | **409** (REST); MCP tool error | The page id you sent is held by more than one root and you named none, so the server will not pick one for you. | Name a known `root`. Ordinary REST page reads include candidate retry URLs; proposal candidates omit URLs because their pin is in the body. Discussion REST errors omit candidates for both ambiguity codes. MCP supplies `{root,id}` hints, with no URL. |
 | `ambiguous_discussion_id` | **409** (REST); MCP tool error | The discussion id you sent is held by more than one root and you named none. | Retry with a known root. Discussion REST refuses with its existing plain `{ "error": { "code", "message" } }` envelope and no candidate list; MCP supplies `{root,id}` candidate hints for a retry with the `root` argument. |

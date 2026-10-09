@@ -59,6 +59,10 @@ object ManagedRootsFile {
      * does not check for it: the invariant has ONE home in the loader's refusal plus the CLI's argv refusal,
      * and a third defensive check would be a third thing to keep in step.
      *
+     * [Root.discussionsEnabled] is emitted only when false: preserve a parsed override during unrelated
+     * add/remove rewrites without changing default-on bytes. This is round-trip preservation, not a supported
+     * CLI settings workflow; custom settings belong in the declaring plainbase.conf.
+     *
      * **The KEY is quoted, and that is not decoration.** A [RootName] is a slug, but a slug is not automatically
      * an inert HOCON key: `include` is a legal root name AND a HOCON directive, so a bare `include {` is read as
      * an include statement and the block does not parse at all. Quoting the key settles the whole class - every
@@ -76,6 +80,7 @@ object ManagedRootsFile {
             appendLine("    path = ${hoconQuote(requireNotNull(root.localPath) { "a managed root must be local-backed" }.toString())}")
             appendLine("    editable = ${root.editable}")
             appendLine("    history = ${root.history.name.lowercase()}")
+            if (!root.discussionsEnabled) appendLine("    discussionsEnabled = false")
             root.displayName?.let { appendLine("    displayName = ${hoconQuote(it)}") }
             root.includes?.let { includes ->
                 appendLine("    includes = [${includes.joinToString(", ") { hoconQuote(it) }}]")

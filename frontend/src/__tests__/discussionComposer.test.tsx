@@ -15,8 +15,8 @@ const html = { ...page, html: '<p data-pb-src="0-5">Text</p>', headings: [] };
 function mount(fetcher: typeof fetch, strict = false, initialEntry = "/extra/note") {
   vi.stubGlobal("fetch", fetcher);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  client.setQueryData(treeQuery.queryKey, { roots: [{ root: "extra", primary: true, available: true, editable: true,
-    tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/extra", page_count: 0, children: [] } }] });
+  client.setQueryData(treeQuery.queryKey, { roots: ["extra", "docs"].map((root) => ({ root, primary: root === "extra", available: true, editable: true,
+    tree: { type: "folder" as const, name: "", title: null, description: null, path: "", url: `/${root}`, page_count: 0, children: [] } })) });
   client.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
   const router = createAppRouter(client, createMemoryHistory({ initialEntries: [initialEntry] }));
   const app = <QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>;
@@ -787,6 +787,8 @@ it("settles passage preview failure and success under StrictMode without duplica
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 4); selection.addRange(range);
+    // Model the browser event after changing the selection programmatically in JSDOM.
+    fireEvent(document, new Event("selectionchange"));
     fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
   };
   await selectText();
@@ -799,6 +801,8 @@ it("settles passage preview failure and success under StrictMode without duplica
   expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", "Keep this draft");
   expect(screen.getByRole("heading", { name: "New page discussion" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  // Cancel restores focus on the next frame; finish that transition before making the next selection.
+  await waitFor(() => expect(screen.getByRole("button", { name: "Start a discussion" })).toBe(document.activeElement));
   await selectText();
   expect(await screen.findByRole("button", { name: "Confirm passage" })).toBeTruthy();
   expect(previews).toBe(2);
@@ -1047,4 +1051,79 @@ it("retries every rooted view after a posted reply refresh fails", async () => {
   expect(pageReads).toBeGreaterThan(readsBeforeRetry);
   expect(screen.getByRole("status", { name: /Reply posted/ })).toBeTruthy();
   expect(replies).toBe(1);
+});
+
+it("disabling owner metadata ignores an outstanding passage preview", async () => {
+  let finish!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => { finish = resolve; });
+  const calls: string[] = [];
+  const view = mount(vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input); calls.push(url);
+    if (url.includes("anchor-preview")) return pending;
+    if (url.includes("/html")) return Response.json(html);
+    if (url.includes("/discussions?")) return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
+    return Response.json(page);
+  }) as typeof fetch);
+  const start = await findDiscussionButton({ name: "Start a discussion" });
+  const text = screen.getByText("Text", { selector: "p" }).firstChild!;
+  const selection = window.getSelection()!;
+  const range = document.createRange(); range.selectNodeContents(text); selection.removeAllRanges(); selection.addRange(range);
+  fireEvent(document, new Event("selectionchange"));
+  fireEvent.click(start);
+  await screen.findByText("Preparing passage preview…");
+  await act(async () => { view.client.setQueryData(treeQuery.queryKey, { roots: [{ root: "extra", primary: true,
+    available: true, editable: false, discussionsEnabled: false, tree: { type: "folder", name: "", title: null,
+      description: null, path: "", url: "/extra", page_count: 0, children: [] } }] }); });
+  await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions")).toBeNull());
+  await act(async () => { finish(Response.json({ content_hash: page.content_hash, byte_start: 0, byte_end: 4, selection: "narrowed", quote_text: "Text" })); });
+  expect(view.container.querySelector(".pb-margin-discussions")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Confirm passage" })).toBeNull();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(calls.filter((url) => url.includes("anchor-preview"))).toHaveLength(1);
+});
+
+it("a bare permalink follows an HTML owner switch into a disabled root without opening its workspace", async () => {
+  let owner = "extra";
+  const calls: string[] = [];
+  const view = mount(vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input); calls.push(url);
+    if (url === "/api/v1/pages/page/html") return Response.json({ ...html, root: owner, url: null });
+    if (url === "/api/v1/pages/page") return Response.json({ ...page, url: null });
+    if (url.includes("/discussions?root=extra")) return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as typeof fetch, false, "/p/page");
+  await findDiscussionButton({ name: "Start a discussion" });
+  await act(async () => { view.client.setQueryData(treeQuery.queryKey, { roots: ["extra", "docs"].map((root) => ({
+    root, primary: root === "extra", available: true, editable: true, discussionsEnabled: root !== "docs",
+    tree: { type: "folder" as const, name: "", title: null, description: null, path: "", url: `/${root}`, page_count: 0, children: [] },
+  })) }); });
+  owner = "docs";
+  await act(async () => { await view.client.invalidateQueries({ queryKey: pageHtmlQuery("page", null).queryKey, exact: true }); });
+  await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions")).toBeNull());
+  expect(screen.queryByRole("button", { name: "Start a discussion" })).toBeNull();
+  expect(calls.some((url) => url.includes("/discussions?root=docs"))).toBe(false);
+  expect(view.client.getQueryData(pageQuery("page", null).queryKey)).toMatchObject({ root: "extra" });
+  expect(view.history.location.pathname).toBe("/p/page");
+});
+
+it("fresh disabled metadata hides the page workspace without discarding its creation draft", async () => {
+  const view = mount(vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/html")) return Response.json(html);
+    if (url.includes("/discussions?")) return Response.json({ discussions: [], next: null, discussions_available: true, reason: null });
+    return Response.json(page);
+  }) as typeof fetch);
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Keep this draft through disable" } });
+  const setEnabled = async (enabled: boolean) => {
+    await act(async () => { view.client.setQueryData(treeQuery.queryKey, { roots: [{ root: "extra", primary: true,
+      available: true, editable: true, discussionsEnabled: enabled, tree: { type: "folder", name: "", title: null,
+        description: null, path: "", url: "/extra", page_count: 0, children: [] } }] }); });
+  };
+  await setEnabled(false);
+  await waitFor(() => expect(view.container.querySelector(".pb-margin-discussions")).toBeNull());
+  expect(screen.queryByRole("textbox")).toBeNull();
+  await setEnabled(true);
+  fireEvent.click(await findDiscussionButton({ name: "Start a discussion" }));
+  expect(screen.getByRole("textbox", { name: "Comment" })).toHaveProperty("value", "Keep this draft through disable");
 });

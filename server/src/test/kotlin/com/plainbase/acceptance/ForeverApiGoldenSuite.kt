@@ -40,6 +40,9 @@ import io.kotest.core.spec.style.FunSpec
  * be RELAXED into an acceptance by a documented revision — adding a `.out` for a today-refused
  * input is legal; flipping an existing `.out` is not. PB-LINK-1's scheme allowlist and broken-link
  * error classes are append-only; PB-REST-1 fields are never removed or retyped.
+ * Additive discussion topology amendment (2026-10-07): optional default-omitted tree discussionsEnabled;
+ * false hides discussion UI, disabled_by_config read envelopes and discussions_disabled 403 for known roots.
+ * Enabled fields, URLs and golden bytes are preserved.
  * Additive amendments on record: tree folder-node `url` added 2026-06-12 (additive, ADR-0003);
  * create-response `id` + `url` added 2026-06 (additive, W6 — `POST /api/v1/pages` 201 now identifies
  * the created resource so the client navigates to the server-authoritative url; owner+debate-approved);

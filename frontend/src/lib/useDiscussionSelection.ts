@@ -8,8 +8,9 @@ export function useDiscussionSelection(wrapper: RefObject<HTMLDivElement | null>
   const candidate = useRef<{ identity: string; hash: string; capture: SelectionCapture } | null>(null);
   const current = useRef({ identity, hash, ready });
   current.current = { identity, hash, ready };
-  useEffect(() => { candidate.current = null; }, [identity, hash]);
+  useEffect(() => { candidate.current = null; }, [identity, hash, ready]);
   useEffect(() => {
+    if (!ready) return;
     const beginSelection = (event: PointerEvent) => {
       const article = wrapper.current?.querySelector<HTMLElement>("[data-pb-selection-surface], .pb-prose");
       // Clicking blank space in the article can remove every range without leaving a caret.
@@ -32,7 +33,7 @@ export function useDiscussionSelection(wrapper: RefObject<HTMLDivElement | null>
       document.removeEventListener("pointerdown", beginSelection);
       document.removeEventListener("selectionchange", retain);
     };
-  }, [wrapper]);
+  }, [wrapper, ready]);
   const captureIfSelected = (rejectOutsideSelection = false): SelectionCapture | null => {
     const source = current.current;
     if (!source.ready || !source.hash || source.identity !== identity || source.hash !== hash)

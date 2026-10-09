@@ -162,6 +162,7 @@ fun withRestServices(
                     // Proxy mode enforces the matrix (so a no-role proxy human is denied); default BUILTIN native
                     // smokes keep the open dev behavior.
                     enforced = authMode == AuthMode.PROXY,
+                    discussionsEnabledOf = { rootRegistry.byName(it)?.discussionsEnabled == true },
                 )
                 // A4a auth substrate over the SAME in-memory DB (the v7 schema includes users/sessions/setup_tokens).
                 val passwordHasher = Argon2PasswordHasher()

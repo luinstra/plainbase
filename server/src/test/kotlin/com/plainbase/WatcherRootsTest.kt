@@ -30,6 +30,15 @@ class WatcherRootsTest : FunSpec({
 
         watcherRoots(registry, availability) shouldContainExactly listOf(editable)
     }
+    test("disabled editable roots have no discussion watcher while content roots stay registered") {
+        val enabled = localRoot("docs", true)
+        val disabled = localRoot("extra", true).copy(discussionsEnabled = false)
+        val registry = RootRegistry.of(listOf(enabled, disabled))
+        watcherRoots(registry, RootAvailability(Clock.System)) shouldContainExactly listOf(enabled)
+        registry.roots shouldContainExactly listOf(enabled, disabled)
+        watcherRoots(RootRegistry.of(listOf(enabled.copy(discussionsEnabled = false))), RootAvailability(Clock.System)) shouldContainExactly
+            emptyList()
+    }
 })
 
 private fun localRoot(name: String, editable: Boolean): Root = Root(

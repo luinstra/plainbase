@@ -110,7 +110,11 @@ class ProposalDtoNativeTest {
             val tokens = SqlDelightApiTokenRepository(db)
             var n = 0
             val ids = IdProvider { PageId.of("0190aaaa-bbbb-7ccc-8ddd-%012d".format(n++))!! }
-            val policy = PolicyService(roles, tokens, SqlDelightAuditRepository(db), ids, fixedClock, enforced = true)
+            val policy =
+                PolicyService(
+                    roles, tokens, SqlDelightAuditRepository(db), ids, fixedClock, enforced = true,
+                    discussionsEnabledOf = { true },
+                )
 
             // ADMIN is allowed; an EDITOR + a PROPOSE agent are denied.
             roles.upsert("builtin", "admin", Role.ADMIN, fixedClock.now())

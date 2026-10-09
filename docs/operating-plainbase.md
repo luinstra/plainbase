@@ -239,8 +239,20 @@ copy, so the on-disk file only reappears on restart. On a *running* server, use
 
 ## Discussions
 
-Discussions support editable local roots. Read-only and object-mode roots report them unavailable;
+Discussions support enabled editable local roots (default-on). Set `roots.<name>.discussionsEnabled = false` in the
+declaring `plainbase.conf`, restart the server, then reload browser tabs to disable access and UI; files and Git history are
+preserved. Re-enable, restart, and reload tabs to reparse the preserved files and obtain fresh availability. The root registry
+is immutable for each run; there is no runtime hot reload or supported seamless toggle in an open tab.
+Read-only and object-mode roots report them unavailable;
 see the [support and authorship rules](configuration.md#discussions-support-and-authorship).
+
+The page discussion workspace waits for tree metadata identifying the page's owning root. If that
+metadata is unavailable and nothing is cached, ordinary page content remains usable and **Retry discussion
+availability** retries the tree request. Known cached metadata still governs access, including an explicit
+false flag. Direct root/thread discussion URLs can fall back to a server read when tree metadata cannot
+be loaded, obtaining the server's unavailable envelope; an explicit false flag still hides their content
+and prevents that read.
+
 Each root owns this hidden collection (discussion and comment IDs are canonical lowercase UUIDv7):
 
 ```text
@@ -266,7 +278,7 @@ may remain in Git and backups. Purge removes a comment, not the marker or its hi
 
 ### Watching and rebuilding
 
-The discussion watcher covers editable local roots available at boot, with at most two directory watches
+The discussion watcher covers enabled editable local roots available at boot, with at most two directory watches
 per root: `.plainbase` and `.plainbase/discussions`, not one per discussion. Full reparses scheduled every
 60 seconds handle edits inside existing discussion directories; this interval is not a freshness
 deadline. Added roots require restart for watcher coverage; roots missing at boot require restoration
@@ -282,7 +294,9 @@ a successful full reparse for the current recovery generation restores indexed r
 
 `DATA_DIR/discussions.db` is derived JDBC/SQLite state, rebuilt from root files at boot. Schema
 mismatch rebuilds it rather than migrating it. For a manual reset, stop Plainbase, remove this
-derived database and its `-wal`/`-shm` sidecars, then restart. Keep the root collection intact.
+derived database and its `-wal`/`-shm` sidecars, then restart. Keep every root collection intact, including disabled roots.
+Global derived-row truncation still runs at boot; disabled roots receive no per-root sweep, reconciliation, reparse or
+precompute work. Ordinary content watchers are independent of the discussion flag.
 
 ### Uncertain writes and residual recovery
 
@@ -294,10 +308,17 @@ leave residual files after a store failure. Do not automatically replay writes. 
 `discussion_commit_uncertain` supplies `Retry-After`. Other recovery headers are hints, not safe
 write-replay instructions; see [discussion errors](http-agent-workflow.md#discussion-errors).
 
-The UI retains failed drafts. A confirmed write remains successful if the following view refresh
+The UI retains failed drafts and unsaved text through nondestructive hiding. A successful create, reply,
+or edit retires only its matching submitted buffer, including when it completes after disablement;
+newer unsaved text remains. Restored edit text is identified as an unsaved draft; compare it with the current comment before
+saving. Successful retraction or purge removes its obsolete edit draft. Draft buffers are local to the page/thread lifetime,
+so copy unsaved text before the browser reload required for an availability change. A freshly reloaded tab starts with actions
+closed and never submits automatically.
+A confirmed write remains successful if the following view refresh
 fails, and saved edits/retractions/purges suppress stale bodies. Use the discussion's **Refresh** and
-inspect the fresh detail, loading further comment windows as needed. **Reload page** only refreshes
+inspect the fresh detail, loading further comment windows as needed. The in-app **Reload page** action only refreshes
 reattachment source and invalidates preview/confirmation; it does not clear an uncertain write outcome.
+Reloading a browser tab after a server restart is a separate operation.
 
 Boot reparses files and, with history enabled, can best-effort reconcile readable entries within
 their file caps to Git. This is not syntax validation: malformed records may enter history before
@@ -455,7 +476,7 @@ removed by an accepted retirement proof is not recreated by the search failure.
 (see [Configuration: the CLI and the two files](configuration.md#the-cli-and-the-two-files)) writes
 `DATA_DIR/roots.conf`; nothing changes for a running server until you restart it - the CLI has no
 runtime API to talk to a live process, and the server does not hot-reload topology.
-Restart also brings an added editable local root into discussion watcher/index coverage.
+Restart also brings an added enabled editable local root into discussion watcher/index coverage.
 
 `root remove <name>` does not touch the root's content or its database rows. Its pages keep their
 `id_map`, `url_alias` and `page_checkpoint` rows exactly as they were; the rows just become
@@ -538,8 +559,8 @@ Back up `DATA_DIR/plainbase.db` too, in EITHER mode: it holds durable identity b
 aliases as well as users, agent tokens, proposals, roles, sessions and the audit log - the one piece of `DATA_DIR`
 holding *real*, non-derived state. `DATA_DIR/search.db` and `DATA_DIR/discussions.db` need no backup:
 both are fully [derived state](#searchdb-and-discussionsdb-are-derived-state). Search rebuilds from the content tree;
-discussions rebuild at boot from `.plainbase/discussions/` in each editable local root. Back up those
-discussion files with their content roots. Object-mode, read-only and non-local roots do not support
+discussions rebuild at boot from `.plainbase/discussions/` in each enabled editable local root. Back up all authoritative
+collections with their content roots, including configured-disabled roots. Object-mode, read-only and non-local roots do not support
 discussions. In object mode `DATA_DIR/mirror` and `DATA_DIR/mirror-state`
 are likewise derived and need none.
 
@@ -691,7 +712,7 @@ bucket on the next boot). The authoritative content is the source of truth, so m
 - the directory itself (created on startup),
 - a fresh `plainbase.db`, created and migrated to the current schema,
 - a rebuilt, fully populated `search.db`,
-- a rebuilt `discussions.db` from `.plainbase/discussions/` in each editable local root,
+- a rebuilt `discussions.db` from `.plainbase/discussions/` in each enabled editable local root,
 - the id of every page that carries `id:` in its frontmatter - those `/p/{root}/{id}` permalinks and
   citations keep working,
 - `redirect_from` aliases (re-derived from frontmatter),

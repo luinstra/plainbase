@@ -79,6 +79,7 @@ class McpHarness(
     enforced: Boolean = true,
     writeBodyCap: Long? = null,
     authClock: Clock = Clock.System,
+    discussionsEnabled: Boolean = true,
 ) : AutoCloseable {
 
     private val root = Files.createTempDirectory("plainbase-mcp-test")
@@ -134,7 +135,7 @@ class McpHarness(
             // its claimant list to registered roots: an unregistered candidate is dropped and the Ambiguous arm
             // collapses back to One, so the fake alone cannot pose ambiguity.
             rootRegistry = RootRegistry.of(
-                listOf(localRoot("docs", root, editable = editable)) +
+                listOf(localRoot("docs", root, editable = editable).copy(discussionsEnabled = discussionsEnabled)) +
                     (ambiguousRoots + retiredRoots).filter { it != RootName.PRIMARY }.distinct()
                         .map { localRoot(it.value, Files.createDirectories(extraDir.resolve(it.value))) },
             ),

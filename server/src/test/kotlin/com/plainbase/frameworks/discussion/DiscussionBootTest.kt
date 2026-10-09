@@ -12,6 +12,7 @@ import com.plainbase.domain.discussion.Author
 import com.plainbase.domain.discussion.AuthorKind
 import com.plainbase.domain.discussion.BootTombstone
 import com.plainbase.domain.discussion.CachedMatch
+import com.plainbase.domain.discussion.CollectionVisit
 import com.plainbase.domain.discussion.CommentId
 import com.plainbase.domain.discussion.DiscussionId
 import com.plainbase.domain.discussion.DiscussionPageSource
@@ -76,6 +77,7 @@ import java.nio.file.Path
 import java.nio.file.attribute.FileTime
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 class DiscussionBootTest : FunSpec({
@@ -143,7 +145,7 @@ class DiscussionBootTest : FunSpec({
         val second = RootName.require("notes")
         withBootWorld(listOf(ROOT, second)) { world ->
             val failingStore = object : DiscussionStore by world.store {
-                override fun sweepBootResidue(root: RootName, now: Instant, minAge: kotlin.time.Duration): List<BootTombstone> {
+                override fun sweepBootResidue(root: RootName, now: Instant, minAge: Duration): List<BootTombstone> {
                     if (root == ROOT) throw IOException("residue scan failed")
                     return emptyList()
                 }
@@ -170,7 +172,7 @@ class DiscussionBootTest : FunSpec({
                     }
                 }
 
-                override fun sweepBootResidue(root: RootName, now: Instant, minAge: kotlin.time.Duration): List<BootTombstone> {
+                override fun sweepBootResidue(root: RootName, now: Instant, minAge: Duration): List<BootTombstone> {
                     if (root == second) laterRootSweeps++
                     return world.store.sweepBootResidue(root, now, minAge)
                 }
@@ -605,6 +607,49 @@ class DiscussionBootTest : FunSpec({
             history.attempts shouldBe emptyList()
         }
     }
+    test("disabled and all-disabled boot skip per-root stores and history while global rows truncate") {
+        val extra = RootName.require("extra")
+        withBootWorld(listOf(ROOT, extra)) { world ->
+            world.startDiscussion("keep authoritative thread")
+            val before = Files.walk(world.paths.getValue(ROOT)).use { paths ->
+                paths.filter(Files::isRegularFile).toList().associate { it.toString() to Files.readAllBytes(it).toList() }
+            }
+            var disabledCalls = 0
+            val store = object : DiscussionStore by world.store {
+                override fun sweepBootResidue(root: RootName, now: Instant, minAge: Duration): List<BootTombstone> {
+                    if (root == ROOT) {
+                        disabledCalls++
+                        error("disabled sweep")
+                    }
+                    return world.store.sweepBootResidue(root, now, minAge)
+                }
+                override fun visit(root: RootName, visitor: (DiscussionId, Boolean) -> Unit): CollectionVisit {
+                    if (root == ROOT) {
+                        disabledCalls++
+                        error("disabled visit")
+                    }
+                    return world.store.visit(root, visitor)
+                }
+            }
+            val history = RecordingHistory(head = emptyMap())
+            world.boot(store = store, histories = mapOf(ROOT to history, extra to NoOpHistoryProvider), disabledRoots = setOf(ROOT)).run()
+            disabledCalls shouldBe 0
+            history.headCalls shouldBe 0
+            history.attempts shouldBe emptyList()
+            world.rows.rowsAfter(ROOT, null, 50) shouldBe emptyList()
+            Files.walk(world.paths.getValue(ROOT)).use { paths ->
+                paths.filter(Files::isRegularFile).toList().associate { it.toString() to Files.readAllBytes(it).toList() }
+            } shouldBe before
+            val forbidden = object : DiscussionStore by world.store {
+                override fun sweepBootResidue(root: RootName, now: Instant, minAge: Duration): List<BootTombstone> {
+                    disabledCalls++
+                    error("all-disabled sweep")
+                }
+            }
+            world.boot(store = forbidden, disabledRoots = setOf(ROOT, extra)).run()
+            disabledCalls shouldBe 0
+        }
+    }
 })
 
 private val ROOT = RootName.PRIMARY
@@ -681,13 +726,19 @@ private class BootWorld(
         store: DiscussionStore = this.store,
         registeredRoots: List<RootName> = paths.keys.toList(),
         editableRoots: Set<RootName> = registeredRoots.toSet(),
+        disabledRoots: Set<RootName> = emptySet(),
     ): DiscussionBoot {
         val sharedReads = if (store === this.store) fullReads else DiscussionFullReads(store)
-        val reparser = DiscussionReparser(registeredRoots.toSet(), rows, store, sharedReads)
         val roots = registeredRoots.map { name ->
             val path = requireNotNull(paths[name]) { "missing fixture path for ${name.value}" }
-            Root(name, RootBackend.Local(path), editable = name in editableRoots, history = HistoryMode.OFF)
+            Root(
+                name, RootBackend.Local(path), editable = name in editableRoots, history = HistoryMode.OFF,
+                discussionsEnabled =
+                name !in disabledRoots,
+            )
         }
+        val eligible = roots.filter { it.supportsDiscussions }.mapTo(linkedSetOf()) { it.name }
+        val reparser = DiscussionReparser(eligible, rows, store, sharedReads)
         return DiscussionBoot(
             rows = rows,
             store = store,

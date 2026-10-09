@@ -65,6 +65,7 @@ class TreeJsonCache(
                         displayName = root.displayName,
                         available = serving,
                         editable = root.editable,
+                        discussionsEnabled = root.discussionsEnabled,
                         // The REGISTRY decides, never the list position: D7 order is config's, so primary can sit anywhere.
                         // Asked, not re-derived - `root.name == registry.primary.name` here is the exact shape
                         // RootWiringArchitectureTest's Tier 1 bans, and that ban keeps zero exemptions.

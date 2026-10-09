@@ -14,8 +14,9 @@ export default defineConfig({
   projects: [
     {
       name: "open",
-      testIgnore: [/review\.spec\.ts/, /discussions-auth\.spec\.ts/, /multi-root\.spec\.ts/, /multi-root-unavailable\.spec\.ts/, /discussions\.spec\.ts/, /discussion-polish\.spec\.ts/],
+      testIgnore: [/discussion-config\.spec\.ts/, /review\.spec\.ts/, /discussions-auth\.spec\.ts/, /multi-root\.spec\.ts/, /multi-root-unavailable\.spec\.ts/, /discussions\.spec\.ts/, /discussion-polish\.spec\.ts/],
     },
+    { name: "discussion-config", testMatch: /discussion-config\.spec\.ts/ },
     { name: "auth", testMatch: /review\.spec\.ts/ },
     // Headed Chromium applies native caret browsing to static page text; CI supplies Xvfb.
     { name: "auth-caret", testMatch: /discussions-auth\.spec\.ts/,

@@ -475,6 +475,19 @@ class WireTypeGoldenTest : FunSpec({
         fixture.keys shouldBe responses.keys + setOf("createPageRequest", "rejectChangeRequest")
         fixture.keys.size shouldBe 31
     }
+    test("discussion tree setting is optional default-omitted and false round-trips") {
+        val root = RootTreeDto(
+            "docs", available = true, editable = true, primary = true,
+            tree = TreeNodeDto.Folder("", null, null, "", "/docs", 0, emptyList()),
+        )
+        val json = Json { encodeDefaults = true }
+        val enabled = json.encodeToString(RootTreeDto.serializer(), root)
+        enabled.contains("discussionsEnabled") shouldBe false
+        json.decodeFromString(RootTreeDto.serializer(), enabled).discussionsEnabled shouldBe true
+        val disabled = json.encodeToString(RootTreeDto.serializer(), root.copy(discussionsEnabled = false))
+        disabled.contains("\"discussionsEnabled\":false") shouldBe true
+        json.decodeFromString(RootTreeDto.serializer(), disabled).discussionsEnabled shouldBe false
+    }
 })
 
 /** Encodes through the scoped [RestJson] and re-parses — the RestGolden parsed-tree comparison policy. */

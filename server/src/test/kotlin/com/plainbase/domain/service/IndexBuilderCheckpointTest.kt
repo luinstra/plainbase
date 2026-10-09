@@ -253,6 +253,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
                 idProvider = UuidV7IdProvider(),
                 clock = kotlin.time.Clock.System,
                 enforced = false,
+                discussionsEnabledOf = { true },
             )
             val tokens = ApiTokenService(
                 minter = ApiTokenMinter(),

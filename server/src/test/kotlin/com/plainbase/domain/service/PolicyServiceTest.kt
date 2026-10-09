@@ -52,7 +52,10 @@ class PolicyServiceTest : FunSpec({
             val audit = SqlDelightAuditRepository(db)
             var n = 0
             val ids = IdProvider { PageId.of("0190aaaa-bbbb-7ccc-8ddd-%012d".format(n++))!! }
-            block(PolicyService(roles, tokens, audit, ids, fixedClock, enforced = true), roles, tokens, audit)
+            block(
+                PolicyService(roles, tokens, audit, ids, fixedClock, enforced = true, discussionsEnabledOf = { true }),
+                roles, tokens, audit,
+            )
         }
 
     fun human(externalId: String) = Principal.Human(issuer = "builtin", externalId = externalId)

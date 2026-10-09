@@ -177,9 +177,9 @@ curl --fail-with-body --silent --show-error --get "$BASE_URL/api/v1/pages/$PAGE_
 
 ## Discussions: read, preview, start and reply
 
-Discussions are available on editable local roots. Lists and detail pinned to a read-only/object-mode
-root return disabled metadata; preview and mutations refuse there. Unpinned discussion-ID lookup scans
-only editable local roots, so an ID present only in an unsupported root can return `404 discussion_not_found`.
+Discussions are available on editable local roots with discussions enabled (the default). Lists and detail pinned to a
+read-only/object-mode or configured-disabled root return unavailable metadata; preview and mutations refuse there. Unpinned discussion-ID lookup scans
+only enabled editable local roots, so an ID present only in an unsupported or configured-disabled root can return `404 discussion_not_found`.
 Pin that root for disabled detail or an ID mutation's topology refusal.
 Follow the [principal policy](configuration.md#discussions-support-and-authorship).
 Agents can edit/retract their own comments and resolve/reopen any discussion; they cannot purge or
@@ -295,6 +295,15 @@ records do not masquerade as healthy threads. For example, detail pinned to a re
 { "discussion": null, "comments": [], "next": null, "discussions_available": false, "reason": "read_only_root" }
 ```
 
+Configured-disabled local detail uses the same empty envelope with `reason: "disabled_by_config"`.
+Known-root preview and mutations return `403 discussions_disabled`, after authentication and existing read-only/object
+checks. Valid disabled pins do not consult discussion claims or read stored content. Unpinned IDs held only in disabled
+roots return `404 discussion_not_found` for permitted callers; writes retain the existing null-root policy/audit decision
+before that lookup refusal. A decision recorded as allowed on this missing target is not a successful mutation.
+
+Tree root entries add optional `discussionsEnabled`: false is emitted, true is omitted and defaults to enabled.
+The SPA hides discussions for explicit false regardless of backend or editability. Roots remain in ordinary navigation.
+
 Preview is `{content_hash, byte_start, byte_end, selection, quote_text}`. Mutation is always
 `{id, comment_id, commit}`: start/reply return the new comment ID; every other mutation (comment
 edit/retract/purge, resolve/reopen and reattach) returns `comment_id: null`. `commit: null` is possible
@@ -344,6 +353,7 @@ wins before start writes; earlier page-read failures still take precedence. Comm
 | `415 unsupported_media_type` | All discussion POSTs need `application/json` |
 | `401 unauthorized` | Enforced auth requires credentials; an unresolved Plainbase bearer is also refused in off mode. Supply valid credentials |
 | `403 forbidden` | The authenticated principal lacks token, role or ownership permission; follow the principal policy |
+| `403 discussions_disabled` | Known editable local root has discussions disabled in config; unaudited preview or one denied mutation decision. Re-enable and restart to restore access |
 | `403 root_not_editable` / `discussions_unsupported` | Preview/mutations refuse read-only/object-mode roots; read-only takes precedence. Pin the root for an ID mutation's topology refusal |
 | `400 invalid_page_id` | Malformed page path ID; supply a canonical page UUID |
 | `400 invalid_utf8` / `invalid_request_body` | Invalid raw UTF-8/Unicode, malformed JSON, unsupported shape/fields or invalid anchor grammar. Malformed discussion/comment path IDs are `invalid_request_body`; correct the request |

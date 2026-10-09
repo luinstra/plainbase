@@ -4,11 +4,13 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { addDiscussionComment, discussionDetailQuery, editDiscussionComment, purgeDiscussionComment, reattachDiscussion,
   refreshDiscussionViews, reopenDiscussion, resolveDiscussion, retractDiscussionComment } from "../api/discussions";
-import { sessionQuery } from "../api/queries";
+import { sessionQuery, treeQuery } from "../api/queries";
 import type { DiscussionDetail, DiscussionComment, DiscussionDetailResponse, DiscussionQuoteRequestAnchor } from "../api/types";
 import { useDiscussionRefresh } from "../lib/useDiscussionRefresh";
+import { rootDiscussionsDisabled } from "../lib/tree";
 import { formatTime } from "../lib/datetime";
 import { focusDiscussionElement } from "../lib/discussionFocus";
+import { retireDiscussionDraft, useDiscussionDraft } from "../lib/useDiscussionDraft";
 import { DiscussionComposer, commentValidation, discussionActionError, discussionWriteError, discussionWriteRecovery } from "./DiscussionComposer";
 import { DiscussionAnchor, DiscussionAvatar, DiscussionStatus, DiscussionAvailability, DiscussionReadError, DiscussionState, DiscussionSummary, formatDiscussionTime, ReadWindow } from "./DiscussionRead";
 import { closeDiscussionActions, DiscussionActionHint, DiscussionActions } from "./DiscussionActions";
@@ -31,7 +33,8 @@ function OriginalPassage({ quote }: { quote: string }) {
   </>;
 }
 
-export function DiscussionThread({ root, id, inPanel = false, source, creationPending = false, onActionChange, active = true, onPassageChange }: {
+export function DiscussionThread({ root, id, inPanel = false, source, creationPending = false, onActionChange, active = true, onPassageChange, drafts }: {
+  drafts?: Map<string, string>;
   active?: boolean; onPassageChange?: (detail: DiscussionDetail | null) => void;
   root: string; id: string; inPanel?: boolean; source?: DiscussionSourceConnection;
   creationPending?: boolean;
@@ -43,13 +46,18 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
   const inspection = useRef(false);
   const activityCallback = useRef(onActionChange);
   activityCallback.current = onActionChange;
-  const [body, setBody] = useState("");
+  const replyDraftKey = JSON.stringify([root, id, "reply"]);
+  const [body, setBody] = useDiscussionDraft(drafts, replyDraftKey);
   const [composing, setComposing] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorNeedsRefresh, setErrorNeedsRefresh] = useState(false);
   const [refreshFailed, setRefreshFailed] = useState<string | null>(null);
   const [action, setAction] = useState<ThreadAction | null>(null);
+  // Page panels supply their surviving map; a direct thread keeps edit text only for its own lifetime.
+  const localEditDrafts = useRef(new Map<string, string>());
+  const editDrafts = drafts ?? localEditDrafts.current;
+  const [restoredEdit, setRestoredEdit] = useState(false);
   const [writing, setWriting] = useState(false);
   const [inspectRequired, setInspectRequired] = useState(false);
   const [suppressed, setSuppressed] = useState<Record<string, SuppressedComment>>({});
@@ -66,14 +74,21 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
     return () => { alive.current = false; activityCallback.current?.(false, false); };
   }, []);
   useEffect(() => { if (action?.kind === "retract" || action?.kind === "purge") focusDiscussionElement(cancelButton.current); }, [action?.kind]);
-  const query = useInfiniteQuery({ ...discussionDetailQuery(root, id), enabled: active });
-  useDiscussionRefresh(query, active && query.data?.pages[0]?.discussions_available !== false,
+  const tree = useQuery(treeQuery);
+  const configuredDisabled = rootDiscussionsDisabled(tree.data?.roots, root);
+  const query = useInfiniteQuery({ ...discussionDetailQuery(root, id), enabled: active && (!!tree.data || tree.isError) && !configuredDisabled });
+  useDiscussionRefresh(query, active && (!!tree.data || tree.isError) && !configuredDisabled && !query.data?.pages.some((page) => !page.discussions_available),
     () => posting.current || creationPending || inspection.current);
   const replyMutation = useMutation({ mutationFn: (submitted: string) => addDiscussionComment(root, id, submitted), retry: false });
   useEffect(() => { onActionChange?.(!!action || composing || inspectRequired, writing || replyMutation.isPending); },
     [action, composing, inspectRequired, writing, replyMutation.isPending, onActionChange]);
   const first = query.data?.pages[0];
-  const detail = first?.discussion;
+  const unavailable = query.data?.pages.find((page) => !page.discussions_available);
+  const knownDisabled = configuredDisabled || unavailable?.reason === "disabled_by_config";
+  useEffect(() => {
+    if (knownDisabled) { setAction(null); setComposing(false); origin.current = null; }
+  }, [knownDisabled]);
+  const detail = knownDisabled ? null : first?.discussion;
   const passageCallback = useRef(onPassageChange);
   passageCallback.current = onPassageChange;
   useEffect(() => {
@@ -82,7 +97,7 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
   }, [active, root, id, detail, query.isSuccess, query.isRefetchError, query.isFetching]);
   const title = detail?.page.path ? `Discussion on ${detail.page.path}` : "Discussion";
   const seen = new Set<string>();
-  const comments = query.data?.pages.flatMap((page) => page.comments.filter((comment) => {
+  const comments = configuredDisabled || unavailable ? [] : query.data?.pages.flatMap((page) => page.comments.filter((comment) => {
     if (seen.has(comment.id)) return false;
     seen.add(comment.id);
     return true;
@@ -127,11 +142,16 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
     if (posting.current || creationPending || inspection.current || action || composing ||
       (next.kind === "purge" ? accessDisabled : actionDisabled) || "comment" in next && suppressed[next.comment.id]) return;
     origin.current = { button, trigger: closeDiscussionActions(button) };
-    setAction(next); setError(null); setStatus(null);
+    setRestoredEdit(next.kind === "edit" && editDrafts.has(editDraftKey(next.comment.id)));
+    setAction(next.kind === "edit" ? { ...next, body: editDrafts.get(editDraftKey(next.comment.id)) ?? next.body } : next);
+    setError(null); setStatus(null);
   }
+
+  function editDraftKey(commentId: string) { return JSON.stringify([root, id, "edit", commentId]); }
 
   function cancelAction() {
     if (posting.current) return;
+    if (action?.kind === "edit") editDrafts.delete(editDraftKey(action.comment.id));
     setAction(null); setError(null);
     const initiating = origin.current;
     requestAnimationFrame(() => {
@@ -170,7 +190,8 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
       if (validation) { setError(validation); setErrorNeedsRefresh(false); return; }
     }
     if (kind === "reattach" && (action?.kind !== "reattach" || !anchor || detail?.status !== "open" || detail.page.id !== action.pageId)) return;
-    const submitted = { root, id, action, anchor };
+    const submitted = { root, id, action, anchor,
+      editDraftKey: action?.kind === "edit" ? editDraftKey(action.comment.id) : null };
     const commentId = submitted.action && "comment" in submitted.action ? submitted.action.comment.id : null;
     posting.current = true; activityCallback.current?.(true, true); setWriting(true); setStatus(null); setError(null);
     const success = kind === "edit" ? { text: "Comment saved", verb: "Saved" } :
@@ -187,6 +208,10 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
       else if (kind === "reopen") await reopenDiscussion(submitted.root, submitted.id);
       else if (kind === "reattach" && submitted.anchor) await reattachDiscussion(submitted.root, submitted.id, submitted.anchor);
       else return;
+      if (kind === "edit" && submitted.action?.kind === "edit" && submitted.editDraftKey)
+        retireDiscussionDraft(editDrafts, submitted.editDraftKey, submitted.action.body);
+      if (commentId && (kind === "retract" || kind === "purge"))
+        editDrafts.delete(JSON.stringify([submitted.root, submitted.id, "edit", commentId]));
       if (alive.current) {
         if (commentId && (kind === "edit" || kind === "retract" || kind === "purge")) {
           const detailUpdates = client.getQueryState(discussionDetailQuery(submitted.root, submitted.id).queryKey)?.dataUpdateCount ?? 0;
@@ -213,10 +238,11 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
     if (posting.current || creationPending || inspection.current || disabled || action || !composing) return;
     const validation = commentValidation(body);
     if (validation) { setError(validation); setErrorNeedsRefresh(false); return; }
-    const submitted = { root, id, body };
+    const submitted = { root, id, body, draftKey: replyDraftKey };
     posting.current = true; activityCallback.current?.(true, true); setWriting(true); setStatus("Posting…"); setError(null);
     try {
       const result = await replyMutation.mutateAsync(submitted.body);
+      retireDiscussionDraft(drafts, submitted.draftKey, submitted.body);
       if (alive.current) {
         setBody((current) => current === submitted.body ? "" : current);
         setComposing(false);
@@ -245,6 +271,10 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
   const inlineRecovery = recovery && !!error && (composing || action?.kind === "edit") && !refreshFailed;
   const recoveryButton = <button ref={recoveryRef} type="button" className="pb-discussion-action" disabled={busy || query.isFetching}
     onClick={() => void refresh()}>Refresh</button>;
+  if (configuredDisabled || unavailable?.reason === "disabled_by_config") return <ReadWindow>
+    <Link to="/discussions" className="text-sm text-link">All roots</Link>
+    <DiscussionAvailability reason="disabled_by_config" />
+  </ReadWindow>;
   return <ReadWindow>
     {!inPanel && <Link to="/discussions/$root" params={{ root }} className="text-sm text-link">Discussions in {root}</Link>}
     <div className="pb-discussion-thread-header">
@@ -272,7 +302,7 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
     {query.isError && !query.data && (query.error instanceof ApiError && query.error.code === "discussion_not_found" ?
       <p role="alert">Discussion not found</p> :
       <DiscussionReadError error={query.error} retry={() => void query.refetch()} />)}
-    {first && !first.discussions_available && <DiscussionAvailability reason={first.reason} />}
+    {unavailable && <DiscussionAvailability reason={unavailable.reason} />}
     {first?.discussions_available && !detail && <p role="alert">Discussion details are unavailable. Try refreshing.</p>}
     {detail && <>
       {query.isRefetchError && <p role="alert">Refresh failed. Showing earlier discussion content; retry before relying on it.</p>}
@@ -318,11 +348,16 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
       disabled={actionDisabled || localDisabled || (detail?.page.id !== action.pageId ? "The stored source identity changed. Cancel and review this discussion." : null)}
       open={detail?.status === "open"} submit={(anchor) => submitAction("reattach", anchor)} cancel={cancelAction}
       clearSubmitError={() => setError(null)} />}
-    {action?.kind === "edit" && <div data-pb-active-action><DiscussionComposer body={action.body}
-      setBody={(value) => setAction((current) => current?.kind === "edit" ? { ...current, body: value } : current)}
-      submit={() => void submitAction("edit")} cancel={cancelAction} busy={busy}
-      disabled={actionDisabled || targetDisabled || localDisabled} error={error} submitLabel="Save comment" onEscape={() => setError(null)}
-      recoveryAction={inlineRecovery ? recoveryButton : undefined} /></div>}
+    {action?.kind === "edit" && <div data-pb-active-action>
+      {restoredEdit && <p role="status">Restored unsaved edit. Compare it with the current comment before saving.</p>}
+      <DiscussionComposer body={action.body}
+        setBody={(value) => {
+          if (action?.kind === "edit") editDrafts.set(editDraftKey(action.comment.id), value);
+          setAction((current) => current?.kind === "edit" ? { ...current, body: value } : current);
+        }}
+        submit={() => void submitAction("edit")} cancel={cancelAction} busy={busy}
+        disabled={actionDisabled || targetDisabled || localDisabled} error={error} submitLabel="Save comment" onEscape={() => setError(null)}
+        recoveryAction={inlineRecovery ? recoveryButton : undefined} /></div>}
     {(action?.kind === "retract" || action?.kind === "purge") && <section className="pb-discussion-card space-y-3"
       aria-label={action.kind === "purge" ? "Confirm purge" : "Confirm retraction"} data-pb-active-action onKeyDown={(event) => {
         if (event.key === "Escape" && !posting.current) { event.preventDefault(); cancelAction(); }
