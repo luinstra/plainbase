@@ -5,27 +5,34 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * The §5.9 token-discipline gate (chunk-7 acceptance: "no hex colors outside tokens.css"):
+ * The §5.9 token-discipline gate: color definitions stay in the sanctioned CSS paths.
  *
  *  1. Color LITERALS (hex, rgb()/hsl()/oklch() with numeric args) live ONLY in
- *     src/styles/tokens.css.
- *  2. PRIMITIVE tokens (--pb-<hue>-<step>) are consumed only inside tokens.css —
+ *     src/styles/tokens.css, src/styles/themes/light.css and src/styles/themes/dark.css.
+ *     The candidate src/styles/themes/generic.css carries no literals or primitives.
+ *  2. PRIMITIVE tokens (--pb-<hue>-<step>) are consumed only inside those same paths;
  *     components and app.css reference the semantic tier exclusively, so dark mode and
  *     runtime theme overrides stay a pure semantic-layer swap.
- *  3. NAMED colors (`color: red`, `background: white`) are color literals too — flagged
+ *  3. NAMED colors (`color: red`, `background: white`) are color literals too; flagged
  *     in color-bearing property positions, CSS and inline-style objects alike.
  */
 
 const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const TOKENS_FILE = path.join("src", "styles", "tokens.css");
+const SANCTIONED_COLOR_FILES = new Set([
+  TOKENS_FILE,
+  path.join("src", "styles", "themes", "light.css"),
+  path.join("src", "styles", "themes", "dark.css"),
+]);
+const sanctionedPaths = [...SANCTIONED_COLOR_FILES].join(", ");
 
 const HEX_COLOR = /(^|[^0-9A-Za-z&-])#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?![0-9A-Za-z])/;
 const COLOR_FUNCTION = /\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(\s*[\d.]/i;
-// Hue list mirrored from tokens.css tier 1 — keep in sync when adding a hue.
+// Hue list mirrored from tokens.css tier 1; keep in sync when adding a hue.
 const PRIMITIVE_TOKEN = /--pb-(?:white|black|gray|warm|teal|blue|red|green|amber|violet)\b/;
 
 // Named colors are only flagged in color-bearing property positions (`color: red` in CSS,
-// `fill: "red"` in an inline-style object) — prose and identifiers that merely contain a
+// `fill: "red"` in an inline-style object); prose and identifiers that merely contain a
 // color word stay legal. `transparent`, `currentColor`, `none`, and the CSS-wide keywords
 // (inherit/initial/unset/revert) are not in the list, so they pass. Hyphens are optional
 // to catch camelCase inline-style props (`backgroundColor`).
@@ -77,24 +84,24 @@ describe("token discipline (§5.9)", () => {
   });
 
   it.each(files.map((f) => [path.relative(frontendRoot, f)] as const))("%s carries no color literals", (relative) => {
-    if (relative === TOKENS_FILE) return; // the one sanctioned home of color literals
+    if (SANCTIONED_COLOR_FILES.has(relative)) return;
     const lines = readFileSync(path.join(frontendRoot, relative), "utf8").split("\n");
     const offending = lines.filter((line) => HEX_COLOR.test(line) || COLOR_FUNCTION.test(line));
-    expect(offending, `color literals belong in ${TOKENS_FILE}`).toEqual([]);
+    expect(offending, `color literals belong in ${sanctionedPaths}`).toEqual([]);
   });
 
   it.each(files.map((f) => [path.relative(frontendRoot, f)] as const))("%s uses no named CSS colors", (relative) => {
-    if (relative === TOKENS_FILE) return;
+    if (SANCTIONED_COLOR_FILES.has(relative)) return;
     const lines = readFileSync(path.join(frontendRoot, relative), "utf8").split("\n");
     const offending = lines.filter((line) => NAMED_COLOR.test(line));
-    expect(offending, `named colors are color literals — they belong in ${TOKENS_FILE}`).toEqual([]);
+    expect(offending, `named colors are color literals; they belong in ${sanctionedPaths}`).toEqual([]);
   });
 
   it.each(files.map((f) => [path.relative(frontendRoot, f)] as const))("%s references no primitive tokens", (relative) => {
-    if (relative === TOKENS_FILE) return;
+    if (SANCTIONED_COLOR_FILES.has(relative)) return;
     const lines = readFileSync(path.join(frontendRoot, relative), "utf8").split("\n");
     const offending = lines.filter((line) => PRIMITIVE_TOKEN.test(line));
-    expect(offending, "components consume the semantic tier only").toEqual([]);
+    expect(offending, `primitive tokens belong in ${sanctionedPaths}; other files consume the semantic tier only`).toEqual([]);
   });
 
   it("tokens.css defines a dark override for the semantic tier", () => {

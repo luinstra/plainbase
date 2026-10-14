@@ -1,0 +1,439 @@
+{
+  "description": "Unreleased --pb-theme-* CSS inputs, separate from the pb-theme localStorage display-mode key. Floors are minimum consumers; dependency closure may move more.",
+  "inputs": {
+    "--pb-theme-background": {
+      "required": true,
+      "kind": "colour",
+      "default": null,
+      "generic": [
+        "--pb-surface"
+      ],
+      "builtin-light": [
+        "--pb-surface"
+      ],
+      "builtin-dark": [
+        "--pb-surface"
+      ],
+      "adaptation": "Base document surface; mode-specific translucent scrim and shadow also depend on it."
+    },
+    "--pb-theme-foreground": {
+      "required": true,
+      "kind": "colour",
+      "default": null,
+      "generic": [
+        "--pb-text"
+      ],
+      "builtin-light": [
+        "--pb-text"
+      ],
+      "builtin-dark": [
+        "--pb-text"
+      ],
+      "adaptation": "Base document ink; mixed faint ink and links also depend on it."
+    },
+    "--pb-theme-primary": {
+      "required": true,
+      "kind": "colour",
+      "default": null,
+      "generic": [
+        "--pb-primary-bg",
+        "--pb-primary-border",
+        "--pb-primary-opaque",
+        "--pb-accent",
+        "--pb-discussion-highlight-edge"
+      ],
+      "builtin-light": [
+        "--pb-primary-bg",
+        "--pb-primary-border",
+        "--pb-accent",
+        "--pb-discussion-highlight-edge",
+        "--pb-primary-opaque"
+      ],
+      "builtin-dark": [
+        "--pb-primary-bg",
+        "--pb-accent",
+        "--pb-discussion-highlight-edge",
+        "--pb-primary-opaque"
+      ],
+      "adaptation": "Action fill keeps input alpha; primary-opaque supplies opaque accent ink and callout mixtures."
+    },
+    "--pb-theme-primary-foreground": {
+      "required": true,
+      "kind": "colour",
+      "default": null,
+      "generic": [
+        "--pb-primary-text",
+        "--pb-accent-contrast"
+      ],
+      "builtin-light": [
+        "--pb-primary-text",
+        "--pb-accent-contrast"
+      ],
+      "builtin-dark": [
+        "--pb-primary-text"
+      ],
+      "adaptation": "Action ink; the dark built-in accent-contrast retains its current expression."
+    },
+    "--pb-theme-card": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 3%)",
+      "generic": [
+        "--pb-surface-raised",
+        "--pb-surface-field",
+        "--pb-code-bg",
+        "--pb-diagram-node-bg"
+      ],
+      "builtin-light": [
+        "--pb-surface-raised",
+        "--pb-surface-field",
+        "--pb-code-bg",
+        "--pb-diagram-node-bg"
+      ],
+      "builtin-dark": [
+        "--pb-surface-raised"
+      ],
+      "adaptation": "Raised surfaces; built-in refinements preserve distinct field, code and diagram surfaces where specified."
+    },
+    "--pb-theme-card-foreground": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-card-foreground",
+        "--pb-diagram-node-text",
+        "--pb-code-text"
+      ],
+      "builtin-light": [
+        "--pb-card-foreground",
+        "--pb-diagram-node-text"
+      ],
+      "builtin-dark": [
+        "--pb-card-foreground",
+        "--pb-diagram-node-text"
+      ],
+      "adaptation": "Generic code and diagram ink follows card-foreground; current built-in code-text remains refined."
+    },
+    "--pb-theme-muted": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 6%)",
+      "generic": [
+        "--pb-surface-chrome",
+        "--pb-inline-code-bg",
+        "--pb-table-header-bg"
+      ],
+      "builtin-light": [
+        "--pb-surface-chrome",
+        "--pb-table-header-bg"
+      ],
+      "builtin-dark": [
+        "--pb-surface-chrome"
+      ],
+      "adaptation": "Quiet surfaces; built-in inline-code-bg and the dark table-header-bg retain their current expressions."
+    },
+    "--pb-theme-muted-foreground": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 15%)",
+      "generic": [
+        "--pb-text-muted"
+      ],
+      "builtin-light": [
+        "--pb-text-muted"
+      ],
+      "builtin-dark": [
+        "--pb-text-muted"
+      ],
+      "adaptation": "Secondary ink and the default syntax-comment dependency."
+    },
+    "--pb-theme-border": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 75%)",
+      "generic": [
+        "--pb-border",
+        "--pb-code-border"
+      ],
+      "builtin-light": [
+        "--pb-border",
+        "--pb-code-border"
+      ],
+      "builtin-dark": [
+        "--pb-border",
+        "--pb-code-border"
+      ],
+      "adaptation": "Edge colour; generic stronger edges mix in foreground ink."
+    },
+    "--pb-theme-ring": {
+      "required": false,
+      "kind": "colour",
+      "default": "rgb(from var(--pb-theme-primary) r g b / 1)",
+      "generic": [
+        "--pb-focus-ring"
+      ],
+      "builtin-light": [
+        "--pb-focus-ring"
+      ],
+      "builtin-dark": [
+        "--pb-focus-ring"
+      ],
+      "adaptation": "Focus-outline colour; default uses opaque primary channels."
+    },
+    "--pb-theme-selection": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-primary), var(--pb-theme-background) 88%)",
+      "generic": [
+        "--pb-selection-bg",
+        "--pb-deeplink-pulse",
+        "--pb-nav-active-bg",
+        "--pb-discussion-highlight-bg"
+      ],
+      "builtin-light": [
+        "--pb-selection-bg",
+        "--pb-deeplink-pulse"
+      ],
+      "builtin-dark": [
+        "--pb-selection-bg",
+        "--pb-deeplink-pulse"
+      ],
+      "adaptation": "Selection highlight; built-in navigation and discussion refinements retain their current expressions."
+    },
+    "--pb-theme-selection-foreground": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-selection-text"
+      ],
+      "builtin-light": [
+        "--pb-selection-text"
+      ],
+      "builtin-dark": [
+        "--pb-selection-text"
+      ],
+      "adaptation": "Selected text ink."
+    },
+    "--pb-theme-destructive": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-danger",
+        "--pb-status-deprecated"
+      ],
+      "builtin-light": [
+        "--pb-danger",
+        "--pb-status-deprecated"
+      ],
+      "builtin-dark": [
+        "--pb-danger"
+      ],
+      "adaptation": "Destructive ink; generic feedback and diff tints are in its dependency closure."
+    },
+    "--pb-theme-warning": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-warning",
+        "--pb-link-broken",
+        "--pb-status-draft"
+      ],
+      "builtin-light": [
+        "--pb-warning",
+        "--pb-link-broken",
+        "--pb-status-draft"
+      ],
+      "builtin-dark": [
+        "--pb-warning",
+        "--pb-link-broken"
+      ],
+      "adaptation": "Warning ink; the light built-in syntax-literal dependency belongs to its public syntax definition."
+    },
+    "--pb-theme-success": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-status-active"
+      ],
+      "builtin-light": [
+        "--pb-status-active"
+      ],
+      "builtin-dark": [
+        "--pb-status-active"
+      ],
+      "adaptation": "Successful-state ink; generic diff-add-bg is in its dependency closure."
+    },
+    "--pb-theme-syntax-keyword": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-keyword"
+      ],
+      "builtin-light": [
+        "--pb-syntax-keyword"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-keyword"
+      ],
+      "adaptation": "Maps the public syntax-keyword input to --pb-syntax-keyword."
+    },
+    "--pb-theme-syntax-string": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-string"
+      ],
+      "builtin-light": [
+        "--pb-syntax-string"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-string"
+      ],
+      "adaptation": "Maps the public syntax-string input to --pb-syntax-string."
+    },
+    "--pb-theme-syntax-comment": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-muted-foreground)",
+      "generic": [
+        "--pb-syntax-comment"
+      ],
+      "builtin-light": [
+        "--pb-syntax-comment"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-comment"
+      ],
+      "adaptation": "Maps the public syntax-comment input to --pb-syntax-comment."
+    },
+    "--pb-theme-syntax-literal": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-literal"
+      ],
+      "builtin-light": [
+        "--pb-syntax-literal"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-literal"
+      ],
+      "adaptation": "Maps the public syntax-literal input to --pb-syntax-literal."
+    },
+    "--pb-theme-syntax-title": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-title"
+      ],
+      "builtin-light": [
+        "--pb-syntax-title"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-title"
+      ],
+      "adaptation": "also colours hljs-name and hljs-selector-tag (app.css hljs title group)"
+    },
+    "--pb-theme-syntax-attribute": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-attr"
+      ],
+      "builtin-light": [
+        "--pb-syntax-attr"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-attr"
+      ],
+      "adaptation": "Maps the public syntax-attribute input to --pb-syntax-attr."
+    },
+    "--pb-theme-font-sans": {
+      "required": false,
+      "kind": "font",
+      "default": "\"IBM Plex Sans\", ui-sans-serif, system-ui, sans-serif",
+      "generic": [
+        "--pb-font-sans"
+      ],
+      "builtin-light": [
+        "--pb-font-sans"
+      ],
+      "builtin-dark": [
+        "--pb-font-sans"
+      ],
+      "adaptation": "Uses the current app.css sans-serif stack; built-ins inherit the private role from generic."
+    },
+    "--pb-theme-font-mono": {
+      "required": false,
+      "kind": "font",
+      "default": "\"JetBrains Mono\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "generic": [
+        "--pb-font-mono"
+      ],
+      "builtin-light": [
+        "--pb-font-mono"
+      ],
+      "builtin-dark": [
+        "--pb-font-mono"
+      ],
+      "adaptation": "Uses the current app.css monospace stack; built-ins inherit the private role from generic."
+    },
+    "--pb-theme-radius": {
+      "required": false,
+      "kind": "length",
+      "default": "0.25rem",
+      "generic": [
+        "--pb-radius"
+      ],
+      "builtin-light": [
+        "--pb-radius"
+      ],
+      "builtin-dark": [
+        "--pb-radius"
+      ],
+      "adaptation": "Base radius; seven scaled private steps are in its dependency closure."
+    }
+  },
+  "independentInk": [
+    "--pb-text",
+    "--pb-text-muted",
+    "--pb-link",
+    "--pb-syntax-keyword",
+    "--pb-syntax-string",
+    "--pb-syntax-comment",
+    "--pb-syntax-literal",
+    "--pb-syntax-title",
+    "--pb-syntax-attr",
+    "--pb-status-active",
+    "--pb-status-draft",
+    "--pb-status-review",
+    "--pb-status-archived",
+    "--pb-status-deprecated",
+    "--pb-danger",
+    "--pb-warning"
+  ],
+  "newPrivates": [
+    "--pb-card-foreground",
+    "--pb-diagram-node-text",
+    "--pb-primary-opaque",
+    "--pb-font-sans",
+    "--pb-font-mono",
+    "--pb-radius",
+    "--pb-radius-xs",
+    "--pb-radius-sm",
+    "--pb-radius-md",
+    "--pb-radius-lg",
+    "--pb-radius-xl",
+    "--pb-radius-2xl",
+    "--pb-radius-3xl"
+  ]
+}

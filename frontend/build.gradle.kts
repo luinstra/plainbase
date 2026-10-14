@@ -20,11 +20,16 @@ val npmBuild = tasks.register<NpmTask>("npmBuild") {
     inputs.files("package.json", "package-lock.json", "vite.config.ts", "tsconfig.json", "index.html")
     inputs.dir("src")
     inputs.dir("public") // copied verbatim into dist/ by vite — a changed brand asset must re-embed
+    // Tailwind scans these, so they are build inputs.
+    inputs.dir("e2e")
+    inputs.dir("scripts")
+    inputs.files("playwright.config.ts", "build.gradle.kts")
     outputs.dir(layout.projectDirectory.dir("dist"))
 }
 
 // Unit/snapshot tests + the §5.9 token-discipline gate (vitest). Part of `build`, so the
-// JAR floor (`./gradlew build`) fails on a hex color outside tokens.css.
+// JAR floor (`./gradlew build`) rejects hex colors outside src/styles/tokens.css,
+// src/styles/themes/light.css and src/styles/themes/dark.css.
 val npmTest = tasks.register<NpmTask>("npmTest") {
     dependsOn(tasks.npmInstall)
     args.set(listOf("run", "test"))

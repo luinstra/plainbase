@@ -1,0 +1,125 @@
+{
+  "opaque-light": {
+    "--pb-theme-background": "#f3efe6",
+    "--pb-theme-foreground": "#11110f",
+    "--pb-theme-primary": "#17675c",
+    "--pb-theme-primary-foreground": "#fdfaf1"
+  },
+  "opaque-dark": {
+    "--pb-theme-background": "#171b26",
+    "--pb-theme-foreground": "#e7eaf2",
+    "--pb-theme-primary": "#57d6be",
+    "--pb-theme-primary-foreground": "#15342e"
+  },
+  "translucent-dark": {
+    "--pb-theme-background": "#171b26",
+    "--pb-theme-foreground": "#e7eaf2",
+    "--pb-theme-primary": "color-mix(in srgb, #57d6be 15%, transparent)",
+    "--pb-theme-primary-foreground": "#b8f0e3"
+  },
+  "probes": {
+    "--pb-theme-background": {
+      "kind": "colour",
+      "value": "#d73ac5"
+    },
+    "--pb-theme-foreground": {
+      "kind": "colour",
+      "value": "#e942b7"
+    },
+    "--pb-theme-primary": {
+      "kind": "colour",
+      "value": "#c42bd9"
+    },
+    "--pb-theme-primary-foreground": {
+      "kind": "colour",
+      "value": "#f04aad"
+    },
+    "--pb-theme-card": {
+      "kind": "colour",
+      "value": "#bd39e8"
+    },
+    "--pb-theme-card-foreground": {
+      "kind": "colour",
+      "value": "#db27ae"
+    },
+    "--pb-theme-muted": {
+      "kind": "colour",
+      "value": "#cf49ed"
+    },
+    "--pb-theme-muted-foreground": {
+      "kind": "colour",
+      "value": "#ec36c0"
+    },
+    "--pb-theme-border": {
+      "kind": "colour",
+      "value": "#b82cce"
+    },
+    "--pb-theme-ring": {
+      "kind": "colour",
+      "value": "#e55bd4"
+    },
+    "--pb-theme-selection": {
+      "kind": "colour",
+      "value": "#c61fea"
+    },
+    "--pb-theme-selection-foreground": {
+      "kind": "colour",
+      "value": "#f359c6"
+    },
+    "--pb-theme-destructive": {
+      "kind": "colour",
+      "value": "#a934e1"
+    },
+    "--pb-theme-warning": {
+      "kind": "colour",
+      "value": "#da52ba"
+    },
+    "--pb-theme-success": {
+      "kind": "colour",
+      "value": "#b746d7"
+    },
+    "--pb-theme-syntax-keyword": {
+      "kind": "colour",
+      "value": "#ee29dc"
+    },
+    "--pb-theme-syntax-string": {
+      "kind": "colour",
+      "value": "#ca5ab1"
+    },
+    "--pb-theme-syntax-comment": {
+      "kind": "colour",
+      "value": "#df40ed"
+    },
+    "--pb-theme-syntax-literal": {
+      "kind": "colour",
+      "value": "#ae25c3"
+    },
+    "--pb-theme-syntax-title": {
+      "kind": "colour",
+      "value": "#f161dc"
+    },
+    "--pb-theme-syntax-attribute": {
+      "kind": "colour",
+      "value": "#b95cf0"
+    },
+    "--pb-theme-font-sans": {
+      "kind": "font",
+      "value": "\"Probe Sans\", serif"
+    },
+    "--pb-theme-font-mono": {
+      "kind": "font",
+      "value": "\"Probe Mono\", monospace"
+    },
+    "--pb-theme-radius": {
+      "kind": "length",
+      "value": "7px"
+    }
+  },
+  "notes": [
+    "Each definition supplies only the four required public inputs; optional values come from generic defaults.",
+    "Opaque-light uses darker document ink to keep --pb-text-faint on --pb-surface-hover above its contrast minimum.",
+    "All custom fixture and probe colours differ from every built-in primitive.",
+    "Translucent-dark keeps the opaque-dark base and document ink, with 15%-alpha primary channels and matching action ink.",
+    "Probe separation from every relevant floor consumer is asserted by the later candidate tests before each probe is used."
+  ]
+}

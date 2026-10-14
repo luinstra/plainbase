@@ -1,0 +1,2627 @@
+{
+  "fixtures": {
+    "opaque-light": {
+      "roles": {
+        "--pb-surface": [
+          0.9529411764705882,
+          0.9372549019607843,
+          0.9019607843137255,
+          1
+        ],
+        "--pb-surface-raised": [
+          0.9263529411764705,
+          0.9111372549019607,
+          0.8766666666666666,
+          1
+        ],
+        "--pb-search-scrim": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          0.48
+        ],
+        "--pb-surface-hover": [
+          0.8820392156862744,
+          0.8676078431372549,
+          0.8345098039215687,
+          1
+        ],
+        "--pb-surface-active": [
+          0.8465882352941176,
+          0.8327843137254902,
+          0.8007843137254902,
+          1
+        ],
+        "--pb-surface-chrome": [
+          0.8997647058823528,
+          0.8850196078431372,
+          0.8513725490196078,
+          1
+        ],
+        "--pb-surface-field": [
+          0.9263529411764705,
+          0.9111372549019607,
+          0.8766666666666666,
+          1
+        ],
+        "--pb-nav-active-bg": [
+          0.8494117647058823,
+          0.8732549019607844,
+          0.8370196078431372,
+          1
+        ],
+        "--pb-primary-bg": [
+          0.09019607843137255,
+          0.403921568627451,
+          0.3607843137254902,
+          1
+        ],
+        "--pb-primary-border": [
+          0.09019607843137255,
+          0.403921568627451,
+          0.3607843137254902,
+          1
+        ],
+        "--pb-primary-text": [
+          0.9921568627450981,
+          0.9803921568627451,
+          0.9450980392156862,
+          1
+        ],
+        "--pb-discussion-highlight-bg": [
+          0.8494117647058823,
+          0.8732549019607844,
+          0.8370196078431372,
+          1
+        ],
+        "--pb-discussion-highlight-edge": [
+          0.09019607843137255,
+          0.403921568627451,
+          0.3607843137254902,
+          1
+        ],
+        "--pb-selection-text": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-callout-note-bg": [
+          0.883921568627451,
+          0.8945882352941177,
+          0.8586666666666667,
+          1
+        ],
+        "--pb-callout-warning-bg": [
+          0.8643137254901961,
+          0.8501960784313726,
+          0.8176470588235294,
+          1
+        ],
+        "--pb-callout-danger-bg": [
+          0.8643137254901961,
+          0.8501960784313726,
+          0.8176470588235294,
+          1
+        ],
+        "--pb-text": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-text-muted": [
+          0.1996078431372549,
+          0.19725490196078435,
+          0.18529411764705883,
+          1
+        ],
+        "--pb-text-faint": [
+          0.3768627450980392,
+          0.3713725490196078,
+          0.35392156862745094,
+          1
+        ],
+        "--pb-border": [
+          0.7313725490196078,
+          0.7196078431372549,
+          0.6911764705882353,
+          1
+        ],
+        "--pb-border-strong": [
+          0.5984313725490196,
+          0.5890196078431372,
+          0.5647058823529412,
+          1
+        ],
+        "--pb-diagram-node-bg": [
+          0.9263529411764705,
+          0.9111372549019607,
+          0.8766666666666666,
+          1
+        ],
+        "--pb-diagram-node-border": [
+          0.5984313725490196,
+          0.5890196078431372,
+          0.5647058823529412,
+          1
+        ],
+        "--pb-diagram-shadow": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          0.14
+        ],
+        "--pb-accent": [
+          0.09019607843137255,
+          0.403921568627451,
+          0.3607843137254902,
+          1
+        ],
+        "--pb-accent-contrast": [
+          0.9921568627450981,
+          0.9803921568627451,
+          0.9450980392156862,
+          1
+        ],
+        "--pb-accent-soft": [
+          0.8666666666666667,
+          0.883921568627451,
+          0.847843137254902,
+          1
+        ],
+        "--pb-link": [
+          0.07137254901960785,
+          0.1341176470588235,
+          0.11921568627450979,
+          1
+        ],
+        "--pb-link-hover": [
+          0.07019607843137256,
+          0.1172549019607843,
+          0.10411764705882352,
+          1
+        ],
+        "--pb-link-broken": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-focus-ring": [
+          0.09019607843137255,
+          0.403921568627451,
+          0.3607843137254902,
+          1
+        ],
+        "--pb-selection-bg": [
+          0.8494117647058823,
+          0.8732549019607844,
+          0.8370196078431372,
+          1
+        ],
+        "--pb-deeplink-pulse": [
+          0.8494117647058823,
+          0.8732549019607844,
+          0.8370196078431372,
+          1
+        ],
+        "--pb-code-bg": [
+          0.9263529411764705,
+          0.9111372549019607,
+          0.8766666666666666,
+          1
+        ],
+        "--pb-code-border": [
+          0.7313725490196078,
+          0.7196078431372549,
+          0.6911764705882353,
+          1
+        ],
+        "--pb-code-text": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-inline-code-bg": [
+          0.8997647058823528,
+          0.8850196078431372,
+          0.8513725490196078,
+          1
+        ],
+        "--pb-syntax-keyword": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-syntax-string": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-syntax-comment": [
+          0.1996078431372549,
+          0.19725490196078435,
+          0.18529411764705883,
+          1
+        ],
+        "--pb-syntax-literal": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-syntax-title": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-syntax-attr": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-blockquote-border": [
+          0.5984313725490196,
+          0.5890196078431372,
+          0.5647058823529412,
+          1
+        ],
+        "--pb-table-header-bg": [
+          0.8997647058823528,
+          0.8850196078431372,
+          0.8513725490196078,
+          1
+        ],
+        "--pb-status-active": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-status-draft": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-status-review": [
+          0.07137254901960785,
+          0.1341176470588235,
+          0.11921568627450979,
+          1
+        ],
+        "--pb-status-archived": [
+          0.3768627450980392,
+          0.3713725490196078,
+          0.35392156862745094,
+          1
+        ],
+        "--pb-status-deprecated": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-danger": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-danger-soft": [
+          0.8643137254901961,
+          0.8501960784313726,
+          0.8176470588235294,
+          1
+        ],
+        "--pb-warning": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-warning-soft": [
+          0.8643137254901961,
+          0.8501960784313726,
+          0.8176470588235294,
+          1
+        ],
+        "--pb-diff-add-bg": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          0.12
+        ],
+        "--pb-diff-del-bg": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          0.12
+        ],
+        "--pb-card-foreground": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-diagram-node-text": [
+          0.06666666666666667,
+          0.06666666666666667,
+          0.058823529411764705,
+          1
+        ],
+        "--pb-primary-opaque": [
+          0.09019607843137255,
+          0.403921568627451,
+          0.3607843137254902,
+          1
+        ],
+        "--pb-font-sans": "\"IBM Plex Sans\", ui-sans-serif, system-ui, sans-serif",
+        "--pb-font-mono": "\"JetBrains Mono\", ui-monospace, \"SF Mono\", Menlo, monospace",
+        "--pb-radius": "0.25rem",
+        "--pb-radius-xs": "calc(0.25rem * 0.8)",
+        "--pb-radius-sm": "calc(0.25rem * 1.2)",
+        "--pb-radius-md": "calc(0.25rem * 1.5)",
+        "--pb-radius-lg": "calc(0.25rem * 2)",
+        "--pb-radius-xl": "calc(0.25rem * 2.5)",
+        "--pb-radius-2xl": "calc(0.25rem * 3)",
+        "--pb-radius-3xl": "calc(0.25rem * 4)"
+      },
+      "ratios": {
+        "text on surface (4.5)": 16.4731,
+        "text on surface-raised (4.5)": 15.5067,
+        "text on surface-chrome (4.5)": 14.5762,
+        "text on surface-hover (4.5)": 13.9756,
+        "text on surface-field (4.5)": 15.5067,
+        "text-muted on surface (4.5)": 11.1377,
+        "text-muted on surface-raised (4.5)": 10.4843,
+        "text-muted on surface-chrome (4.5)": 9.8552,
+        "text-muted on surface-hover (4.5)": 9.4491,
+        "text-muted on surface-field (4.5)": 10.4843,
+        "text-faint on surface (4.5)": 5.5912,
+        "text-faint on surface-raised (4.5)": 5.2632,
+        "text-faint on surface-chrome (4.5)": 4.9474,
+        "text-faint on surface-hover (4.5)": 4.7435,
+        "text-faint on surface-field (4.5)": 5.2632,
+        "text on surface-chrome + nav-active-bg (4.5)": 13.8844,
+        "text on surface-active (4.5)": 12.8214,
+        "text-muted on surface-raised + accent-soft (4.5)": 9.6657,
+        "link on surface-raised + accent-soft (4.5)": 12.4427,
+        "link on surface + accent-soft (4.5)": 12.4427,
+        "link-hover on surface + accent-soft (4.5)": 12.9577,
+        "link-hover on surface-raised + accent-soft (4.5)": 12.9577,
+        "accent on surface + accent-soft (4.5)": 5.0722,
+        "accent on surface-raised + accent-soft (4.5)": 5.0722,
+        "text on surface + callout-note-bg (4.5)": 14.7153,
+        "text on surface-raised + callout-note-bg (4.5)": 14.7153,
+        "text on surface + callout-note-bg + callout-note-bg (4.5)": 14.7153,
+        "link on surface + callout-note-bg (4.5)": 12.8077,
+        "link on surface-raised + callout-note-bg (4.5)": 12.8077,
+        "link on surface + callout-note-bg + callout-note-bg (4.5)": 12.8077,
+        "link-hover on surface + callout-note-bg (4.5)": 13.3379,
+        "link-hover on surface-raised + callout-note-bg (4.5)": 13.3379,
+        "link-hover on surface + callout-note-bg + callout-note-bg (4.5)": 13.3379,
+        "link-broken on surface + callout-note-bg (4.5)": 14.7153,
+        "link-broken on surface-raised + callout-note-bg (4.5)": 14.7153,
+        "link-broken on surface + callout-note-bg + callout-note-bg (4.5)": 14.7153,
+        "focus-ring on surface + callout-note-bg (3)": 5.221,
+        "accent on surface + callout-note-bg (3)": 5.221,
+        "accent on surface (3)": 5.8447,
+        "text on surface + callout-warning-bg (4.5)": 13.3907,
+        "text on surface-raised + callout-warning-bg (4.5)": 13.3907,
+        "text on surface + callout-warning-bg + callout-warning-bg (4.5)": 13.3907,
+        "link on surface + callout-warning-bg (4.5)": 11.6548,
+        "link on surface-raised + callout-warning-bg (4.5)": 11.6548,
+        "link on surface + callout-warning-bg + callout-warning-bg (4.5)": 11.6548,
+        "link-hover on surface + callout-warning-bg (4.5)": 12.1373,
+        "link-hover on surface-raised + callout-warning-bg (4.5)": 12.1373,
+        "link-hover on surface + callout-warning-bg + callout-warning-bg (4.5)": 12.1373,
+        "link-broken on surface + callout-warning-bg (4.5)": 13.3907,
+        "link-broken on surface-raised + callout-warning-bg (4.5)": 13.3907,
+        "link-broken on surface + callout-warning-bg + callout-warning-bg (4.5)": 13.3907,
+        "focus-ring on surface + callout-warning-bg (3)": 4.7511,
+        "warning on surface + callout-warning-bg (3)": 13.3907,
+        "warning on surface (3)": 16.4731,
+        "text on surface + callout-danger-bg (4.5)": 13.3907,
+        "text on surface-raised + callout-danger-bg (4.5)": 13.3907,
+        "text on surface + callout-danger-bg + callout-danger-bg (4.5)": 13.3907,
+        "link on surface + callout-danger-bg (4.5)": 11.6548,
+        "link on surface-raised + callout-danger-bg (4.5)": 11.6548,
+        "link on surface + callout-danger-bg + callout-danger-bg (4.5)": 11.6548,
+        "link-hover on surface + callout-danger-bg (4.5)": 12.1373,
+        "link-hover on surface-raised + callout-danger-bg (4.5)": 12.1373,
+        "link-hover on surface + callout-danger-bg + callout-danger-bg (4.5)": 12.1373,
+        "link-broken on surface + callout-danger-bg (4.5)": 13.3907,
+        "link-broken on surface-raised + callout-danger-bg (4.5)": 13.3907,
+        "link-broken on surface + callout-danger-bg + callout-danger-bg (4.5)": 13.3907,
+        "focus-ring on surface + callout-danger-bg (3)": 4.7511,
+        "danger on surface + callout-danger-bg (3)": 13.3907,
+        "danger on surface (3)": 16.4731,
+        "link on surface (4.5)": 14.3377,
+        "link on surface-raised (4.5)": 13.4965,
+        "link on surface-chrome (4.5)": 12.6866,
+        "accent on surface-hover (4.5)": 4.9586,
+        "warning on surface + warning-soft (4.5)": 13.3907,
+        "danger on surface + danger-soft (4.5)": 13.3907,
+        "link-broken on surface (4.5)": 16.4731,
+        "link-broken on surface-raised (4.5)": 15.5067,
+        "primary-text on surface + primary-bg (4.5)": 6.4262,
+        "primary-text on surface-raised + primary-bg (4.5)": 6.4262,
+        "primary-text on surface + danger-soft + primary-bg (4.5)": 6.4262,
+        "text on table-header-bg (4.5)": 14.5762,
+        "link on table-header-bg (4.5)": 12.6866,
+        "code-text on code-bg (4.5)": 15.5067,
+        "code-text on surface (4.5)": 16.4731,
+        "code-text on surface-raised (4.5)": 15.5067,
+        "code-text on surface + diff-add-bg (4.5)": 12.8214,
+        "code-text on surface + diff-del-bg (4.5)": 12.8214,
+        "syntax-keyword on code-bg (4.5)": 15.5067,
+        "syntax-keyword on surface (4.5)": 16.4731,
+        "syntax-keyword on surface-raised (4.5)": 15.5067,
+        "syntax-keyword on surface + diff-add-bg (4.5)": 12.8214,
+        "syntax-keyword on surface + diff-del-bg (4.5)": 12.8214,
+        "syntax-string on code-bg (4.5)": 15.5067,
+        "syntax-string on surface (4.5)": 16.4731,
+        "syntax-string on surface-raised (4.5)": 15.5067,
+        "syntax-string on surface + diff-add-bg (4.5)": 12.8214,
+        "syntax-string on surface + diff-del-bg (4.5)": 12.8214,
+        "syntax-comment on code-bg (4.5)": 10.4843,
+        "syntax-comment on surface (4.5)": 11.1377,
+        "syntax-comment on surface-raised (4.5)": 10.4843,
+        "syntax-comment on surface + diff-add-bg (4.5)": 8.6687,
+        "syntax-comment on surface + diff-del-bg (4.5)": 8.6687,
+        "syntax-literal on code-bg (4.5)": 15.5067,
+        "syntax-literal on surface (4.5)": 16.4731,
+        "syntax-literal on surface-raised (4.5)": 15.5067,
+        "syntax-literal on surface + diff-add-bg (4.5)": 12.8214,
+        "syntax-literal on surface + diff-del-bg (4.5)": 12.8214,
+        "syntax-title on code-bg (4.5)": 15.5067,
+        "syntax-title on surface (4.5)": 16.4731,
+        "syntax-title on surface-raised (4.5)": 15.5067,
+        "syntax-title on surface + diff-add-bg (4.5)": 12.8214,
+        "syntax-title on surface + diff-del-bg (4.5)": 12.8214,
+        "syntax-attr on code-bg (4.5)": 15.5067,
+        "syntax-attr on surface (4.5)": 16.4731,
+        "syntax-attr on surface-raised (4.5)": 15.5067,
+        "syntax-attr on surface + diff-add-bg (4.5)": 12.8214,
+        "syntax-attr on surface + diff-del-bg (4.5)": 12.8214,
+        "text-muted on surface + diff-add-bg (4.5)": 8.6687,
+        "text-muted on surface + diff-del-bg (4.5)": 8.6687,
+        "selection-text on surface + selection-bg (4.5)": 13.8844,
+        "selection-text on surface-raised + selection-bg (4.5)": 13.8844,
+        "status-active on surface (4.5)": 16.4731,
+        "status-active on surface-raised (4.5)": 15.5067,
+        "status-draft on surface (4.5)": 16.4731,
+        "status-draft on surface-raised (4.5)": 15.5067,
+        "status-review on surface (4.5)": 14.3377,
+        "status-review on surface-raised (4.5)": 13.4965,
+        "status-archived on surface (4.5)": 5.5912,
+        "status-archived on surface-raised (4.5)": 5.2632,
+        "status-deprecated on surface (4.5)": 16.4731,
+        "status-deprecated on surface-raised (4.5)": 15.5067,
+        "status-active on surface (3)": 16.4731,
+        "status-active on surface-hover (3)": 13.9756,
+        "status-draft on surface (3)": 16.4731,
+        "status-draft on surface-hover (3)": 13.9756,
+        "status-review on surface (3)": 14.3377,
+        "status-review on surface-hover (3)": 12.1639,
+        "status-archived on surface (3)": 5.5912,
+        "status-archived on surface-hover (3)": 4.7435,
+        "status-deprecated on surface (3)": 16.4731,
+        "status-deprecated on surface-hover (3)": 13.9756,
+        "focus-ring on surface (3)": 5.8447,
+        "focus-ring on surface-raised (3)": 5.5018,
+        "focus-ring on surface-chrome (3)": 5.1717,
+        "focus-ring on surface-hover (3)": 4.9586,
+        "focus-ring on surface-raised + accent-soft (3)": 5.0722,
+        "focus-ring on surface-chrome + nav-active-bg (3)": 4.9262,
+        "text-muted on surface (3)": 11.1377,
+        "text-muted on surface-chrome (3)": 9.8552,
+        "text-muted on surface-hover (3)": 9.4491,
+        "text-muted on surface-chrome + nav-active-bg (3)": 9.3874,
+        "text-faint on surface (3)": 5.5912,
+        "text-faint on surface-chrome (3)": 4.9474,
+        "text-faint on surface-hover (3)": 4.7435,
+        "text-faint on surface-chrome + nav-active-bg (3)": 4.7125
+      },
+      "closures": {
+        "--pb-theme-background": [
+          "--pb-accent-soft",
+          "--pb-blockquote-border",
+          "--pb-border",
+          "--pb-border-strong",
+          "--pb-callout-danger-bg",
+          "--pb-callout-note-bg",
+          "--pb-callout-warning-bg",
+          "--pb-code-bg",
+          "--pb-code-border",
+          "--pb-danger-soft",
+          "--pb-deeplink-pulse",
+          "--pb-diagram-node-bg",
+          "--pb-diagram-node-border",
+          "--pb-discussion-highlight-bg",
+          "--pb-inline-code-bg",
+          "--pb-nav-active-bg",
+          "--pb-selection-bg",
+          "--pb-status-archived",
+          "--pb-surface",
+          "--pb-surface-active",
+          "--pb-surface-chrome",
+          "--pb-surface-field",
+          "--pb-surface-hover",
+          "--pb-surface-raised",
+          "--pb-syntax-comment",
+          "--pb-table-header-bg",
+          "--pb-text-faint",
+          "--pb-text-muted",
+          "--pb-theme-background",
+          "--pb-theme-border",
+          "--pb-theme-card",
+          "--pb-theme-muted",
+          "--pb-theme-muted-foreground",
+          "--pb-theme-selection",
+          "--pb-theme-syntax-comment",
+          "--pb-warning-soft"
+        ],
+        "--pb-theme-foreground": [
+          "--pb-blockquote-border",
+          "--pb-border",
+          "--pb-border-strong",
+          "--pb-callout-danger-bg",
+          "--pb-callout-warning-bg",
+          "--pb-card-foreground",
+          "--pb-code-bg",
+          "--pb-code-border",
+          "--pb-code-text",
+          "--pb-danger",
+          "--pb-danger-soft",
+          "--pb-diagram-node-bg",
+          "--pb-diagram-node-border",
+          "--pb-diagram-node-text",
+          "--pb-diagram-shadow",
+          "--pb-diff-add-bg",
+          "--pb-diff-del-bg",
+          "--pb-inline-code-bg",
+          "--pb-link",
+          "--pb-link-broken",
+          "--pb-link-hover",
+          "--pb-search-scrim",
+          "--pb-selection-text",
+          "--pb-status-active",
+          "--pb-status-archived",
+          "--pb-status-deprecated",
+          "--pb-status-draft",
+          "--pb-status-review",
+          "--pb-surface-active",
+          "--pb-surface-chrome",
+          "--pb-surface-field",
+          "--pb-surface-hover",
+          "--pb-surface-raised",
+          "--pb-syntax-attr",
+          "--pb-syntax-comment",
+          "--pb-syntax-keyword",
+          "--pb-syntax-literal",
+          "--pb-syntax-string",
+          "--pb-syntax-title",
+          "--pb-table-header-bg",
+          "--pb-text",
+          "--pb-text-faint",
+          "--pb-text-muted",
+          "--pb-theme-border",
+          "--pb-theme-card",
+          "--pb-theme-card-foreground",
+          "--pb-theme-destructive",
+          "--pb-theme-foreground",
+          "--pb-theme-muted",
+          "--pb-theme-muted-foreground",
+          "--pb-theme-selection-foreground",
+          "--pb-theme-success",
+          "--pb-theme-syntax-attribute",
+          "--pb-theme-syntax-comment",
+          "--pb-theme-syntax-keyword",
+          "--pb-theme-syntax-literal",
+          "--pb-theme-syntax-string",
+          "--pb-theme-syntax-title",
+          "--pb-theme-warning",
+          "--pb-warning",
+          "--pb-warning-soft"
+        ],
+        "--pb-theme-primary": [
+          "--pb-accent",
+          "--pb-accent-soft",
+          "--pb-callout-note-bg",
+          "--pb-deeplink-pulse",
+          "--pb-discussion-highlight-bg",
+          "--pb-discussion-highlight-edge",
+          "--pb-focus-ring",
+          "--pb-link",
+          "--pb-link-hover",
+          "--pb-nav-active-bg",
+          "--pb-primary-bg",
+          "--pb-primary-border",
+          "--pb-primary-opaque",
+          "--pb-selection-bg",
+          "--pb-status-review",
+          "--pb-theme-primary",
+          "--pb-theme-ring",
+          "--pb-theme-selection"
+        ],
+        "--pb-theme-primary-foreground": [
+          "--pb-accent-contrast",
+          "--pb-primary-text",
+          "--pb-theme-primary-foreground"
+        ],
+        "--pb-theme-card": [
+          "--pb-code-bg",
+          "--pb-diagram-node-bg",
+          "--pb-surface-field",
+          "--pb-surface-raised",
+          "--pb-theme-card"
+        ],
+        "--pb-theme-card-foreground": [
+          "--pb-card-foreground",
+          "--pb-code-text",
+          "--pb-diagram-node-text",
+          "--pb-theme-card-foreground"
+        ],
+        "--pb-theme-muted": [
+          "--pb-inline-code-bg",
+          "--pb-surface-chrome",
+          "--pb-table-header-bg",
+          "--pb-theme-muted"
+        ],
+        "--pb-theme-muted-foreground": [
+          "--pb-syntax-comment",
+          "--pb-text-muted",
+          "--pb-theme-muted-foreground",
+          "--pb-theme-syntax-comment"
+        ],
+        "--pb-theme-border": [
+          "--pb-blockquote-border",
+          "--pb-border",
+          "--pb-border-strong",
+          "--pb-code-border",
+          "--pb-diagram-node-border",
+          "--pb-theme-border"
+        ],
+        "--pb-theme-ring": [
+          "--pb-focus-ring",
+          "--pb-theme-ring"
+        ],
+        "--pb-theme-selection": [
+          "--pb-deeplink-pulse",
+          "--pb-discussion-highlight-bg",
+          "--pb-nav-active-bg",
+          "--pb-selection-bg",
+          "--pb-theme-selection"
+        ],
+        "--pb-theme-selection-foreground": [
+          "--pb-selection-text",
+          "--pb-theme-selection-foreground"
+        ],
+        "--pb-theme-destructive": [
+          "--pb-callout-danger-bg",
+          "--pb-danger",
+          "--pb-danger-soft",
+          "--pb-diff-del-bg",
+          "--pb-status-deprecated",
+          "--pb-theme-destructive"
+        ],
+        "--pb-theme-warning": [
+          "--pb-callout-warning-bg",
+          "--pb-link-broken",
+          "--pb-status-draft",
+          "--pb-theme-warning",
+          "--pb-warning",
+          "--pb-warning-soft"
+        ],
+        "--pb-theme-success": [
+          "--pb-diff-add-bg",
+          "--pb-status-active",
+          "--pb-theme-success"
+        ],
+        "--pb-theme-syntax-keyword": [
+          "--pb-syntax-keyword",
+          "--pb-theme-syntax-keyword"
+        ],
+        "--pb-theme-syntax-string": [
+          "--pb-syntax-string",
+          "--pb-theme-syntax-string"
+        ],
+        "--pb-theme-syntax-comment": [
+          "--pb-syntax-comment",
+          "--pb-theme-syntax-comment"
+        ],
+        "--pb-theme-syntax-literal": [
+          "--pb-syntax-literal",
+          "--pb-theme-syntax-literal"
+        ],
+        "--pb-theme-syntax-title": [
+          "--pb-syntax-title",
+          "--pb-theme-syntax-title"
+        ],
+        "--pb-theme-syntax-attribute": [
+          "--pb-syntax-attr",
+          "--pb-theme-syntax-attribute"
+        ],
+        "--pb-theme-font-sans": [
+          "--pb-font-sans",
+          "--pb-theme-font-sans"
+        ],
+        "--pb-theme-font-mono": [
+          "--pb-font-mono",
+          "--pb-theme-font-mono"
+        ],
+        "--pb-theme-radius": [
+          "--pb-radius",
+          "--pb-radius-2xl",
+          "--pb-radius-3xl",
+          "--pb-radius-lg",
+          "--pb-radius-md",
+          "--pb-radius-sm",
+          "--pb-radius-xl",
+          "--pb-radius-xs",
+          "--pb-theme-radius"
+        ]
+      }
+    },
+    "opaque-dark": {
+      "roles": {
+        "--pb-surface": [
+          0.09019607843137255,
+          0.10588235294117647,
+          0.14901960784313725,
+          1
+        ],
+        "--pb-surface-raised": [
+          0.11466666666666668,
+          0.1302352941176471,
+          0.17301960784313727,
+          1
+        ],
+        "--pb-search-scrim": [
+          0.09019607843137256,
+          0.10588235294117647,
+          0.14901960784313725,
+          0.72
+        ],
+        "--pb-surface-hover": [
+          0.15545098039215682,
+          0.17082352941176465,
+          0.21301960784313723,
+          1
+        ],
+        "--pb-surface-active": [
+          0.188078431372549,
+          0.2032941176470588,
+          0.24501960784313725,
+          1
+        ],
+        "--pb-surface-chrome": [
+          0.13913725490196083,
+          0.1545882352941177,
+          0.19701960784313732,
+          1
+        ],
+        "--pb-surface-field": [
+          0.11466666666666668,
+          0.1302352941176471,
+          0.17301960784313727,
+          1
+        ],
+        "--pb-nav-active-bg": [
+          0.12031372549019609,
+          0.19388235294117645,
+          0.22054901960784315,
+          1
+        ],
+        "--pb-primary-bg": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-primary-border": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-primary-text": [
+          0.08235294117647059,
+          0.20392156862745098,
+          0.1803921568627451,
+          1
+        ],
+        "--pb-discussion-highlight-bg": [
+          0.12031372549019609,
+          0.19388235294117645,
+          0.22054901960784315,
+          1
+        ],
+        "--pb-discussion-highlight-edge": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-selection-text": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-callout-note-bg": [
+          0.11027450980392157,
+          0.16454901960784313,
+          0.19670588235294117,
+          1
+        ],
+        "--pb-callout-warning-bg": [
+          0.17176470588235293,
+          0.18705882352941178,
+          0.22901960784313727,
+          1
+        ],
+        "--pb-callout-danger-bg": [
+          0.17176470588235293,
+          0.18705882352941178,
+          0.22901960784313727,
+          1
+        ],
+        "--pb-text": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-text-muted": [
+          0.7835294117647059,
+          0.7958823529411764,
+          0.8290196078431372,
+          1
+        ],
+        "--pb-text-faint": [
+          0.6203921568627452,
+          0.6335294117647059,
+          0.6690196078431372,
+          1
+        ],
+        "--pb-border": [
+          0.29411764705882354,
+          0.3088235294117647,
+          0.34901960784313724,
+          1
+        ],
+        "--pb-border-strong": [
+          0.4164705882352941,
+          0.4305882352941176,
+          0.46901960784313723,
+          1
+        ],
+        "--pb-diagram-node-bg": [
+          0.11466666666666668,
+          0.1302352941176471,
+          0.17301960784313727,
+          1
+        ],
+        "--pb-diagram-node-border": [
+          0.4164705882352941,
+          0.4305882352941176,
+          0.46901960784313723,
+          1
+        ],
+        "--pb-diagram-shadow": [
+          0.09019607843137255,
+          0.10588235294117647,
+          0.14901960784313725,
+          0.75
+        ],
+        "--pb-accent": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-accent-contrast": [
+          0.08235294117647059,
+          0.20392156862745098,
+          0.1803921568627451,
+          1
+        ],
+        "--pb-accent-soft": [
+          0.11529411764705882,
+          0.1792156862745098,
+          0.20862745098039215,
+          1
+        ],
+        "--pb-link": [
+          0.7929411764705883,
+          0.9019607843137255,
+          0.908235294117647,
+          1
+        ],
+        "--pb-link-hover": [
+          0.8211764705882353,
+          0.9058823529411765,
+          0.9184313725490196,
+          1
+        ],
+        "--pb-link-broken": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-focus-ring": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-selection-bg": [
+          0.12031372549019609,
+          0.19388235294117645,
+          0.22054901960784315,
+          1
+        ],
+        "--pb-deeplink-pulse": [
+          0.12031372549019609,
+          0.19388235294117645,
+          0.22054901960784315,
+          1
+        ],
+        "--pb-code-bg": [
+          0.11466666666666668,
+          0.1302352941176471,
+          0.17301960784313727,
+          1
+        ],
+        "--pb-code-border": [
+          0.29411764705882354,
+          0.3088235294117647,
+          0.34901960784313724,
+          1
+        ],
+        "--pb-code-text": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-inline-code-bg": [
+          0.13913725490196083,
+          0.1545882352941177,
+          0.19701960784313732,
+          1
+        ],
+        "--pb-syntax-keyword": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-syntax-string": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-syntax-comment": [
+          0.7835294117647059,
+          0.7958823529411764,
+          0.8290196078431372,
+          1
+        ],
+        "--pb-syntax-literal": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-syntax-title": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-syntax-attr": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-blockquote-border": [
+          0.4164705882352941,
+          0.4305882352941176,
+          0.46901960784313723,
+          1
+        ],
+        "--pb-table-header-bg": [
+          0.13913725490196083,
+          0.1545882352941177,
+          0.19701960784313732,
+          1
+        ],
+        "--pb-status-active": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-status-draft": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-status-review": [
+          0.7929411764705883,
+          0.9019607843137255,
+          0.908235294117647,
+          1
+        ],
+        "--pb-status-archived": [
+          0.6203921568627452,
+          0.6335294117647059,
+          0.6690196078431372,
+          1
+        ],
+        "--pb-status-deprecated": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-danger": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-danger-soft": [
+          0.17176470588235293,
+          0.18705882352941178,
+          0.22901960784313727,
+          1
+        ],
+        "--pb-warning": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-warning-soft": [
+          0.17176470588235293,
+          0.18705882352941178,
+          0.22901960784313727,
+          1
+        ],
+        "--pb-diff-add-bg": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          0.12
+        ],
+        "--pb-diff-del-bg": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          0.12
+        ],
+        "--pb-card-foreground": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-diagram-node-text": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-primary-opaque": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-font-sans": "\"IBM Plex Sans\", ui-sans-serif, system-ui, sans-serif",
+        "--pb-font-mono": "\"JetBrains Mono\", ui-monospace, \"SF Mono\", Menlo, monospace",
+        "--pb-radius": "0.25rem",
+        "--pb-radius-xs": "calc(0.25rem * 0.8)",
+        "--pb-radius-sm": "calc(0.25rem * 1.2)",
+        "--pb-radius-md": "calc(0.25rem * 1.5)",
+        "--pb-radius-lg": "calc(0.25rem * 2)",
+        "--pb-radius-xl": "calc(0.25rem * 2.5)",
+        "--pb-radius-2xl": "calc(0.25rem * 3)",
+        "--pb-radius-3xl": "calc(0.25rem * 4)"
+      },
+      "ratios": {
+        "text on surface (4.5)": 14.2885,
+        "text on surface-raised (4.5)": 13.3262,
+        "text on surface-chrome (4.5)": 12.3282,
+        "text on surface-hover (4.5)": 11.6606,
+        "text on surface-field (4.5)": 13.3262,
+        "text-muted on surface (4.5)": 10.5902,
+        "text-muted on surface-raised (4.5)": 9.877,
+        "text-muted on surface-chrome (4.5)": 9.1372,
+        "text-muted on surface-hover (4.5)": 8.6425,
+        "text-muted on surface-field (4.5)": 9.877,
+        "text-faint on surface (4.5)": 6.6979,
+        "text-faint on surface-raised (4.5)": 6.2468,
+        "text-faint on surface-chrome (4.5)": 5.7789,
+        "text-faint on surface-hover (4.5)": 5.466,
+        "text-faint on surface-field (4.5)": 6.2468,
+        "text on surface-chrome + nav-active-bg (4.5)": 11.1741,
+        "text on surface-active (4.5)": 10.3589,
+        "text-muted on surface-raised + accent-soft (4.5)": 8.672,
+        "link on surface-raised + accent-soft (4.5)": 10.7263,
+        "link on surface + accent-soft (4.5)": 10.7263,
+        "link-hover on surface + accent-soft (4.5)": 10.9591,
+        "link-hover on surface-raised + accent-soft (4.5)": 10.9591,
+        "accent on surface + accent-soft (4.5)": 7.8906,
+        "accent on surface-raised + accent-soft (4.5)": 7.8906,
+        "text on surface + callout-note-bg (4.5)": 12.2307,
+        "text on surface-raised + callout-note-bg (4.5)": 12.2307,
+        "text on surface + callout-note-bg + callout-note-bg (4.5)": 12.2307,
+        "link on surface + callout-note-bg (4.5)": 11.2124,
+        "link on surface-raised + callout-note-bg (4.5)": 11.2124,
+        "link on surface + callout-note-bg + callout-note-bg (4.5)": 11.2124,
+        "link-hover on surface + callout-note-bg (4.5)": 11.4557,
+        "link-hover on surface-raised + callout-note-bg (4.5)": 11.4557,
+        "link-hover on surface + callout-note-bg + callout-note-bg (4.5)": 11.4557,
+        "link-broken on surface + callout-note-bg (4.5)": 12.2307,
+        "link-broken on surface-raised + callout-note-bg (4.5)": 12.2307,
+        "link-broken on surface + callout-note-bg + callout-note-bg (4.5)": 12.2307,
+        "focus-ring on surface + callout-note-bg (3)": 8.2482,
+        "accent on surface + callout-note-bg (3)": 8.2482,
+        "accent on surface (3)": 9.636,
+        "text on surface + callout-warning-bg (4.5)": 11.0018,
+        "text on surface-raised + callout-warning-bg (4.5)": 11.0018,
+        "text on surface + callout-warning-bg + callout-warning-bg (4.5)": 11.0018,
+        "link on surface + callout-warning-bg (4.5)": 10.0859,
+        "link on surface-raised + callout-warning-bg (4.5)": 10.0859,
+        "link on surface + callout-warning-bg + callout-warning-bg (4.5)": 10.0859,
+        "link-hover on surface + callout-warning-bg (4.5)": 10.3048,
+        "link-hover on surface-raised + callout-warning-bg (4.5)": 10.3048,
+        "link-hover on surface + callout-warning-bg + callout-warning-bg (4.5)": 10.3048,
+        "link-broken on surface + callout-warning-bg (4.5)": 11.0018,
+        "link-broken on surface-raised + callout-warning-bg (4.5)": 11.0018,
+        "link-broken on surface + callout-warning-bg + callout-warning-bg (4.5)": 11.0018,
+        "focus-ring on surface + callout-warning-bg (3)": 7.4195,
+        "warning on surface + callout-warning-bg (3)": 11.0018,
+        "warning on surface (3)": 14.2885,
+        "text on surface + callout-danger-bg (4.5)": 11.0018,
+        "text on surface-raised + callout-danger-bg (4.5)": 11.0018,
+        "text on surface + callout-danger-bg + callout-danger-bg (4.5)": 11.0018,
+        "link on surface + callout-danger-bg (4.5)": 10.0859,
+        "link on surface-raised + callout-danger-bg (4.5)": 10.0859,
+        "link on surface + callout-danger-bg + callout-danger-bg (4.5)": 10.0859,
+        "link-hover on surface + callout-danger-bg (4.5)": 10.3048,
+        "link-hover on surface-raised + callout-danger-bg (4.5)": 10.3048,
+        "link-hover on surface + callout-danger-bg + callout-danger-bg (4.5)": 10.3048,
+        "link-broken on surface + callout-danger-bg (4.5)": 11.0018,
+        "link-broken on surface-raised + callout-danger-bg (4.5)": 11.0018,
+        "link-broken on surface + callout-danger-bg + callout-danger-bg (4.5)": 11.0018,
+        "focus-ring on surface + callout-danger-bg (3)": 7.4195,
+        "danger on surface + callout-danger-bg (3)": 11.0018,
+        "danger on surface (3)": 14.2885,
+        "link on surface (4.5)": 13.0989,
+        "link on surface-raised (4.5)": 12.2167,
+        "link on surface-chrome (4.5)": 11.3018,
+        "accent on surface-hover (4.5)": 7.8638,
+        "warning on surface + warning-soft (4.5)": 11.0018,
+        "danger on surface + danger-soft (4.5)": 11.0018,
+        "link-broken on surface (4.5)": 14.2885,
+        "link-broken on surface-raised (4.5)": 13.3262,
+        "primary-text on surface + primary-bg (4.5)": 7.531,
+        "primary-text on surface-raised + primary-bg (4.5)": 7.531,
+        "primary-text on surface + danger-soft + primary-bg (4.5)": 7.531,
+        "text on table-header-bg (4.5)": 12.3282,
+        "link on table-header-bg (4.5)": 11.3018,
+        "code-text on code-bg (4.5)": 13.3262,
+        "code-text on surface (4.5)": 14.2885,
+        "code-text on surface-raised (4.5)": 13.3262,
+        "code-text on surface + diff-add-bg (4.5)": 10.3589,
+        "code-text on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-keyword on code-bg (4.5)": 13.3262,
+        "syntax-keyword on surface (4.5)": 14.2885,
+        "syntax-keyword on surface-raised (4.5)": 13.3262,
+        "syntax-keyword on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-keyword on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-string on code-bg (4.5)": 13.3262,
+        "syntax-string on surface (4.5)": 14.2885,
+        "syntax-string on surface-raised (4.5)": 13.3262,
+        "syntax-string on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-string on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-comment on code-bg (4.5)": 9.877,
+        "syntax-comment on surface (4.5)": 10.5902,
+        "syntax-comment on surface-raised (4.5)": 9.877,
+        "syntax-comment on surface + diff-add-bg (4.5)": 7.6777,
+        "syntax-comment on surface + diff-del-bg (4.5)": 7.6777,
+        "syntax-literal on code-bg (4.5)": 13.3262,
+        "syntax-literal on surface (4.5)": 14.2885,
+        "syntax-literal on surface-raised (4.5)": 13.3262,
+        "syntax-literal on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-literal on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-title on code-bg (4.5)": 13.3262,
+        "syntax-title on surface (4.5)": 14.2885,
+        "syntax-title on surface-raised (4.5)": 13.3262,
+        "syntax-title on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-title on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-attr on code-bg (4.5)": 13.3262,
+        "syntax-attr on surface (4.5)": 14.2885,
+        "syntax-attr on surface-raised (4.5)": 13.3262,
+        "syntax-attr on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-attr on surface + diff-del-bg (4.5)": 10.3589,
+        "text-muted on surface + diff-add-bg (4.5)": 7.6777,
+        "text-muted on surface + diff-del-bg (4.5)": 7.6777,
+        "selection-text on surface + selection-bg (4.5)": 11.1741,
+        "selection-text on surface-raised + selection-bg (4.5)": 11.1741,
+        "status-active on surface (4.5)": 14.2885,
+        "status-active on surface-raised (4.5)": 13.3262,
+        "status-draft on surface (4.5)": 14.2885,
+        "status-draft on surface-raised (4.5)": 13.3262,
+        "status-review on surface (4.5)": 13.0989,
+        "status-review on surface-raised (4.5)": 12.2167,
+        "status-archived on surface (4.5)": 6.6979,
+        "status-archived on surface-raised (4.5)": 6.2468,
+        "status-deprecated on surface (4.5)": 14.2885,
+        "status-deprecated on surface-raised (4.5)": 13.3262,
+        "status-active on surface (3)": 14.2885,
+        "status-active on surface-hover (3)": 11.6606,
+        "status-draft on surface (3)": 14.2885,
+        "status-draft on surface-hover (3)": 11.6606,
+        "status-review on surface (3)": 13.0989,
+        "status-review on surface-hover (3)": 10.6898,
+        "status-archived on surface (3)": 6.6979,
+        "status-archived on surface-hover (3)": 5.466,
+        "status-deprecated on surface (3)": 14.2885,
+        "status-deprecated on surface-hover (3)": 11.6606,
+        "focus-ring on surface (3)": 9.636,
+        "focus-ring on surface-raised (3)": 8.987,
+        "focus-ring on surface-chrome (3)": 8.3139,
+        "focus-ring on surface-hover (3)": 7.8638,
+        "focus-ring on surface-raised + accent-soft (3)": 7.8906,
+        "focus-ring on surface-chrome + nav-active-bg (3)": 7.5356,
+        "text-muted on surface (3)": 10.5902,
+        "text-muted on surface-chrome (3)": 9.1372,
+        "text-muted on surface-hover (3)": 8.6425,
+        "text-muted on surface-chrome + nav-active-bg (3)": 8.2818,
+        "text-faint on surface (3)": 6.6979,
+        "text-faint on surface-chrome (3)": 5.7789,
+        "text-faint on surface-hover (3)": 5.466,
+        "text-faint on surface-chrome + nav-active-bg (3)": 5.2379
+      },
+      "closures": {
+        "--pb-theme-background": [
+          "--pb-accent-soft",
+          "--pb-blockquote-border",
+          "--pb-border",
+          "--pb-border-strong",
+          "--pb-callout-danger-bg",
+          "--pb-callout-note-bg",
+          "--pb-callout-warning-bg",
+          "--pb-code-bg",
+          "--pb-code-border",
+          "--pb-danger-soft",
+          "--pb-deeplink-pulse",
+          "--pb-diagram-node-bg",
+          "--pb-diagram-node-border",
+          "--pb-diagram-shadow",
+          "--pb-discussion-highlight-bg",
+          "--pb-inline-code-bg",
+          "--pb-nav-active-bg",
+          "--pb-search-scrim",
+          "--pb-selection-bg",
+          "--pb-status-archived",
+          "--pb-surface",
+          "--pb-surface-active",
+          "--pb-surface-chrome",
+          "--pb-surface-field",
+          "--pb-surface-hover",
+          "--pb-surface-raised",
+          "--pb-syntax-comment",
+          "--pb-table-header-bg",
+          "--pb-text-faint",
+          "--pb-text-muted",
+          "--pb-theme-background",
+          "--pb-theme-border",
+          "--pb-theme-card",
+          "--pb-theme-muted",
+          "--pb-theme-muted-foreground",
+          "--pb-theme-selection",
+          "--pb-theme-syntax-comment",
+          "--pb-warning-soft"
+        ],
+        "--pb-theme-foreground": [
+          "--pb-blockquote-border",
+          "--pb-border",
+          "--pb-border-strong",
+          "--pb-callout-danger-bg",
+          "--pb-callout-warning-bg",
+          "--pb-card-foreground",
+          "--pb-code-bg",
+          "--pb-code-border",
+          "--pb-code-text",
+          "--pb-danger",
+          "--pb-danger-soft",
+          "--pb-diagram-node-bg",
+          "--pb-diagram-node-border",
+          "--pb-diagram-node-text",
+          "--pb-diff-add-bg",
+          "--pb-diff-del-bg",
+          "--pb-inline-code-bg",
+          "--pb-link",
+          "--pb-link-broken",
+          "--pb-link-hover",
+          "--pb-selection-text",
+          "--pb-status-active",
+          "--pb-status-archived",
+          "--pb-status-deprecated",
+          "--pb-status-draft",
+          "--pb-status-review",
+          "--pb-surface-active",
+          "--pb-surface-chrome",
+          "--pb-surface-field",
+          "--pb-surface-hover",
+          "--pb-surface-raised",
+          "--pb-syntax-attr",
+          "--pb-syntax-comment",
+          "--pb-syntax-keyword",
+          "--pb-syntax-literal",
+          "--pb-syntax-string",
+          "--pb-syntax-title",
+          "--pb-table-header-bg",
+          "--pb-text",
+          "--pb-text-faint",
+          "--pb-text-muted",
+          "--pb-theme-border",
+          "--pb-theme-card",
+          "--pb-theme-card-foreground",
+          "--pb-theme-destructive",
+          "--pb-theme-foreground",
+          "--pb-theme-muted",
+          "--pb-theme-muted-foreground",
+          "--pb-theme-selection-foreground",
+          "--pb-theme-success",
+          "--pb-theme-syntax-attribute",
+          "--pb-theme-syntax-comment",
+          "--pb-theme-syntax-keyword",
+          "--pb-theme-syntax-literal",
+          "--pb-theme-syntax-string",
+          "--pb-theme-syntax-title",
+          "--pb-theme-warning",
+          "--pb-warning",
+          "--pb-warning-soft"
+        ],
+        "--pb-theme-primary": [
+          "--pb-accent",
+          "--pb-accent-soft",
+          "--pb-callout-note-bg",
+          "--pb-deeplink-pulse",
+          "--pb-discussion-highlight-bg",
+          "--pb-discussion-highlight-edge",
+          "--pb-focus-ring",
+          "--pb-link",
+          "--pb-link-hover",
+          "--pb-nav-active-bg",
+          "--pb-primary-bg",
+          "--pb-primary-border",
+          "--pb-primary-opaque",
+          "--pb-selection-bg",
+          "--pb-status-review",
+          "--pb-theme-primary",
+          "--pb-theme-ring",
+          "--pb-theme-selection"
+        ],
+        "--pb-theme-primary-foreground": [
+          "--pb-accent-contrast",
+          "--pb-primary-text",
+          "--pb-theme-primary-foreground"
+        ],
+        "--pb-theme-card": [
+          "--pb-code-bg",
+          "--pb-diagram-node-bg",
+          "--pb-surface-field",
+          "--pb-surface-raised",
+          "--pb-theme-card"
+        ],
+        "--pb-theme-card-foreground": [
+          "--pb-card-foreground",
+          "--pb-code-text",
+          "--pb-diagram-node-text",
+          "--pb-theme-card-foreground"
+        ],
+        "--pb-theme-muted": [
+          "--pb-inline-code-bg",
+          "--pb-surface-chrome",
+          "--pb-table-header-bg",
+          "--pb-theme-muted"
+        ],
+        "--pb-theme-muted-foreground": [
+          "--pb-syntax-comment",
+          "--pb-text-muted",
+          "--pb-theme-muted-foreground",
+          "--pb-theme-syntax-comment"
+        ],
+        "--pb-theme-border": [
+          "--pb-blockquote-border",
+          "--pb-border",
+          "--pb-border-strong",
+          "--pb-code-border",
+          "--pb-diagram-node-border",
+          "--pb-theme-border"
+        ],
+        "--pb-theme-ring": [
+          "--pb-focus-ring",
+          "--pb-theme-ring"
+        ],
+        "--pb-theme-selection": [
+          "--pb-deeplink-pulse",
+          "--pb-discussion-highlight-bg",
+          "--pb-nav-active-bg",
+          "--pb-selection-bg",
+          "--pb-theme-selection"
+        ],
+        "--pb-theme-selection-foreground": [
+          "--pb-selection-text",
+          "--pb-theme-selection-foreground"
+        ],
+        "--pb-theme-destructive": [
+          "--pb-callout-danger-bg",
+          "--pb-danger",
+          "--pb-danger-soft",
+          "--pb-diff-del-bg",
+          "--pb-status-deprecated",
+          "--pb-theme-destructive"
+        ],
+        "--pb-theme-warning": [
+          "--pb-callout-warning-bg",
+          "--pb-link-broken",
+          "--pb-status-draft",
+          "--pb-theme-warning",
+          "--pb-warning",
+          "--pb-warning-soft"
+        ],
+        "--pb-theme-success": [
+          "--pb-diff-add-bg",
+          "--pb-status-active",
+          "--pb-theme-success"
+        ],
+        "--pb-theme-syntax-keyword": [
+          "--pb-syntax-keyword",
+          "--pb-theme-syntax-keyword"
+        ],
+        "--pb-theme-syntax-string": [
+          "--pb-syntax-string",
+          "--pb-theme-syntax-string"
+        ],
+        "--pb-theme-syntax-comment": [
+          "--pb-syntax-comment",
+          "--pb-theme-syntax-comment"
+        ],
+        "--pb-theme-syntax-literal": [
+          "--pb-syntax-literal",
+          "--pb-theme-syntax-literal"
+        ],
+        "--pb-theme-syntax-title": [
+          "--pb-syntax-title",
+          "--pb-theme-syntax-title"
+        ],
+        "--pb-theme-syntax-attribute": [
+          "--pb-syntax-attr",
+          "--pb-theme-syntax-attribute"
+        ],
+        "--pb-theme-font-sans": [
+          "--pb-font-sans",
+          "--pb-theme-font-sans"
+        ],
+        "--pb-theme-font-mono": [
+          "--pb-font-mono",
+          "--pb-theme-font-mono"
+        ],
+        "--pb-theme-radius": [
+          "--pb-radius",
+          "--pb-radius-2xl",
+          "--pb-radius-3xl",
+          "--pb-radius-lg",
+          "--pb-radius-md",
+          "--pb-radius-sm",
+          "--pb-radius-xl",
+          "--pb-radius-xs",
+          "--pb-theme-radius"
+        ]
+      }
+    },
+    "translucent-dark": {
+      "roles": {
+        "--pb-surface": [
+          0.09019607843137255,
+          0.10588235294117647,
+          0.14901960784313725,
+          1
+        ],
+        "--pb-surface-raised": [
+          0.11466666666666668,
+          0.1302352941176471,
+          0.17301960784313727,
+          1
+        ],
+        "--pb-search-scrim": [
+          0.09019607843137256,
+          0.10588235294117647,
+          0.14901960784313725,
+          0.72
+        ],
+        "--pb-surface-hover": [
+          0.15545098039215682,
+          0.17082352941176465,
+          0.21301960784313723,
+          1
+        ],
+        "--pb-surface-active": [
+          0.188078431372549,
+          0.2032941176470588,
+          0.24501960784313725,
+          1
+        ],
+        "--pb-surface-chrome": [
+          0.13913725490196083,
+          0.1545882352941177,
+          0.19701960784313732,
+          1
+        ],
+        "--pb-surface-field": [
+          0.11466666666666668,
+          0.1302352941176471,
+          0.17301960784313727,
+          1
+        ],
+        "--pb-nav-active-bg": [
+          0.09522686580200009,
+          0.1205816847897288,
+          0.16096772784837765,
+          0.898
+        ],
+        "--pb-primary-bg": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          0.15
+        ],
+        "--pb-primary-border": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          0.15
+        ],
+        "--pb-primary-text": [
+          0.7215686274509804,
+          0.9411764705882353,
+          0.8901960784313725,
+          1
+        ],
+        "--pb-discussion-highlight-bg": [
+          0.09522686580200009,
+          0.1205816847897288,
+          0.16096772784837765,
+          0.898
+        ],
+        "--pb-discussion-highlight-edge": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-selection-text": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-callout-note-bg": [
+          0.11027450980392157,
+          0.16454901960784313,
+          0.19670588235294117,
+          1
+        ],
+        "--pb-callout-warning-bg": [
+          0.17176470588235293,
+          0.18705882352941178,
+          0.22901960784313727,
+          1
+        ],
+        "--pb-callout-danger-bg": [
+          0.17176470588235293,
+          0.18705882352941178,
+          0.22901960784313727,
+          1
+        ],
+        "--pb-text": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-text-muted": [
+          0.7835294117647059,
+          0.7958823529411764,
+          0.8290196078431372,
+          1
+        ],
+        "--pb-text-faint": [
+          0.6203921568627452,
+          0.6335294117647059,
+          0.6690196078431372,
+          1
+        ],
+        "--pb-border": [
+          0.29411764705882354,
+          0.3088235294117647,
+          0.34901960784313724,
+          1
+        ],
+        "--pb-border-strong": [
+          0.4164705882352941,
+          0.4305882352941176,
+          0.46901960784313723,
+          1
+        ],
+        "--pb-diagram-node-bg": [
+          0.11466666666666668,
+          0.1302352941176471,
+          0.17301960784313727,
+          1
+        ],
+        "--pb-diagram-node-border": [
+          0.4164705882352941,
+          0.4305882352941176,
+          0.46901960784313723,
+          1
+        ],
+        "--pb-diagram-shadow": [
+          0.09019607843137255,
+          0.10588235294117647,
+          0.14901960784313725,
+          0.75
+        ],
+        "--pb-accent": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-accent-contrast": [
+          0.7215686274509804,
+          0.9411764705882353,
+          0.8901960784313725,
+          1
+        ],
+        "--pb-accent-soft": [
+          0.11529411764705882,
+          0.1792156862745098,
+          0.20862745098039215,
+          1
+        ],
+        "--pb-link": [
+          0.8854712969525158,
+          0.9148121899362154,
+          0.9416489487361209,
+          0.8300000000000001
+        ],
+        "--pb-link-hover": [
+          0.8913197370638798,
+          0.9156244732850158,
+          0.9437608854430024,
+          0.8725
+        ],
+        "--pb-link-broken": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-focus-ring": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-selection-bg": [
+          0.09522686580200009,
+          0.1205816847897288,
+          0.16096772784837765,
+          0.898
+        ],
+        "--pb-deeplink-pulse": [
+          0.09522686580200009,
+          0.1205816847897288,
+          0.16096772784837765,
+          0.898
+        ],
+        "--pb-code-bg": [
+          0.11466666666666668,
+          0.1302352941176471,
+          0.17301960784313727,
+          1
+        ],
+        "--pb-code-border": [
+          0.29411764705882354,
+          0.3088235294117647,
+          0.34901960784313724,
+          1
+        ],
+        "--pb-code-text": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-inline-code-bg": [
+          0.13913725490196083,
+          0.1545882352941177,
+          0.19701960784313732,
+          1
+        ],
+        "--pb-syntax-keyword": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-syntax-string": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-syntax-comment": [
+          0.7835294117647059,
+          0.7958823529411764,
+          0.8290196078431372,
+          1
+        ],
+        "--pb-syntax-literal": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-syntax-title": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-syntax-attr": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-blockquote-border": [
+          0.4164705882352941,
+          0.4305882352941176,
+          0.46901960784313723,
+          1
+        ],
+        "--pb-table-header-bg": [
+          0.13913725490196083,
+          0.1545882352941177,
+          0.19701960784313732,
+          1
+        ],
+        "--pb-status-active": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-status-draft": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-status-review": [
+          0.8854712969525158,
+          0.9148121899362154,
+          0.9416489487361209,
+          0.8300000000000001
+        ],
+        "--pb-status-archived": [
+          0.6203921568627452,
+          0.6335294117647059,
+          0.6690196078431372,
+          1
+        ],
+        "--pb-status-deprecated": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-danger": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-danger-soft": [
+          0.17176470588235293,
+          0.18705882352941178,
+          0.22901960784313727,
+          1
+        ],
+        "--pb-warning": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-warning-soft": [
+          0.17176470588235293,
+          0.18705882352941178,
+          0.22901960784313727,
+          1
+        ],
+        "--pb-diff-add-bg": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          0.12
+        ],
+        "--pb-diff-del-bg": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          0.12
+        ],
+        "--pb-card-foreground": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-diagram-node-text": [
+          0.9058823529411765,
+          0.9176470588235294,
+          0.9490196078431372,
+          1
+        ],
+        "--pb-primary-opaque": [
+          0.3411764705882353,
+          0.8392156862745098,
+          0.7450980392156863,
+          1
+        ],
+        "--pb-font-sans": "\"IBM Plex Sans\", ui-sans-serif, system-ui, sans-serif",
+        "--pb-font-mono": "\"JetBrains Mono\", ui-monospace, \"SF Mono\", Menlo, monospace",
+        "--pb-radius": "0.25rem",
+        "--pb-radius-xs": "calc(0.25rem * 0.8)",
+        "--pb-radius-sm": "calc(0.25rem * 1.2)",
+        "--pb-radius-md": "calc(0.25rem * 1.5)",
+        "--pb-radius-lg": "calc(0.25rem * 2)",
+        "--pb-radius-xl": "calc(0.25rem * 2.5)",
+        "--pb-radius-2xl": "calc(0.25rem * 3)",
+        "--pb-radius-3xl": "calc(0.25rem * 4)"
+      },
+      "ratios": {
+        "text on surface (4.5)": 14.2885,
+        "text on surface-raised (4.5)": 13.3262,
+        "text on surface-chrome (4.5)": 12.3282,
+        "text on surface-hover (4.5)": 11.6606,
+        "text on surface-field (4.5)": 13.3262,
+        "text-muted on surface (4.5)": 10.5902,
+        "text-muted on surface-raised (4.5)": 9.877,
+        "text-muted on surface-chrome (4.5)": 9.1372,
+        "text-muted on surface-hover (4.5)": 8.6425,
+        "text-muted on surface-field (4.5)": 9.877,
+        "text-faint on surface (4.5)": 6.6979,
+        "text-faint on surface-raised (4.5)": 6.2468,
+        "text-faint on surface-chrome (4.5)": 5.7789,
+        "text-faint on surface-hover (4.5)": 5.466,
+        "text-faint on surface-field (4.5)": 6.2468,
+        "text on surface-chrome + nav-active-bg (4.5)": 13.648,
+        "text on surface-active (4.5)": 10.3589,
+        "text-muted on surface-raised + accent-soft (4.5)": 8.672,
+        "link on surface-raised + accent-soft (4.5)": 8.4202,
+        "link on surface + accent-soft (4.5)": 8.4202,
+        "link-hover on surface + accent-soft (4.5)": 9.1769,
+        "link-hover on surface-raised + accent-soft (4.5)": 9.1769,
+        "accent on surface + accent-soft (4.5)": 7.8906,
+        "accent on surface-raised + accent-soft (4.5)": 7.8906,
+        "text on surface + callout-note-bg (4.5)": 12.2307,
+        "text on surface-raised + callout-note-bg (4.5)": 12.2307,
+        "text on surface + callout-note-bg + callout-note-bg (4.5)": 12.2307,
+        "link on surface + callout-note-bg (4.5)": 8.7526,
+        "link on surface-raised + callout-note-bg (4.5)": 8.7526,
+        "link on surface + callout-note-bg + callout-note-bg (4.5)": 8.7526,
+        "link-hover on surface + callout-note-bg (4.5)": 9.5539,
+        "link-hover on surface-raised + callout-note-bg (4.5)": 9.5539,
+        "link-hover on surface + callout-note-bg + callout-note-bg (4.5)": 9.5539,
+        "link-broken on surface + callout-note-bg (4.5)": 12.2307,
+        "link-broken on surface-raised + callout-note-bg (4.5)": 12.2307,
+        "link-broken on surface + callout-note-bg + callout-note-bg (4.5)": 12.2307,
+        "focus-ring on surface + callout-note-bg (3)": 8.2482,
+        "accent on surface + callout-note-bg (3)": 8.2482,
+        "accent on surface (3)": 9.636,
+        "text on surface + callout-warning-bg (4.5)": 11.0018,
+        "text on surface-raised + callout-warning-bg (4.5)": 11.0018,
+        "text on surface + callout-warning-bg + callout-warning-bg (4.5)": 11.0018,
+        "link on surface + callout-warning-bg (4.5)": 7.9837,
+        "link on surface-raised + callout-warning-bg (4.5)": 7.9837,
+        "link on surface + callout-warning-bg + callout-warning-bg (4.5)": 7.9837,
+        "link-hover on surface + callout-warning-bg (4.5)": 8.6817,
+        "link-hover on surface-raised + callout-warning-bg (4.5)": 8.6817,
+        "link-hover on surface + callout-warning-bg + callout-warning-bg (4.5)": 8.6817,
+        "link-broken on surface + callout-warning-bg (4.5)": 11.0018,
+        "link-broken on surface-raised + callout-warning-bg (4.5)": 11.0018,
+        "link-broken on surface + callout-warning-bg + callout-warning-bg (4.5)": 11.0018,
+        "focus-ring on surface + callout-warning-bg (3)": 7.4195,
+        "warning on surface + callout-warning-bg (3)": 11.0018,
+        "warning on surface (3)": 14.2885,
+        "text on surface + callout-danger-bg (4.5)": 11.0018,
+        "text on surface-raised + callout-danger-bg (4.5)": 11.0018,
+        "text on surface + callout-danger-bg + callout-danger-bg (4.5)": 11.0018,
+        "link on surface + callout-danger-bg (4.5)": 7.9837,
+        "link on surface-raised + callout-danger-bg (4.5)": 7.9837,
+        "link on surface + callout-danger-bg + callout-danger-bg (4.5)": 7.9837,
+        "link-hover on surface + callout-danger-bg (4.5)": 8.6817,
+        "link-hover on surface-raised + callout-danger-bg (4.5)": 8.6817,
+        "link-hover on surface + callout-danger-bg + callout-danger-bg (4.5)": 8.6817,
+        "link-broken on surface + callout-danger-bg (4.5)": 11.0018,
+        "link-broken on surface-raised + callout-danger-bg (4.5)": 11.0018,
+        "link-broken on surface + callout-danger-bg + callout-danger-bg (4.5)": 11.0018,
+        "focus-ring on surface + callout-danger-bg (3)": 7.4195,
+        "danger on surface + callout-danger-bg (3)": 11.0018,
+        "danger on surface (3)": 14.2885,
+        "link on surface (4.5)": 9.9979,
+        "link on surface-raised (4.5)": 9.4275,
+        "link on surface-chrome (4.5)": 8.8173,
+        "accent on surface-hover (4.5)": 7.8638,
+        "warning on surface + warning-soft (4.5)": 11.0018,
+        "danger on surface + danger-soft (4.5)": 11.0018,
+        "link-broken on surface (4.5)": 14.2885,
+        "link-broken on surface-raised (4.5)": 13.3262,
+        "primary-text on surface + primary-bg (4.5)": 9.901,
+        "primary-text on surface-raised + primary-bg (4.5)": 9.1574,
+        "primary-text on surface + danger-soft + primary-bg (4.5)": 7.581,
+        "text on table-header-bg (4.5)": 12.3282,
+        "link on table-header-bg (4.5)": 8.8173,
+        "code-text on code-bg (4.5)": 13.3262,
+        "code-text on surface (4.5)": 14.2885,
+        "code-text on surface-raised (4.5)": 13.3262,
+        "code-text on surface + diff-add-bg (4.5)": 10.3589,
+        "code-text on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-keyword on code-bg (4.5)": 13.3262,
+        "syntax-keyword on surface (4.5)": 14.2885,
+        "syntax-keyword on surface-raised (4.5)": 13.3262,
+        "syntax-keyword on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-keyword on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-string on code-bg (4.5)": 13.3262,
+        "syntax-string on surface (4.5)": 14.2885,
+        "syntax-string on surface-raised (4.5)": 13.3262,
+        "syntax-string on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-string on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-comment on code-bg (4.5)": 9.877,
+        "syntax-comment on surface (4.5)": 10.5902,
+        "syntax-comment on surface-raised (4.5)": 9.877,
+        "syntax-comment on surface + diff-add-bg (4.5)": 7.6777,
+        "syntax-comment on surface + diff-del-bg (4.5)": 7.6777,
+        "syntax-literal on code-bg (4.5)": 13.3262,
+        "syntax-literal on surface (4.5)": 14.2885,
+        "syntax-literal on surface-raised (4.5)": 13.3262,
+        "syntax-literal on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-literal on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-title on code-bg (4.5)": 13.3262,
+        "syntax-title on surface (4.5)": 14.2885,
+        "syntax-title on surface-raised (4.5)": 13.3262,
+        "syntax-title on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-title on surface + diff-del-bg (4.5)": 10.3589,
+        "syntax-attr on code-bg (4.5)": 13.3262,
+        "syntax-attr on surface (4.5)": 14.2885,
+        "syntax-attr on surface-raised (4.5)": 13.3262,
+        "syntax-attr on surface + diff-add-bg (4.5)": 10.3589,
+        "syntax-attr on surface + diff-del-bg (4.5)": 10.3589,
+        "text-muted on surface + diff-add-bg (4.5)": 7.6777,
+        "text-muted on surface + diff-del-bg (4.5)": 7.6777,
+        "selection-text on surface + selection-bg (4.5)": 13.8452,
+        "selection-text on surface-raised + selection-bg (4.5)": 13.7469,
+        "status-active on surface (4.5)": 14.2885,
+        "status-active on surface-raised (4.5)": 13.3262,
+        "status-draft on surface (4.5)": 14.2885,
+        "status-draft on surface-raised (4.5)": 13.3262,
+        "status-review on surface (4.5)": 9.9979,
+        "status-review on surface-raised (4.5)": 9.4275,
+        "status-archived on surface (4.5)": 6.6979,
+        "status-archived on surface-raised (4.5)": 6.2468,
+        "status-deprecated on surface (4.5)": 14.2885,
+        "status-deprecated on surface-raised (4.5)": 13.3262,
+        "status-active on surface (3)": 14.2885,
+        "status-active on surface-hover (3)": 11.6606,
+        "status-draft on surface (3)": 14.2885,
+        "status-draft on surface-hover (3)": 11.6606,
+        "status-review on surface (3)": 9.9979,
+        "status-review on surface-hover (3)": 8.4007,
+        "status-archived on surface (3)": 6.6979,
+        "status-archived on surface-hover (3)": 5.466,
+        "status-deprecated on surface (3)": 14.2885,
+        "status-deprecated on surface-hover (3)": 11.6606,
+        "focus-ring on surface (3)": 9.636,
+        "focus-ring on surface-raised (3)": 8.987,
+        "focus-ring on surface-chrome (3)": 8.3139,
+        "focus-ring on surface-hover (3)": 7.8638,
+        "focus-ring on surface-raised + accent-soft (3)": 7.8906,
+        "focus-ring on surface-chrome + nav-active-bg (3)": 9.204,
+        "text-muted on surface (3)": 10.5902,
+        "text-muted on surface-chrome (3)": 9.1372,
+        "text-muted on surface-hover (3)": 8.6425,
+        "text-muted on surface-chrome + nav-active-bg (3)": 10.1155,
+        "text-faint on surface (3)": 6.6979,
+        "text-faint on surface-chrome (3)": 5.7789,
+        "text-faint on surface-hover (3)": 5.466,
+        "text-faint on surface-chrome + nav-active-bg (3)": 6.3976
+      },
+      "closures": {
+        "--pb-theme-background": [
+          "--pb-accent-soft",
+          "--pb-blockquote-border",
+          "--pb-border",
+          "--pb-border-strong",
+          "--pb-callout-danger-bg",
+          "--pb-callout-note-bg",
+          "--pb-callout-warning-bg",
+          "--pb-code-bg",
+          "--pb-code-border",
+          "--pb-danger-soft",
+          "--pb-deeplink-pulse",
+          "--pb-diagram-node-bg",
+          "--pb-diagram-node-border",
+          "--pb-diagram-shadow",
+          "--pb-discussion-highlight-bg",
+          "--pb-inline-code-bg",
+          "--pb-nav-active-bg",
+          "--pb-search-scrim",
+          "--pb-selection-bg",
+          "--pb-status-archived",
+          "--pb-surface",
+          "--pb-surface-active",
+          "--pb-surface-chrome",
+          "--pb-surface-field",
+          "--pb-surface-hover",
+          "--pb-surface-raised",
+          "--pb-syntax-comment",
+          "--pb-table-header-bg",
+          "--pb-text-faint",
+          "--pb-text-muted",
+          "--pb-theme-background",
+          "--pb-theme-border",
+          "--pb-theme-card",
+          "--pb-theme-muted",
+          "--pb-theme-muted-foreground",
+          "--pb-theme-selection",
+          "--pb-theme-syntax-comment",
+          "--pb-warning-soft"
+        ],
+        "--pb-theme-foreground": [
+          "--pb-blockquote-border",
+          "--pb-border",
+          "--pb-border-strong",
+          "--pb-callout-danger-bg",
+          "--pb-callout-warning-bg",
+          "--pb-card-foreground",
+          "--pb-code-bg",
+          "--pb-code-border",
+          "--pb-code-text",
+          "--pb-danger",
+          "--pb-danger-soft",
+          "--pb-diagram-node-bg",
+          "--pb-diagram-node-border",
+          "--pb-diagram-node-text",
+          "--pb-diff-add-bg",
+          "--pb-diff-del-bg",
+          "--pb-inline-code-bg",
+          "--pb-link",
+          "--pb-link-broken",
+          "--pb-link-hover",
+          "--pb-selection-text",
+          "--pb-status-active",
+          "--pb-status-archived",
+          "--pb-status-deprecated",
+          "--pb-status-draft",
+          "--pb-status-review",
+          "--pb-surface-active",
+          "--pb-surface-chrome",
+          "--pb-surface-field",
+          "--pb-surface-hover",
+          "--pb-surface-raised",
+          "--pb-syntax-attr",
+          "--pb-syntax-comment",
+          "--pb-syntax-keyword",
+          "--pb-syntax-literal",
+          "--pb-syntax-string",
+          "--pb-syntax-title",
+          "--pb-table-header-bg",
+          "--pb-text",
+          "--pb-text-faint",
+          "--pb-text-muted",
+          "--pb-theme-border",
+          "--pb-theme-card",
+          "--pb-theme-card-foreground",
+          "--pb-theme-destructive",
+          "--pb-theme-foreground",
+          "--pb-theme-muted",
+          "--pb-theme-muted-foreground",
+          "--pb-theme-selection-foreground",
+          "--pb-theme-success",
+          "--pb-theme-syntax-attribute",
+          "--pb-theme-syntax-comment",
+          "--pb-theme-syntax-keyword",
+          "--pb-theme-syntax-literal",
+          "--pb-theme-syntax-string",
+          "--pb-theme-syntax-title",
+          "--pb-theme-warning",
+          "--pb-warning",
+          "--pb-warning-soft"
+        ],
+        "--pb-theme-primary": [
+          "--pb-accent",
+          "--pb-accent-soft",
+          "--pb-callout-note-bg",
+          "--pb-deeplink-pulse",
+          "--pb-discussion-highlight-bg",
+          "--pb-discussion-highlight-edge",
+          "--pb-focus-ring",
+          "--pb-link",
+          "--pb-link-hover",
+          "--pb-nav-active-bg",
+          "--pb-primary-bg",
+          "--pb-primary-border",
+          "--pb-primary-opaque",
+          "--pb-selection-bg",
+          "--pb-status-review",
+          "--pb-theme-primary",
+          "--pb-theme-ring",
+          "--pb-theme-selection"
+        ],
+        "--pb-theme-primary-foreground": [
+          "--pb-accent-contrast",
+          "--pb-primary-text",
+          "--pb-theme-primary-foreground"
+        ],
+        "--pb-theme-card": [
+          "--pb-code-bg",
+          "--pb-diagram-node-bg",
+          "--pb-surface-field",
+          "--pb-surface-raised",
+          "--pb-theme-card"
+        ],
+        "--pb-theme-card-foreground": [
+          "--pb-card-foreground",
+          "--pb-code-text",
+          "--pb-diagram-node-text",
+          "--pb-theme-card-foreground"
+        ],
+        "--pb-theme-muted": [
+          "--pb-inline-code-bg",
+          "--pb-surface-chrome",
+          "--pb-table-header-bg",
+          "--pb-theme-muted"
+        ],
+        "--pb-theme-muted-foreground": [
+          "--pb-syntax-comment",
+          "--pb-text-muted",
+          "--pb-theme-muted-foreground",
+          "--pb-theme-syntax-comment"
+        ],
+        "--pb-theme-border": [
+          "--pb-blockquote-border",
+          "--pb-border",
+          "--pb-border-strong",
+          "--pb-code-border",
+          "--pb-diagram-node-border",
+          "--pb-theme-border"
+        ],
+        "--pb-theme-ring": [
+          "--pb-focus-ring",
+          "--pb-theme-ring"
+        ],
+        "--pb-theme-selection": [
+          "--pb-deeplink-pulse",
+          "--pb-discussion-highlight-bg",
+          "--pb-nav-active-bg",
+          "--pb-selection-bg",
+          "--pb-theme-selection"
+        ],
+        "--pb-theme-selection-foreground": [
+          "--pb-selection-text",
+          "--pb-theme-selection-foreground"
+        ],
+        "--pb-theme-destructive": [
+          "--pb-callout-danger-bg",
+          "--pb-danger",
+          "--pb-danger-soft",
+          "--pb-diff-del-bg",
+          "--pb-status-deprecated",
+          "--pb-theme-destructive"
+        ],
+        "--pb-theme-warning": [
+          "--pb-callout-warning-bg",
+          "--pb-link-broken",
+          "--pb-status-draft",
+          "--pb-theme-warning",
+          "--pb-warning",
+          "--pb-warning-soft"
+        ],
+        "--pb-theme-success": [
+          "--pb-diff-add-bg",
+          "--pb-status-active",
+          "--pb-theme-success"
+        ],
+        "--pb-theme-syntax-keyword": [
+          "--pb-syntax-keyword",
+          "--pb-theme-syntax-keyword"
+        ],
+        "--pb-theme-syntax-string": [
+          "--pb-syntax-string",
+          "--pb-theme-syntax-string"
+        ],
+        "--pb-theme-syntax-comment": [
+          "--pb-syntax-comment",
+          "--pb-theme-syntax-comment"
+        ],
+        "--pb-theme-syntax-literal": [
+          "--pb-syntax-literal",
+          "--pb-theme-syntax-literal"
+        ],
+        "--pb-theme-syntax-title": [
+          "--pb-syntax-title",
+          "--pb-theme-syntax-title"
+        ],
+        "--pb-theme-syntax-attribute": [
+          "--pb-syntax-attr",
+          "--pb-theme-syntax-attribute"
+        ],
+        "--pb-theme-font-sans": [
+          "--pb-font-sans",
+          "--pb-theme-font-sans"
+        ],
+        "--pb-theme-font-mono": [
+          "--pb-font-mono",
+          "--pb-theme-font-mono"
+        ],
+        "--pb-theme-radius": [
+          "--pb-radius",
+          "--pb-radius-2xl",
+          "--pb-radius-3xl",
+          "--pb-radius-lg",
+          "--pb-radius-md",
+          "--pb-radius-sm",
+          "--pb-radius-xl",
+          "--pb-radius-xs",
+          "--pb-theme-radius"
+        ]
+      }
+    }
+  },
+  "floors": {
+    "--pb-theme-background": {
+      "generic": [
+        "--pb-surface"
+      ],
+      "builtin-light": [
+        "--pb-surface"
+      ],
+      "builtin-dark": [
+        "--pb-surface"
+      ]
+    },
+    "--pb-theme-foreground": {
+      "generic": [
+        "--pb-text"
+      ],
+      "builtin-light": [
+        "--pb-text"
+      ],
+      "builtin-dark": [
+        "--pb-text"
+      ]
+    },
+    "--pb-theme-primary": {
+      "generic": [
+        "--pb-primary-bg",
+        "--pb-primary-border",
+        "--pb-primary-opaque",
+        "--pb-accent",
+        "--pb-discussion-highlight-edge"
+      ],
+      "builtin-light": [
+        "--pb-primary-bg",
+        "--pb-primary-border",
+        "--pb-accent",
+        "--pb-discussion-highlight-edge",
+        "--pb-primary-opaque"
+      ],
+      "builtin-dark": [
+        "--pb-primary-bg",
+        "--pb-accent",
+        "--pb-discussion-highlight-edge",
+        "--pb-primary-opaque"
+      ]
+    },
+    "--pb-theme-primary-foreground": {
+      "generic": [
+        "--pb-primary-text",
+        "--pb-accent-contrast"
+      ],
+      "builtin-light": [
+        "--pb-primary-text",
+        "--pb-accent-contrast"
+      ],
+      "builtin-dark": [
+        "--pb-primary-text"
+      ]
+    },
+    "--pb-theme-card": {
+      "generic": [
+        "--pb-surface-raised",
+        "--pb-surface-field",
+        "--pb-code-bg",
+        "--pb-diagram-node-bg"
+      ],
+      "builtin-light": [
+        "--pb-surface-raised",
+        "--pb-surface-field",
+        "--pb-code-bg",
+        "--pb-diagram-node-bg"
+      ],
+      "builtin-dark": [
+        "--pb-surface-raised"
+      ]
+    },
+    "--pb-theme-card-foreground": {
+      "generic": [
+        "--pb-card-foreground",
+        "--pb-diagram-node-text",
+        "--pb-code-text"
+      ],
+      "builtin-light": [
+        "--pb-card-foreground",
+        "--pb-diagram-node-text"
+      ],
+      "builtin-dark": [
+        "--pb-card-foreground",
+        "--pb-diagram-node-text"
+      ]
+    },
+    "--pb-theme-muted": {
+      "generic": [
+        "--pb-surface-chrome",
+        "--pb-inline-code-bg",
+        "--pb-table-header-bg"
+      ],
+      "builtin-light": [
+        "--pb-surface-chrome",
+        "--pb-table-header-bg"
+      ],
+      "builtin-dark": [
+        "--pb-surface-chrome"
+      ]
+    },
+    "--pb-theme-muted-foreground": {
+      "generic": [
+        "--pb-text-muted"
+      ],
+      "builtin-light": [
+        "--pb-text-muted"
+      ],
+      "builtin-dark": [
+        "--pb-text-muted"
+      ]
+    },
+    "--pb-theme-border": {
+      "generic": [
+        "--pb-border",
+        "--pb-code-border"
+      ],
+      "builtin-light": [
+        "--pb-border",
+        "--pb-code-border"
+      ],
+      "builtin-dark": [
+        "--pb-border",
+        "--pb-code-border"
+      ]
+    },
+    "--pb-theme-ring": {
+      "generic": [
+        "--pb-focus-ring"
+      ],
+      "builtin-light": [
+        "--pb-focus-ring"
+      ],
+      "builtin-dark": [
+        "--pb-focus-ring"
+      ]
+    },
+    "--pb-theme-selection": {
+      "generic": [
+        "--pb-selection-bg",
+        "--pb-deeplink-pulse",
+        "--pb-nav-active-bg",
+        "--pb-discussion-highlight-bg"
+      ],
+      "builtin-light": [
+        "--pb-selection-bg",
+        "--pb-deeplink-pulse"
+      ],
+      "builtin-dark": [
+        "--pb-selection-bg",
+        "--pb-deeplink-pulse"
+      ]
+    },
+    "--pb-theme-selection-foreground": {
+      "generic": [
+        "--pb-selection-text"
+      ],
+      "builtin-light": [
+        "--pb-selection-text"
+      ],
+      "builtin-dark": [
+        "--pb-selection-text"
+      ]
+    },
+    "--pb-theme-destructive": {
+      "generic": [
+        "--pb-danger",
+        "--pb-status-deprecated"
+      ],
+      "builtin-light": [
+        "--pb-danger",
+        "--pb-status-deprecated"
+      ],
+      "builtin-dark": [
+        "--pb-danger"
+      ]
+    },
+    "--pb-theme-warning": {
+      "generic": [
+        "--pb-warning",
+        "--pb-link-broken",
+        "--pb-status-draft"
+      ],
+      "builtin-light": [
+        "--pb-warning",
+        "--pb-link-broken",
+        "--pb-status-draft"
+      ],
+      "builtin-dark": [
+        "--pb-warning",
+        "--pb-link-broken"
+      ]
+    },
+    "--pb-theme-success": {
+      "generic": [
+        "--pb-status-active"
+      ],
+      "builtin-light": [
+        "--pb-status-active"
+      ],
+      "builtin-dark": [
+        "--pb-status-active"
+      ]
+    },
+    "--pb-theme-syntax-keyword": {
+      "generic": [
+        "--pb-syntax-keyword"
+      ],
+      "builtin-light": [
+        "--pb-syntax-keyword"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-keyword"
+      ]
+    },
+    "--pb-theme-syntax-string": {
+      "generic": [
+        "--pb-syntax-string"
+      ],
+      "builtin-light": [
+        "--pb-syntax-string"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-string"
+      ]
+    },
+    "--pb-theme-syntax-comment": {
+      "generic": [
+        "--pb-syntax-comment"
+      ],
+      "builtin-light": [
+        "--pb-syntax-comment"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-comment"
+      ]
+    },
+    "--pb-theme-syntax-literal": {
+      "generic": [
+        "--pb-syntax-literal"
+      ],
+      "builtin-light": [
+        "--pb-syntax-literal"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-literal"
+      ]
+    },
+    "--pb-theme-syntax-title": {
+      "generic": [
+        "--pb-syntax-title"
+      ],
+      "builtin-light": [
+        "--pb-syntax-title"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-title"
+      ]
+    },
+    "--pb-theme-syntax-attribute": {
+      "generic": [
+        "--pb-syntax-attr"
+      ],
+      "builtin-light": [
+        "--pb-syntax-attr"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-attr"
+      ]
+    },
+    "--pb-theme-font-sans": {
+      "generic": [
+        "--pb-font-sans"
+      ],
+      "builtin-light": [
+        "--pb-font-sans"
+      ],
+      "builtin-dark": [
+        "--pb-font-sans"
+      ]
+    },
+    "--pb-theme-font-mono": {
+      "generic": [
+        "--pb-font-mono"
+      ],
+      "builtin-light": [
+        "--pb-font-mono"
+      ],
+      "builtin-dark": [
+        "--pb-font-mono"
+      ]
+    },
+    "--pb-theme-radius": {
+      "generic": [
+        "--pb-radius"
+      ],
+      "builtin-light": [
+        "--pb-radius"
+      ],
+      "builtin-dark": [
+        "--pb-radius"
+      ]
+    }
+  },
+  "notes": [
+    "Unreleased generic contract, manually reviewed and frozen after contrast and dependency checks."
+  ]
+}
