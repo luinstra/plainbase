@@ -1,4 +1,6 @@
 import com.github.gradle.node.npm.task.NpmTask
+import java.security.MessageDigest
+import java.util.HexFormat
 
 plugins {
     alias(libs.plugins.node.gradle)
@@ -19,7 +21,7 @@ val npmBuild = tasks.register<NpmTask>("npmBuild") {
     args.set(listOf("run", "build"))
     inputs.files("package.json", "package-lock.json", "vite.config.ts", "tsconfig.json", "index.html")
     inputs.dir("src")
-    inputs.dir("public") // copied verbatim into dist/ by vite — a changed brand asset must re-embed
+    inputs.dir("public") // copied verbatim into dist/ by vite; a changed brand asset must re-embed
     // Tailwind scans these, so they are build inputs.
     inputs.dir("e2e")
     inputs.dir("scripts")
@@ -50,13 +52,116 @@ tasks.register<NpmTask>("vitestFile") {
     outputs.upToDateWhen { false }
 }
 
+// Tinted gate: GPL-3.0 tool executed at build time, never bundled.
+val tintedBuilderVersion = "0.21.0"
+val tintedBuilderPins = mapOf(
+    "macos-arm64" to ("aarch64-apple-darwin" to "b8fee54cea95ff7631bfb9e7175a733d99c6131348146ff3932cbc67479eadf0"),
+    "linux-x64" to ("x86_64-unknown-linux-musl" to "89fd095b63a7be8190e1d3e2b3162340f8f09da9851909683cf412ad3164f66b"),
+    "linux-arm64" to ("aarch64-unknown-linux-gnu" to "1cd31a16104d69248766a71641bbd43802a1327e0aeba339db9f182553834a3a"),
+)
+val tintedBuilderPin = providers.provider {
+    val osName = System.getProperty("os.name")
+    val osArch = System.getProperty("os.arch")
+    val platform = when {
+        osName == "Mac OS X" && osArch == "aarch64" -> "macos-arm64"
+        osName == "Linux" && osArch in listOf("amd64", "x86_64") -> "linux-x64"
+        osName == "Linux" && osArch == "aarch64" -> "linux-arm64"
+        else -> throw GradleException(
+            "Unsupported Tinted builder host: $osName/$osArch. Supported: macos-arm64, linux-x64, linux-arm64.",
+        )
+    }
+    tintedBuilderPins.getValue(platform)
+}
+repositories {
+    exclusiveContent {
+        forRepository {
+            ivy {
+                name = "tintedBuilderReleases"
+                url = uri("https://github.com/tinted-theming/tinted-builder-rust/releases/download")
+                patternLayout { artifact("v[revision]/[module]-[classifier].[ext]") }
+                metadataSources { artifact() }
+            }
+        }
+        filter { includeModule("tinted-theming", "tinted-builder-rust") }
+    }
+}
+val tintedBuilder = configurations.create("tintedBuilder") {
+    isTransitive = false
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+tintedBuilder.dependencies.addLater(tintedBuilderPin.map { (target, _) ->
+    dependencies.create("tinted-theming:tinted-builder-rust:$tintedBuilderVersion:$target@tar.gz")
+})
+fun locateTintedBinary(dir: File): File {
+    val found = dir.walkTopDown().filter { it.isFile && it.name == "tinted-builder-rust" }.toList()
+    if (found.size != 1) {
+        throw GradleException("Expected exactly one tinted-builder-rust under $dir; found: $found")
+    }
+    return found.single()
+}
+val tintedBuilderDir = tintedBuilderPin.flatMap { (target, _) ->
+    layout.buildDirectory.dir("tinted/builder/v$tintedBuilderVersion/$target")
+}
+// Verified before tarTree sees it: Sync fingerprints (and so expands) its sources before any task action runs.
+fun verifiedTintedArchive(): File {
+    val archive = tintedBuilder.singleFile
+    val actual = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(archive.readBytes()))
+    val expected = tintedBuilderPin.get().second
+    if (actual != expected) {
+        throw GradleException("Tinted builder SHA-256 mismatch: expected $expected, actual $actual")
+    }
+    return archive
+}
+val tintedBuilderSetup = tasks.register<Sync>("tintedBuilderSetup") {
+    from(providers.provider { tarTree(resources.gzip(verifiedTintedArchive())) })
+    into(tintedBuilderDir)
+    inputs.files(tintedBuilder)
+    inputs.property("version", tintedBuilderVersion)
+    inputs.property("target", tintedBuilderPin.map { it.first })
+    inputs.property("sha256", tintedBuilderPin.map { it.second })
+    doLast {
+        val binary = locateTintedBinary(destinationDir)
+        if (!binary.setExecutable(true) || !binary.canExecute()) {
+            throw GradleException("Cannot make Tinted builder executable: $binary")
+        }
+    }
+}
+val tintedTemplateCheck = tasks.register<NpmTask>("tintedTemplateCheck") {
+    group = "verification"
+    description = "Checks the offline Tinted template using the pinned builder."
+    dependsOn(tasks.npmInstall, tintedBuilderSetup)
+    args.set(listOf(
+        "run", "test", "--", "--config", "src/__tests__/tinted/vitest.tinted.config.ts",
+        "--reporter=default", "--reporter=json", "--outputFile.json=build/tinted/results/vitest-report.json",
+    ))
+    environment.put("PB_TINTED_BUILDER", providers.provider {
+        locateTintedBinary(tintedBuilderSetup.get().destinationDir).absolutePath
+    })
+    environment.put("PB_TINTED_BUILDER_VERSION", tintedBuilderVersion)
+    environment.put("PB_TINTED_WORK", layout.buildDirectory.dir("tinted/work").map { it.asFile.absolutePath })
+    environment.put("PB_TINTED_RESULTS", layout.buildDirectory.dir("tinted/results").map { it.asFile.absolutePath })
+    inputs.dir(rootProject.layout.projectDirectory.dir("contrib/tinted"))
+    inputs.dir("src/__tests__")
+    inputs.dir("src/styles")
+    inputs.files("package.json", "package-lock.json")
+    inputs.files(tintedBuilderSetup)
+    inputs.property("version", tintedBuilderVersion)
+    inputs.property("target", tintedBuilderPin.map { it.first })
+    inputs.property("sha256", tintedBuilderPin.map { it.second })
+    outputs.dir(layout.buildDirectory.dir("tinted/results"))
+    doFirst {
+        delete(layout.buildDirectory.dir("tinted/work"), layout.buildDirectory.dir("tinted/results"))
+    }
+}
+
 tasks.register("build") {
-    dependsOn(npmBuild, npmTest)
+    dependsOn(npmBuild, npmTest, tintedTemplateCheck)
 }
 
 // Playwright smoke flow against the REAL server (installed dist + embedded SPA + fixture
-// tree) — see playwright.config.ts and the test-scoped server fixture. A separate invocation, NOT part of `build`: it
-// downloads a Chromium on first run, which would break the hermetic JAR floor.
+// tree). See playwright.config.ts and the test-scoped server fixture. A separate invocation, NOT part of `build`: it
+// downloads an unpinned Chromium on first run, unlike the SHA-pinned, Gradle-cached Tinted builder the floor uses.
 tasks.register<NpmTask>("smokeTest") {
     group = "verification"
     description = "Runs the Playwright smoke flow against the installed server serving fixtures/demo-docs"
@@ -70,4 +175,5 @@ tasks.register<NpmTask>("smokeTest") {
 
 tasks.register<Delete>("clean") {
     delete(layout.projectDirectory.dir("dist"))
+    delete(layout.buildDirectory.dir("tinted"))
 }

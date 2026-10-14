@@ -1,0 +1,3 @@
+default:
+  supported-systems: [base16, base24]
+  filename: "out/{{ scheme-system }}-{{ scheme-slug }}.txt"

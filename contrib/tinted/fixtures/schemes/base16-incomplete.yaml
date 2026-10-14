@@ -1,0 +1,21 @@
+system: base16
+name: "base16-incomplete"
+author: "Plainbase test fixture"
+slug: "base16-incomplete"
+variant: dark
+palette:
+  base00: "101010"
+  base01: "202020"
+  base02: "303030"
+  base03: "404040"
+  base04: "505050"
+  base05: "606060"
+  base06: "707070"
+  base07: "808080"
+  base08: "909090"
+  base09: "a0a0a0"
+  base0A: "b0b0b0"
+  base0B: "c0c0c0"
+  base0C: "d0d0d0"
+  base0D: "e0e0e0"
+  base0E: "f0f0f0"

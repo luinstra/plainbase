@@ -131,6 +131,7 @@ function writeArguments(source: string): string[] {
 }
 
 function targetsFrozenFixtures(argument: string): boolean {
+  if (/(?:^|[\\/"'\x60])contrib[\\/]/.test(argument) || /["'\x60]contrib["'\x60]/.test(argument)) return true;
   const segmentPairs = ["e2e", "__tests__"];
   return segmentPairs.some((segment) => {
     const directPath = new RegExp(`\\b${segment}[\\\\/]+fixtures\\b`);
@@ -145,10 +146,12 @@ describe("candidate theme boundaries", () => {
       .filter((file) => /\.(ts|tsx|html)$/.test(file))
       .filter((file) => !path.relative(frontendRoot, file).split(path.sep).includes("__tests__"));
     const indexFile = path.join(frontendRoot, "index.html");
-    const forbidden = ["styles/themes/", "__tests__/fixtures", "e2e/"];
+    const forbidden = ["styles/themes/", "__tests__/fixtures", "e2e/", "contrib/", "__tests__/tinted"];
     const imported = [...applicationFiles, indexFile].flatMap((file) => {
       const source = readFileSync(file, "utf8");
-      return forbidden.filter((fragment) => source.includes(fragment)).map((fragment) => ({
+      const fragments = forbidden.filter((fragment) => source.includes(fragment));
+      if (/\b(?:from\s*|import\s*(?:\(\s*)?)["']yaml["']/.test(source)) fragments.push("yaml-import");
+      return fragments.map((fragment) => ({
         file: path.relative(frontendRoot, file),
         fragment,
       }));
@@ -182,6 +185,8 @@ describe("candidate theme boundaries", () => {
       const interpolatedCall = 'console.info(`${writeFileSync(' + argument + ', "")}`)';
       expect(writeArguments(interpolatedCall).filter(targetsFrozenFixtures)).toEqual([argument]);
     }
+    const contribArgument = 'path.join("contrib", "tinted", "x")';
+    expect(writeArguments('writeFileSync(' + contribArgument + ', "")').filter(targetsFrozenFixtures)).toEqual([contribArgument]);
     const testFiles = [
       ...filesUnder(path.join(frontendRoot, "src", "__tests__")),
       ...filesUnder(path.join(frontendRoot, "e2e")),
@@ -194,6 +199,13 @@ describe("candidate theme boundaries", () => {
   });
 
   it("the contract is unreleased", () => {
+    const tintedRoot = path.join(repositoryRoot, "contrib", "tinted");
+    expect(readFileSync(path.join(tintedRoot, "README.md"), "utf8").toLowerCase()).toContain("unreleased");
+    for (const file of readdirSync(path.join(tintedRoot, "generated")).sort()) {
+      const output = readFileSync(path.join(tintedRoot, "generated", file), "utf8");
+      const outputHeader = output.match(/^\s*\/\*([\s\S]*?)\*\//)?.[1] ?? "";
+      expect(outputHeader, file).toContain("Unreleased");
+    }
     expect(existsSync(path.join(repositoryRoot, "docs", "theming.md"))).toBe(false);
     const releaseNotes = readFileSync(path.join(repositoryRoot, "docs", "release-notes", "unreleased.md"), "utf8");
     expect(releaseNotes).not.toContain("--pb-theme");
@@ -202,5 +214,16 @@ describe("candidate theme boundaries", () => {
     expect(header.toLowerCase()).toContain("unreleased");
     for (const marker of ["--pb-theme-", "localStorage"]) expect(header).toContain(marker);
     expect(header).toMatch(/(?<![\w-])pb-theme(?![\w-])/);
+  });
+
+  it("contrib tooling is neither an app input nor an embedded resource", () => {
+    const generated = readdirSync(path.join(repositoryRoot, "contrib", "tinted", "generated")).sort();
+    const exposed = filesUnder(path.join(frontendRoot, "public"))
+      .filter((file) => /\.(yaml|yml|mustache)$/i.test(file) || generated.includes(path.basename(file)))
+      .map((file) => path.relative(frontendRoot, file)).sort();
+    expect(exposed).toEqual([]);
+    for (const file of ["server/build.gradle.kts", "Dockerfile", "frontend/vite.config.ts"]) {
+      expect(readFileSync(path.join(repositoryRoot, file), "utf8"), file).not.toMatch(/\bcontrib\b/);
+    }
   });
 });

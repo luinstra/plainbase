@@ -7,6 +7,7 @@ export type Kind = "colour" | "font" | "length";
 export type Input = {
   required: boolean; kind: Kind; default: string | null;
   generic: string[]; "builtin-light": string[]; "builtin-dark": string[]; adaptation: string;
+  "tinted-base16"?: string | null; "tinted-base24"?: string | null;
 };
 export type Slots = readonly [string, string, string];
 export type Value = Color | string;

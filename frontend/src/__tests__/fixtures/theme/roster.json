@@ -14,7 +14,9 @@
       "builtin-dark": [
         "--pb-surface"
       ],
-      "adaptation": "Base document surface; mode-specific translucent scrim and shadow also depend on it."
+      "adaptation": "Base document surface; mode-specific translucent scrim and shadow also depend on it.",
+      "tinted-base16": "base00",
+      "tinted-base24": "base00"
     },
     "--pb-theme-foreground": {
       "required": true,
@@ -29,7 +31,9 @@
       "builtin-dark": [
         "--pb-text"
       ],
-      "adaptation": "Base document ink; mixed faint ink and links also depend on it."
+      "adaptation": "Base document ink; mixed faint ink and links also depend on it.",
+      "tinted-base16": "base05",
+      "tinted-base24": "base05"
     },
     "--pb-theme-primary": {
       "required": true,
@@ -55,7 +59,9 @@
         "--pb-discussion-highlight-edge",
         "--pb-primary-opaque"
       ],
-      "adaptation": "Action fill keeps input alpha; primary-opaque supplies opaque accent ink and callout mixtures."
+      "adaptation": "Action fill keeps input alpha; primary-opaque supplies opaque accent ink and callout mixtures.",
+      "tinted-base16": "base0D",
+      "tinted-base24": "base0D"
     },
     "--pb-theme-primary-foreground": {
       "required": true,
@@ -72,7 +78,9 @@
       "builtin-dark": [
         "--pb-primary-text"
       ],
-      "adaptation": "Action ink; the dark built-in accent-contrast retains its current expression."
+      "adaptation": "Action ink; the dark built-in accent-contrast retains its current expression.",
+      "tinted-base16": "base00",
+      "tinted-base24": "base00"
     },
     "--pb-theme-card": {
       "required": false,
@@ -93,7 +101,9 @@
       "builtin-dark": [
         "--pb-surface-raised"
       ],
-      "adaptation": "Raised surfaces; built-in refinements preserve distinct field, code and diagram surfaces where specified."
+      "adaptation": "Raised surfaces; built-in refinements preserve distinct field, code and diagram surfaces where specified.",
+      "tinted-base16": null,
+      "tinted-base24": null
     },
     "--pb-theme-card-foreground": {
       "required": false,
@@ -112,7 +122,9 @@
         "--pb-card-foreground",
         "--pb-diagram-node-text"
       ],
-      "adaptation": "Generic code and diagram ink follows card-foreground; current built-in code-text remains refined."
+      "adaptation": "Generic code and diagram ink follows card-foreground; current built-in code-text remains refined.",
+      "tinted-base16": null,
+      "tinted-base24": null
     },
     "--pb-theme-muted": {
       "required": false,
@@ -130,7 +142,9 @@
       "builtin-dark": [
         "--pb-surface-chrome"
       ],
-      "adaptation": "Quiet surfaces; built-in inline-code-bg and the dark table-header-bg retain their current expressions."
+      "adaptation": "Quiet surfaces; built-in inline-code-bg and the dark table-header-bg retain their current expressions.",
+      "tinted-base16": "base01",
+      "tinted-base24": "base01"
     },
     "--pb-theme-muted-foreground": {
       "required": false,
@@ -145,7 +159,9 @@
       "builtin-dark": [
         "--pb-text-muted"
       ],
-      "adaptation": "Secondary ink and the default syntax-comment dependency."
+      "adaptation": "Secondary ink and the default syntax-comment dependency.",
+      "tinted-base16": "base04",
+      "tinted-base24": "base04"
     },
     "--pb-theme-border": {
       "required": false,
@@ -163,7 +179,9 @@
         "--pb-border",
         "--pb-code-border"
       ],
-      "adaptation": "Edge colour; generic stronger edges mix in foreground ink."
+      "adaptation": "Edge colour; generic stronger edges mix in foreground ink.",
+      "tinted-base16": null,
+      "tinted-base24": null
     },
     "--pb-theme-ring": {
       "required": false,
@@ -178,7 +196,9 @@
       "builtin-dark": [
         "--pb-focus-ring"
       ],
-      "adaptation": "Focus-outline colour; default uses opaque primary channels."
+      "adaptation": "Focus-outline colour; default uses opaque primary channels.",
+      "tinted-base16": "base0D",
+      "tinted-base24": "base16"
     },
     "--pb-theme-selection": {
       "required": false,
@@ -198,7 +218,9 @@
         "--pb-selection-bg",
         "--pb-deeplink-pulse"
       ],
-      "adaptation": "Selection highlight; built-in navigation and discussion refinements retain their current expressions."
+      "adaptation": "Selection highlight; built-in navigation and discussion refinements retain their current expressions.",
+      "tinted-base16": "base02",
+      "tinted-base24": "base02"
     },
     "--pb-theme-selection-foreground": {
       "required": false,
@@ -213,7 +235,9 @@
       "builtin-dark": [
         "--pb-selection-text"
       ],
-      "adaptation": "Selected text ink."
+      "adaptation": "Selected text ink.",
+      "tinted-base16": "base05",
+      "tinted-base24": "base05"
     },
     "--pb-theme-destructive": {
       "required": false,
@@ -230,7 +254,9 @@
       "builtin-dark": [
         "--pb-danger"
       ],
-      "adaptation": "Destructive ink; generic feedback and diff tints are in its dependency closure."
+      "adaptation": "Destructive ink; generic feedback and diff tints are in its dependency closure.",
+      "tinted-base16": "base08",
+      "tinted-base24": "base12"
     },
     "--pb-theme-warning": {
       "required": false,
@@ -250,7 +276,9 @@
         "--pb-warning",
         "--pb-link-broken"
       ],
-      "adaptation": "Warning ink; the light built-in syntax-literal dependency belongs to its public syntax definition."
+      "adaptation": "Warning ink; the light built-in syntax-literal dependency belongs to its public syntax definition.",
+      "tinted-base16": "base0A",
+      "tinted-base24": "base13"
     },
     "--pb-theme-success": {
       "required": false,
@@ -265,7 +293,9 @@
       "builtin-dark": [
         "--pb-status-active"
       ],
-      "adaptation": "Successful-state ink; generic diff-add-bg is in its dependency closure."
+      "adaptation": "Successful-state ink; generic diff-add-bg is in its dependency closure.",
+      "tinted-base16": "base0B",
+      "tinted-base24": "base14"
     },
     "--pb-theme-syntax-keyword": {
       "required": false,
@@ -280,7 +310,9 @@
       "builtin-dark": [
         "--pb-syntax-keyword"
       ],
-      "adaptation": "Maps the public syntax-keyword input to --pb-syntax-keyword."
+      "adaptation": "Maps the public syntax-keyword input to --pb-syntax-keyword.",
+      "tinted-base16": "base0E",
+      "tinted-base24": "base17"
     },
     "--pb-theme-syntax-string": {
       "required": false,
@@ -295,7 +327,9 @@
       "builtin-dark": [
         "--pb-syntax-string"
       ],
-      "adaptation": "Maps the public syntax-string input to --pb-syntax-string."
+      "adaptation": "Maps the public syntax-string input to --pb-syntax-string.",
+      "tinted-base16": "base0B",
+      "tinted-base24": "base14"
     },
     "--pb-theme-syntax-comment": {
       "required": false,
@@ -310,7 +344,9 @@
       "builtin-dark": [
         "--pb-syntax-comment"
       ],
-      "adaptation": "Maps the public syntax-comment input to --pb-syntax-comment."
+      "adaptation": "Maps the public syntax-comment input to --pb-syntax-comment.",
+      "tinted-base16": "base04",
+      "tinted-base24": "base04"
     },
     "--pb-theme-syntax-literal": {
       "required": false,
@@ -325,7 +361,9 @@
       "builtin-dark": [
         "--pb-syntax-literal"
       ],
-      "adaptation": "Maps the public syntax-literal input to --pb-syntax-literal."
+      "adaptation": "Maps the public syntax-literal input to --pb-syntax-literal.",
+      "tinted-base16": "base09",
+      "tinted-base24": "base09"
     },
     "--pb-theme-syntax-title": {
       "required": false,
@@ -340,7 +378,9 @@
       "builtin-dark": [
         "--pb-syntax-title"
       ],
-      "adaptation": "also colours hljs-name and hljs-selector-tag (app.css hljs title group)"
+      "adaptation": "also colours hljs-name and hljs-selector-tag (app.css hljs title group)",
+      "tinted-base16": "base0D",
+      "tinted-base24": "base16"
     },
     "--pb-theme-syntax-attribute": {
       "required": false,
@@ -355,7 +395,9 @@
       "builtin-dark": [
         "--pb-syntax-attr"
       ],
-      "adaptation": "Maps the public syntax-attribute input to --pb-syntax-attr."
+      "adaptation": "Maps the public syntax-attribute input to --pb-syntax-attr.",
+      "tinted-base16": "base08",
+      "tinted-base24": "base12"
     },
     "--pb-theme-font-sans": {
       "required": false,
@@ -370,7 +412,9 @@
       "builtin-dark": [
         "--pb-font-sans"
       ],
-      "adaptation": "Uses the current app.css sans-serif stack; built-ins inherit the private role from generic."
+      "adaptation": "Uses the current app.css sans-serif stack; built-ins inherit the private role from generic.",
+      "tinted-base16": null,
+      "tinted-base24": null
     },
     "--pb-theme-font-mono": {
       "required": false,
@@ -385,7 +429,9 @@
       "builtin-dark": [
         "--pb-font-mono"
       ],
-      "adaptation": "Uses the current app.css monospace stack; built-ins inherit the private role from generic."
+      "adaptation": "Uses the current app.css monospace stack; built-ins inherit the private role from generic.",
+      "tinted-base16": null,
+      "tinted-base24": null
     },
     "--pb-theme-radius": {
       "required": false,
@@ -400,7 +446,9 @@
       "builtin-dark": [
         "--pb-radius"
       ],
-      "adaptation": "Base radius; seven scaled private steps are in its dependency closure."
+      "adaptation": "Base radius; seven scaled private steps are in its dependency closure.",
+      "tinted-base16": null,
+      "tinted-base24": null
     }
   },
   "independentInk": [
@@ -435,5 +483,15 @@
     "--pb-radius-xl",
     "--pb-radius-2xl",
     "--pb-radius-3xl"
-  ]
+  ],
+  "tintedBase24Fallbacks": {
+    "base10": "base00",
+    "base11": "base00",
+    "base12": "base08",
+    "base13": "base0A",
+    "base14": "base0B",
+    "base15": "base0C",
+    "base16": "base0D",
+    "base17": "base0E"
+  }
 }

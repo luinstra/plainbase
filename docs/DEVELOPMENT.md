@@ -17,6 +17,9 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md). The 
 
 Requirements: JDK 25+ (the build auto-provisions the 25 toolchain for
 bytecode). Node is downloaded by the Gradle build - no local install needed.
+The build also downloads a SHA-pinned Tinted theme builder on first run, which
+exists only for macOS arm64, Linux x64 and Linux arm64; other hosts (including
+Intel macOS) cannot run `./gradlew build`. See [contrib/tinted](../contrib/tinted/README.md).
 
 The platform-neutral runner self-test and Linux-only PID1 regression gates are separate from ordinary test discovery:
 

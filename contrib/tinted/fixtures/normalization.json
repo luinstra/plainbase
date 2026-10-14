@@ -1,0 +1,136 @@
+{
+  "bad-hex.yaml": {
+    "exit": 1,
+    "files": [],
+    "rendered": {},
+    "stderrClass": "hex-invalid"
+  },
+  "base16-dark.yaml": {
+    "exit": 0,
+    "files": [
+      "out/base16-base16-dark.txt"
+    ],
+    "rendered": {
+      "out/base16-base16-dark.txt": "scheme-system=[base16]\nscheme-variant=[dark]\nscheme-is-light-variant=[]\nscheme-is-dark-variant=[true]\nbase0D=[e0e0e0]\nbase12=[] absent\nbase13=[] absent\nbase14=[] absent\nbase16=[] absent\nbase17=[] absent\n"
+    },
+    "stderrClass": "none"
+  },
+  "base16-extended-slot.yaml": {
+    "exit": 0,
+    "files": [
+      "out/base16-base16-extended-slot.txt"
+    ],
+    "rendered": {
+      "out/base16-base16-extended-slot.txt": "scheme-system=[base16]\nscheme-variant=[dark]\nscheme-is-light-variant=[]\nscheme-is-dark-variant=[true]\nbase0D=[e0e0e0]\nbase12=[000000] present\nbase13=[] absent\nbase14=[] absent\nbase16=[] absent\nbase17=[] absent\n"
+    },
+    "stderrClass": "none"
+  },
+  "base16-incomplete.yaml": {
+    "exit": 1,
+    "files": [],
+    "rendered": {},
+    "stderrClass": "palette-incomplete"
+  },
+  "base16-light.yaml": {
+    "exit": 0,
+    "files": [
+      "out/base16-base16-light.txt"
+    ],
+    "rendered": {
+      "out/base16-base16-light.txt": "scheme-system=[base16]\nscheme-variant=[light]\nscheme-is-light-variant=[true]\nscheme-is-dark-variant=[]\nbase0D=[e0e0e0]\nbase12=[] absent\nbase13=[] absent\nbase14=[] absent\nbase16=[] absent\nbase17=[] absent\n"
+    },
+    "stderrClass": "none"
+  },
+  "base24-distinct.yaml": {
+    "exit": 0,
+    "files": [
+      "out/base24-base24-distinct.txt"
+    ],
+    "rendered": {
+      "out/base24-base24-distinct.txt": "scheme-system=[base24]\nscheme-variant=[dark]\nscheme-is-light-variant=[]\nscheme-is-dark-variant=[true]\nbase0D=[e0e0e0]\nbase12=[000000] present\nbase13=[333333] present\nbase14=[444444] present\nbase16=[666666] present\nbase17=[777777] present\n"
+    },
+    "stderrClass": "none"
+  },
+  "base24-fallback-equivalent.yaml": {
+    "exit": 0,
+    "files": [
+      "out/base24-base24-fallback-equivalent.txt"
+    ],
+    "rendered": {
+      "out/base24-base24-fallback-equivalent.txt": "scheme-system=[base24]\nscheme-variant=[dark]\nscheme-is-light-variant=[]\nscheme-is-dark-variant=[true]\nbase0D=[e0e0e0]\nbase12=[909090] present\nbase13=[b0b0b0] present\nbase14=[c0c0c0] present\nbase16=[e0e0e0] present\nbase17=[f0f0f0] present\n"
+    },
+    "stderrClass": "none"
+  },
+  "base24-incomplete.yaml": {
+    "exit": 1,
+    "files": [],
+    "rendered": {},
+    "stderrClass": "palette-incomplete"
+  },
+  "duplicate-variant.yaml": {
+    "exit": 1,
+    "files": [],
+    "rendered": {},
+    "stderrClass": "duplicate-key"
+  },
+  "hex-shorthand.yaml": {
+    "exit": 0,
+    "files": [
+      "out/base16-hex-shorthand.txt"
+    ],
+    "rendered": {
+      "out/base16-hex-shorthand.txt": "scheme-system=[base16]\nscheme-variant=[dark]\nscheme-is-light-variant=[]\nscheme-is-dark-variant=[true]\nbase0D=[aabbcc]\nbase12=[] absent\nbase13=[] absent\nbase14=[] absent\nbase16=[] absent\nbase17=[] absent\n"
+    },
+    "stderrClass": "none"
+  },
+  "malformed.yaml": {
+    "exit": 1,
+    "files": [],
+    "rendered": {},
+    "stderrClass": "yaml-syntax"
+  },
+  "palette-not-string.yaml": {
+    "exit": 1,
+    "files": [],
+    "rendered": {},
+    "stderrClass": "palette-not-string"
+  },
+  "root-not-mapping.yaml": {
+    "exit": 1,
+    "files": [],
+    "rendered": {},
+    "stderrClass": "E112"
+  },
+  "slug-not-canonical.yaml": {
+    "exit": 0,
+    "files": [
+      "out/base16-not-canonical.txt"
+    ],
+    "rendered": {
+      "out/base16-not-canonical.txt": "scheme-system=[base16]\nscheme-variant=[dark]\nscheme-is-light-variant=[]\nscheme-is-dark-variant=[true]\nbase0D=[e0e0e0]\nbase12=[] absent\nbase13=[] absent\nbase14=[] absent\nbase16=[] absent\nbase17=[] absent\n"
+    },
+    "stderrClass": "none"
+  },
+  "system-unsupported.yaml": {
+    "exit": 1,
+    "files": [],
+    "rendered": {},
+    "stderrClass": "system-unsupported"
+  },
+  "variant-missing.yaml": {
+    "exit": 0,
+    "files": [
+      "out/base16-variant-missing.txt"
+    ],
+    "rendered": {
+      "out/base16-variant-missing.txt": "scheme-system=[base16]\nscheme-variant=[dark]\nscheme-is-light-variant=[]\nscheme-is-dark-variant=[true]\nbase0D=[e0e0e0]\nbase12=[] absent\nbase13=[] absent\nbase14=[] absent\nbase16=[] absent\nbase17=[] absent\n"
+    },
+    "stderrClass": "none"
+  },
+  "variant-unsupported.yaml": {
+    "exit": 1,
+    "files": [],
+    "rendered": {},
+    "stderrClass": "variant-unsupported"
+  }
+}

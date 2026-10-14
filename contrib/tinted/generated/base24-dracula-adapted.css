@@ -1,0 +1,24 @@
+/* Unreleased Plainbase theme definition: base24 / dracula-adapted.
+   public --pb-theme- inputs only.
+   --pb-theme-card, --pb-theme-card-foreground, --pb-theme-border,
+   --pb-theme-font-sans, --pb-theme-font-mono and --pb-theme-radius use generic defaults. */
+:where(:root[data-theme="dark"]) {
+  --pb-theme-background: #282a36;
+  --pb-theme-foreground: #f8f8f2;
+  --pb-theme-primary: #bd93f9;
+  --pb-theme-primary-foreground: #282a36;
+  --pb-theme-muted: #21222c;
+  --pb-theme-muted-foreground: #a3acca;
+  --pb-theme-ring: #d6acff;
+  --pb-theme-selection: #44475a;
+  --pb-theme-selection-foreground: #f8f8f2;
+  --pb-theme-destructive: #ff8b8b;
+  --pb-theme-warning: #ffffa5;
+  --pb-theme-success: #69ff94;
+  --pb-theme-syntax-keyword: #ff92df;
+  --pb-theme-syntax-string: #69ff94;
+  --pb-theme-syntax-comment: #a3acca;
+  --pb-theme-syntax-literal: #ffb86c;
+  --pb-theme-syntax-title: #d6acff;
+  --pb-theme-syntax-attribute: #ff8b8b;
+}
