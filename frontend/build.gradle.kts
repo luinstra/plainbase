@@ -25,6 +25,7 @@ val npmBuild = tasks.register<NpmTask>("npmBuild") {
     // Tailwind scans these, so they are build inputs.
     inputs.dir("e2e")
     inputs.dir("scripts")
+    inputs.dir("plugins") // Vite config dependency and Tailwind scan source.
     inputs.files("playwright.config.ts", "build.gradle.kts")
     outputs.dir(layout.projectDirectory.dir("dist"))
 }

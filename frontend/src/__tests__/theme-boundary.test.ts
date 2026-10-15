@@ -222,7 +222,9 @@ describe("candidate theme boundaries", () => {
       .filter((file) => /\.(yaml|yml|mustache)$/i.test(file) || generated.includes(path.basename(file)))
       .map((file) => path.relative(frontendRoot, file)).sort();
     expect(exposed).toEqual([]);
-    for (const file of ["server/build.gradle.kts", "Dockerfile", "frontend/vite.config.ts"]) {
+    for (const file of [
+      "server/build.gradle.kts", "Dockerfile", "frontend/vite.config.ts", "frontend/plugins/themeStylesheets.ts",
+    ]) {
       expect(readFileSync(path.join(repositoryRoot, file), "utf8"), file).not.toMatch(/\bcontrib\b/);
     }
   });

@@ -76,7 +76,7 @@ class FrontendBundleTest : FunSpec({
                 ServerTopLevel.segments
             ).toSet()
         val rootNames = routeSegments.mapNotNull { RootName.of(it) }
-        val expectedNonSurvivors = setOf("p")
+        val expectedNonSurvivors = setOf("p", "_plainbase")
         withClue(
             "live route segments (${routeSegments.size}) produced ${rootNames.size} RootName survivors; " +
                 "expected ${routeSegments.size - expectedNonSurvivors.size}, non-survivors=$expectedNonSurvivors",
@@ -149,6 +149,18 @@ class FrontendBundleTest : FunSpec({
             ).toSet()
         withClue("the ledger and the served bundle disagree; a route is missing or a ledger entry is stale") {
             ledgered shouldBe bundleTopLevel()
+        }
+    }
+
+    test("_plainbase holds exactly the two non-empty regular fallback resources") {
+        val entries = Files.list(bundleDir().resolve("_plainbase")).use { it.toList() }
+        entries.map { it.fileName.toString() }.toSet() shouldBe
+            setOf("plainbase-theme-light.css", "plainbase-theme-dark.css")
+        entries.forEach { file ->
+            withClue(file) {
+                Files.isRegularFile(file) shouldBe true
+                (Files.size(file) > 0) shouldBe true
+            }
         }
     }
 

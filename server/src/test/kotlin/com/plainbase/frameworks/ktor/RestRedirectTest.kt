@@ -156,6 +156,7 @@ class RestRedirectTest : FunSpec({
                     // would lock an operator out with a green floor. `FrontendStaticRoute`'s comment says
                     // exactly that; this is what makes the claim falsifiable.
                     client.get("/favicon.svg").status shouldBe HttpStatusCode.OK
+                    client.get("/plainbase-theme-generic.css").status shouldBe HttpStatusCode.OK
                     client.get("/fonts/ibm-plex-sans-400.woff2").status shouldBe HttpStatusCode.OK
                 }
             }

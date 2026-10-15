@@ -278,7 +278,7 @@ internal const val CONTENT_SECURITY_POLICY = "Content-Security-Policy"
 /** The MIME-sniff defense header (not a named constant in this Ktor); shared by the asset + shell paths. */
 internal const val X_CONTENT_TYPE_OPTIONS = "X-Content-Type-Options"
 
-/** Revalidate shell HTML on every request. */
+/** Revalidate shell HTML and the generic theme stylesheet on every request. */
 internal const val CACHE_CONTROL_NO_CACHE = "no-cache"
 
 /** The small extension → content-type map for served assets (§A4); unknown → octet-stream. */

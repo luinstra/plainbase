@@ -31,6 +31,7 @@ import com.plainbase.frameworks.ktor.routes.searchRoute
 import com.plainbase.frameworks.ktor.routes.sessionRoutes
 import com.plainbase.frameworks.ktor.routes.setupRoutes
 import com.plainbase.frameworks.ktor.routes.spaShellRoutes
+import com.plainbase.frameworks.ktor.routes.themeRoutes
 import com.plainbase.frameworks.ktor.routes.treeRoute
 import com.plainbase.frameworks.lifecycle.CompletionWait
 import com.plainbase.frameworks.mcp.plainbaseMcp
@@ -414,7 +415,7 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
     // skipped (with a warning) when no frontend is bundled. Must precede routing so it sees every respond.
     installShellSecurityHeaders()
     routing {
-        // §A4 routing-matrix order: API → assets → permalinks/aliases/browse → root content and shell.
+        // §A4 routing-matrix order: API → assets → permalinks/aliases/browse → theme namespace → root content and shell.
         healthRoute(ctx)
         // A4a builtin auth surface: registered ONLY in auth.mode=builtin. In OFF (loopback dev) and PROXY
         // (A4b asserts identity via a trusted header) there is no password login, so these routes must be ABSENT
@@ -460,6 +461,7 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         assetRoute(ctx)
         permalinkRoute(ctx)
         browseRedirectRoute(ctx)
+        themeRoutes()
         frontendStaticRoutes(ctx)
         rootContentRoutes(ctx)
         spaShellRoutes(ctx)
