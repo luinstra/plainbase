@@ -150,7 +150,7 @@ class RestRedirectTest : FunSpec({
                     client.get("/p/$id").status shouldBe misdirected
 
                     // The OTHER half of the same contract, and the half that had no row: the bundle's
-                    // non-shell files are deliberately UNGATED and must still answer 200 here. They are
+                    // embedded non-shell files are deliberately UNGATED and must still answer 200 here. They are
                     // install-invariant build artifacts carrying nothing about the corpus or the tenant,
                     // and the login view cannot render without them - gating them to look consistent
                     // would lock an operator out with a green floor. `FrontendStaticRoute`'s comment says
@@ -162,6 +162,28 @@ class RestRedirectTest : FunSpec({
             }
         } finally {
             root.toFile().deleteRecursively()
+        }
+    }
+
+    listOf("/_plainbase/theme-light.css", "/_plainbase/theme-dark.css", "/_plainbase/custom.css").forEach { path ->
+        test("$path stays public under a refused transport credential") {
+            val root = Files.createTempDirectory("plainbase-theme-421")
+            try {
+                IndexHarness(root, contentStore = LocalContentStore(root)).use { harness ->
+                    harness.builder.rebuild()
+                    val context = harness.testRouteContext(
+                        searchProvider = redirectNoopSearchProvider(),
+                        enforced = true,
+                        extract = { PrincipalExtraction.InsecureTransportRefused },
+                    )
+                    testApplication {
+                        application { plainbaseModule(context) }
+                        restClient().get(path).status shouldBe HttpStatusCode.OK
+                    }
+                }
+            } finally {
+                root.toFile().deleteRecursively()
+            }
         }
     }
 

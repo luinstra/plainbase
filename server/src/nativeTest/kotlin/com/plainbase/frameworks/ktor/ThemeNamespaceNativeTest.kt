@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Tag
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -26,6 +27,21 @@ class ThemeNamespaceNativeTest {
     fun fallbackResourceIsEmbeddedInNativeImage() {
         val light = requireNotNull(bundleResourceBytes("_plainbase/plainbase-theme-light.css"))
         assertTrue(light.isNotEmpty())
+    }
+
+    @Test
+    fun exactLightEndpointServesEmbeddedDefinition() {
+        val light = requireNotNull(bundleResourceBytes("_plainbase/plainbase-theme-light.css"))
+        withRestServices { services ->
+            testApplication {
+                application { plainbaseModule(services) }
+                val response = createClient { followRedirects = false }.get("/_plainbase/theme-light.css")
+
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals(ContentType.Text.CSS, response.contentType()?.withoutParameters())
+                assertContentEquals(light, response.bodyAsBytes())
+            }
+        }
     }
 
     @Test

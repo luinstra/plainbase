@@ -2,11 +2,14 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.service.IndexHarness
+import com.plainbase.domain.theming.ThemeLeaf
+import com.plainbase.domain.theming.ThemeSelection
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.filesystem.Fixtures
-import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.filesystem.LocalThemeStylesheets
 import com.plainbase.frameworks.ktor.routes.X_CONTENT_TYPE_OPTIONS
 import com.plainbase.frameworks.ktor.routes.bundleResourceBytes
+import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
 import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -32,35 +35,92 @@ import java.nio.file.Files
 
 private enum class ThemeResponseFamily { INVALID_PATH, NOT_FOUND, NAMESPACE_NOT_FOUND, SHELL_NOT_FOUND, SHELL_OK }
 
-private fun themeNamespaceTest(mode: AuthMode, block: suspend ApplicationTestBuilder.() -> Unit) {
-    if (mode == AuthMode.OFF) {
-        RestHarness(Fixtures.demoDocs, authMode = mode).use { harness ->
-            testApplication {
-                application { plainbaseModule(harness.services) }
-                block()
+private enum class EncodedThemeFamily { NAMESPACE_NOT_FOUND, SELECTED_CSS, METHOD_NOT_ALLOWED }
+
+private data class ThemeNamespaceBytes(val needles: List<ByteArray>, val paper: ByteArray)
+
+private fun themeNamespaceTest(mode: AuthMode, block: suspend ApplicationTestBuilder.(ThemeNamespaceBytes) -> Unit) {
+    val data = Files.createTempDirectory("pb-theme-namespace")
+    try {
+        val paper = "body { --paper: zz-paper-sentinel; }".encodeToByteArray()
+        val custom = "body { --custom: zz-custom-sentinel; }".encodeToByteArray()
+        Files.write(data.resolve("paper.css"), paper)
+        Files.write(data.resolve("custom.css"), custom)
+        val light = Files.readAllBytes(bundleDir().resolve("_plainbase/plainbase-theme-light.css"))
+        val dark = Files.readAllBytes(bundleDir().resolve("_plainbase/plainbase-theme-dark.css"))
+        val fixture = ThemeNamespaceBytes(listOf(light, dark, paper, custom), paper)
+        fixture.needles.forEach { it.isNotEmpty() shouldBe true }
+        val themes = LocalThemeStylesheets(
+            data,
+            ThemeSelection(requireNotNull(ThemeLeaf.of("paper.css")), null),
+            embeddedThemeBuiltins(),
+        )
+        if (mode == AuthMode.OFF) {
+            RestHarness(Fixtures.demoDocs, authMode = mode, themes = themes).use { harness ->
+                testApplication {
+                    application { plainbaseModule(harness.services) }
+                    block(fixture)
+                }
+            }
+        } else {
+            IndexHarness(Fixtures.demoDocs).use { harness ->
+                harness.builder.rebuild()
+                val ctx = harness.testRouteContext(
+                    searchProvider = mockk<SearchProvider>(),
+                    authMode = mode,
+                    proxySecret = if (mode == AuthMode.PROXY) "theme-namespace-secret" else null,
+                    enforced = true,
+                    themes = themes,
+                )
+                testApplication {
+                    application { plainbaseModule(ctx) }
+                    block(fixture)
+                }
             }
         }
-    } else {
-        IndexHarness(Fixtures.demoDocs, contentStore = LocalContentStore(Fixtures.demoDocs)).use { harness ->
-            harness.builder.rebuild()
-            val ctx = harness.testRouteContext(searchProvider = mockk<SearchProvider>(), enforced = true)
-            testApplication {
-                application { plainbaseModule(ctx) }
-                block()
-            }
-        }
+    } finally {
+        Files.walk(data).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
     }
 }
 
 private fun ByteArray.containsFallback(needle: ByteArray): Boolean =
     (0..size - needle.size).any { offset -> needle.indices.all { this[offset + it] == needle[it] } }
 
-private fun assertNoFallbackLeak(response: HttpResponse, bytes: ByteArray, light: ByteArray, dark: ByteArray) {
+private fun assertNoFallbackLeak(response: HttpResponse, bytes: ByteArray, needles: List<ByteArray>) {
     withClue("not served as CSS") {
         (response.contentType()?.withoutParameters() == ContentType.Text.CSS) shouldBe false
     }
     withClue("no fallback byte run") {
-        (bytes.containsFallback(light) || bytes.containsFallback(dark)) shouldBe false
+        needles.any(bytes::containsFallback) shouldBe false
+    }
+}
+
+private fun assertEncodedThemeFamily(
+    response: HttpResponse,
+    bytes: ByteArray,
+    method: HttpMethod,
+    family: EncodedThemeFamily,
+    paper: ByteArray,
+) {
+    assertSoftly {
+        response.headers.getAll(HttpHeaders.CacheControl) shouldBe listOf("no-store")
+        response.headers.getAll(X_CONTENT_TYPE_OPTIONS) shouldBe listOf("nosniff")
+        when (family) {
+            EncodedThemeFamily.NAMESPACE_NOT_FOUND -> {
+                response.status shouldBe HttpStatusCode.NotFound
+                response.contentType()?.withoutParameters() shouldBe ContentType.Application.Json
+                if (method != HttpMethod.Head) assertJsonFamily(response, bytes, HttpStatusCode.NotFound, "not_found")
+            }
+            EncodedThemeFamily.SELECTED_CSS -> {
+                response.status shouldBe HttpStatusCode.OK
+                response.contentType() shouldBe ContentType.Text.CSS.withCharset(Charsets.UTF_8)
+                bytes shouldBe paper
+            }
+            EncodedThemeFamily.METHOD_NOT_ALLOWED -> {
+                response.status shouldBe HttpStatusCode.MethodNotAllowed
+                response.headers.getAll(HttpHeaders.Allow) shouldBe listOf("GET")
+            }
+        }
     }
 }
 
@@ -94,7 +154,7 @@ private fun assertThemeFamily(response: HttpResponse, bytes: ByteArray, family: 
 class ThemeNamespaceTest : FunSpec({
     val paths = listOf(
         "/_plainbase", "/_plainbase/", "/_plainbase/plainbase-theme-light.css",
-        "/_plainbase/plainbase-theme-dark.css", "/_plainbase/theme-light.css",
+        "/_plainbase/plainbase-theme-dark.css",
     )
     val probes = listOf(
         "/assets/..%2F_plainbase%2Fplainbase-theme-light.css" to ThemeResponseFamily.INVALID_PATH,
@@ -112,18 +172,27 @@ class ThemeNamespaceTest : FunSpec({
         "/browse/_plainbase/plainbase-theme-light.css" to ThemeResponseFamily.NOT_FOUND,
         "/index.html%2F..%2F_plainbase%2Fplainbase-theme-light.css" to ThemeResponseFamily.SHELL_NOT_FOUND,
     )
-    listOf(AuthMode.OFF, AuthMode.BUILTIN).forEach { mode ->
+    val neighbours = listOf(
+        "/_plainbase/theme-light.css/", "/_plainbase/theme-light.css.map", "/_plainbase/THEME-LIGHT.css",
+        "/_plainbase/theme-light", "/_plainbase/themes/theme-light.css", "/_plainbase/custom.css/",
+        "/_plainbase/Custom.css", "/_plainbase/paper.css",
+    )
+    val encoded = listOf(
+        "/%5Fplainbase/theme-light.css", "/_plainbase/theme-light%2Ecss", "/_plainbase/%2e/theme-light.css",
+    )
+    val allMethods = listOf(
+        HttpMethod.Get, HttpMethod.Post, HttpMethod.Put, HttpMethod.Delete, HttpMethod.Head, HttpMethod.Patch, HttpMethod.Options,
+    )
+    listOf(AuthMode.OFF, AuthMode.BUILTIN, AuthMode.PROXY).forEach { mode ->
         context("$mode") {
-            val light = Files.readAllBytes(bundleDir().resolve("_plainbase/plainbase-theme-light.css"))
-            val dark = Files.readAllBytes(bundleDir().resolve("_plainbase/plainbase-theme-dark.css"))
             listOf(HttpMethod.Get, HttpMethod.Post, HttpMethod.Put, HttpMethod.Delete, HttpMethod.Head).forEach { method ->
                 paths.forEach { path ->
                     test("$method $path is fail-closed") {
-                        themeNamespaceTest(mode) {
+                        themeNamespaceTest(mode) { fixture ->
                             val response = restClient().request(path) { this.method = method }
                             val bytes = response.bodyAsBytes()
                             assertSoftly {
-                                assertNoFallbackLeak(response, bytes, light, dark)
+                                assertNoFallbackLeak(response, bytes, fixture.needles)
                                 response.status shouldBe HttpStatusCode.NotFound
                                 response.headers.getAll(HttpHeaders.CacheControl) shouldBe listOf("no-store")
                                 response.headers.getAll(X_CONTENT_TYPE_OPTIONS) shouldBe listOf("nosniff")
@@ -135,12 +204,44 @@ class ThemeNamespaceTest : FunSpec({
             }
             probes.forEach { (path, family) ->
                 test("$path cannot expose fallback bytes") {
-                    themeNamespaceTest(mode) {
+                    themeNamespaceTest(mode) { fixture ->
                         val response = restClient().get(path)
                         val bytes = response.bodyAsBytes()
                         assertSoftly {
-                            assertNoFallbackLeak(response, bytes, light, dark)
+                            assertNoFallbackLeak(response, bytes, fixture.needles)
                             assertThemeFamily(response, bytes, family)
+                        }
+                    }
+                }
+            }
+            allMethods.forEach { method ->
+                neighbours.forEach { path ->
+                    test("$method $path is a namespace neighbour") {
+                        themeNamespaceTest(mode) { fixture ->
+                            val response = restClient().request(path) { this.method = method }
+                            val bytes = response.bodyAsBytes()
+                            assertSoftly {
+                                assertNoFallbackLeak(response, bytes, fixture.needles)
+                                response.status shouldBe HttpStatusCode.NotFound
+                                response.headers.getAll(HttpHeaders.CacheControl) shouldBe listOf("no-store")
+                                response.headers.getAll(X_CONTENT_TYPE_OPTIONS) shouldBe listOf("nosniff")
+                                if (method != HttpMethod.Head) assertJsonFamily(response, bytes, HttpStatusCode.NotFound, "not_found")
+                            }
+                        }
+                    }
+                }
+                encoded.forEach { path ->
+                    val family = when {
+                        path == "/_plainbase/%2e/theme-light.css" -> EncodedThemeFamily.NAMESPACE_NOT_FOUND
+                        method == HttpMethod.Get -> EncodedThemeFamily.SELECTED_CSS
+                        else -> EncodedThemeFamily.METHOD_NOT_ALLOWED
+                    }
+                    test("$method $path has its observed encoded routing family") {
+                        themeNamespaceTest(mode) { fixture ->
+                            val response = restClient().request(path) { this.method = method }
+                            assertEncodedThemeFamily(
+                                response, response.bodyAsBytes(), method, family, fixture.paper,
+                            )
                         }
                     }
                 }

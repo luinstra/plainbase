@@ -14,6 +14,7 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.theming.BundledThemeStylesheets
 import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
@@ -23,6 +24,7 @@ import com.plainbase.frameworks.ktor.AuthServices
 import com.plainbase.frameworks.ktor.TransportSettings
 import com.plainbase.frameworks.ktor.buildGuardedApplication
 import com.plainbase.frameworks.ktor.plainbaseModule
+import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
 import com.plainbase.frameworks.ktor.securityAssembly
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
@@ -265,6 +267,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             val resolver = PageRootResolver(idMap, rootRegistry)
             val absence = AbsenceClassifier(idMap)
             buildGuardedApplication(
+                themes = BundledThemeStylesheets(embeddedThemeBuiltins()),
                 serving = ServingRuntime(
                     index = ObservedIndexRuntime(
                         builder = builder,

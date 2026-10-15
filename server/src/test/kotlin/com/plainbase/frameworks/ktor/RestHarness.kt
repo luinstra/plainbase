@@ -13,11 +13,14 @@ import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.domain.theming.BundledThemeStylesheets
+import com.plainbase.domain.theming.ThemeStylesheets
 import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
 import com.plainbase.frameworks.runtime.HistoryProviders
 import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.RootStores
@@ -48,6 +51,7 @@ class RestHarness(
     private val history: HistoryProvider = NoOpHistoryProvider,
     private val authMode: AuthMode = AuthMode.BUILTIN,
     private val proxySecret: String? = null,
+    themes: ThemeStylesheets = BundledThemeStylesheets(embeddedThemeBuiltins()),
 ) : AutoCloseable {
 
     private val store = LocalContentStore(root)
@@ -109,6 +113,7 @@ class RestHarness(
             history = history,
             authMode = authMode,
             proxySecret = proxySecret,
+            themes = themes,
         )
     }
 
@@ -185,6 +190,7 @@ fun IndexHarness.testRouteContext(
     absence: com.plainbase.domain.service.AbsenceClassifier = com.plainbase.domain.service.AbsenceClassifier(idMap, policies),
     proposalRepository: com.plainbase.domain.repository.ProposalRepository = this.proposalRepository,
     authClock: Clock = Clock.System,
+    themes: ThemeStylesheets = BundledThemeStylesheets(embeddedThemeBuiltins()),
 ): RouteContext {
     val policy = PolicyService(
         roles = roleRepository,
@@ -284,6 +290,7 @@ fun IndexHarness.testRouteContext(
             mcpAllowedOrigins = mcpAllowedOrigins,
             secureCookie = secureCookie,
         ),
+        themes = themes,
     )
     return extract?.let(context::withExtract) ?: context
 }

@@ -415,7 +415,7 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
     // skipped (with a warning) when no frontend is bundled. Must precede routing so it sees every respond.
     installShellSecurityHeaders()
     routing {
-        // §A4 routing-matrix order: API → assets → permalinks/aliases/browse → theme namespace → root content and shell.
+        // Routing order: API, assets, permalinks/aliases/browse, public theme namespace, frontend files, then content and shell.
         healthRoute(ctx)
         // A4a builtin auth surface: registered ONLY in auth.mode=builtin. In OFF (loopback dev) and PROXY
         // (A4b asserts identity via a trusted header) there is no password login, so these routes must be ABSENT
@@ -461,7 +461,7 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         assetRoute(ctx)
         permalinkRoute(ctx)
         browseRedirectRoute(ctx)
-        themeRoutes()
+        themeRoutes(ctx)
         frontendStaticRoutes(ctx)
         rootContentRoutes(ctx)
         spaShellRoutes(ctx)

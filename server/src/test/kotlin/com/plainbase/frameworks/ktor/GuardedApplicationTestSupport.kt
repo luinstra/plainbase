@@ -18,6 +18,7 @@ internal fun RouteContext.withExtract(
         read = read,
         mutate = mutate,
         proposals = proposals,
+        themes = themes,
         discussions = discussions,
         registry = registry,
         availability = availability,

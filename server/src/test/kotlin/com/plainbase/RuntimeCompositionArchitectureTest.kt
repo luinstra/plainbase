@@ -193,7 +193,8 @@ class RuntimeCompositionArchitectureTest : FunSpec({
 
         val factorySignature = guardedFactoryCode.replace(Regex("\\s+"), " ")
         factorySignature shouldContain
-            "internal fun buildGuardedApplication( serving: ServingRuntime, security: SecurityAssembly, transport: TransportSettings, ): RouteContext"
+            "internal fun buildGuardedApplication( serving: ServingRuntime, security: SecurityAssembly, " +
+            "transport: TransportSettings, themes: ThemeStylesheets, ): RouteContext"
         factorySignature.substringBefore("): RouteContext") shouldNotContain "extract ="
         val securityCode = productionCode.getValue(securityAssemblyPath)
         val normalizedSecurity = securityCode.replace(Regex("\\s+"), " ")
@@ -225,8 +226,10 @@ class RuntimeCompositionArchitectureTest : FunSpec({
         val routeContextCode = productionCode.getValue(routeContextPath)
         val normalizedRouteContext = routeContextCode.replace(Regex("\\s+"), " ")
         normalizedRouteContext shouldContain "val limbo: RootLimbo,"
+        normalizedRouteContext shouldContain "val themes: ThemeStylesheets,"
         normalizedRouteContext shouldContain "val extract: ApplicationCall.() -> PrincipalExtraction,"
         Regex("val limbo: RootLimbo\\s*=").findAll(routeContextCode).count() shouldBe 0
+        Regex("val themes: ThemeStylesheets\\s*=").findAll(routeContextCode).count() shouldBe 0
         Regex("val extract: ApplicationCall\\.\\(\\) -> PrincipalExtraction\\s*=").findAll(routeContextCode).count() shouldBe 0
 
         val routeContextConstructor = Regex("\\bRouteContext\\s*\\(")

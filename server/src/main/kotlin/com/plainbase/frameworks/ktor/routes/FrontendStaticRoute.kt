@@ -60,7 +60,7 @@ internal object FrontendBundle {
     enum class Owner(val topLevelSegment: String) {
         ASSET_ROUTE(ServerTopLevel.ASSETS),
 
-        /** Theme endpoints own this namespace; fallback resources are never directory-served. */
+        /** ThemeRoute owns the public endpoints and fail-closed namespace; fallback resources are never directory-served. */
         THEME_ROUTE(ServerTopLevel.PLAINBASE),
     }
 

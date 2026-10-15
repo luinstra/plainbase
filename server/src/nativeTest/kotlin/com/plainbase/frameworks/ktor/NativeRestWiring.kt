@@ -23,11 +23,14 @@ import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.domain.service.localRoot
+import com.plainbase.domain.theming.ThemeSelection
 import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.filesystem.LocalThemeStylesheets
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.runtime.HistoryProviders
@@ -271,6 +274,7 @@ fun withRestServices(
                     users = SqlDelightUserRepository(database),
                 )
                 val services = buildGuardedApplication(
+                    themes = LocalThemeStylesheets(data, ThemeSelection.BUNDLED, embeddedThemeBuiltins()),
                     serving = ServingRuntime(
                         index = ObservedIndexRuntime(
                             builder = builder,

@@ -454,6 +454,7 @@ private fun RouteContext.withMutating(mutate: MutatingFacade): RouteContext =
         read = read,
         mutate = mutate,
         proposals = proposals,
+        themes = themes,
         registry = registry,
         availability = availability,
         convergence = convergence,
