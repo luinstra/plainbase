@@ -14,6 +14,7 @@ export default defineConfig({
       "/assets/": "http://localhost:8080",
       "/browse": "http://localhost:8080",
       "/healthz": "http://localhost:8080",
+      "/_plainbase/": "http://localhost:8080",
     },
   },
   build: {

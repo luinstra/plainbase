@@ -25,6 +25,7 @@ export type SmokeScenario = {
 export type SmokeServer = {
   baseURL: string;
   seed?: SmokeSeed;
+  dataDir: string;
   /** Per-attempt temporary fixture roots; tests may create their own content here. */
   contentDir: string;
   extraDir: string | null;
@@ -173,7 +174,14 @@ export async function startSmokeServer(
     const baseURL = `http://127.0.0.1:${port}`;
     await waitForOwnedBind(processState, logs, startupDeadline);
     await waitForHealth(processState, baseURL, logs, startupDeadline);
-    return { baseURL, seed, contentDir, extraDir: scenario.roots === "multi" || scenario.roots === "discussion-config" ? extraDir : null, stop };
+    return {
+      baseURL,
+      seed,
+      dataDir,
+      contentDir,
+      extraDir: scenario.roots === "multi" || scenario.roots === "discussion-config" ? extraDir : null,
+      stop,
+    };
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     try {
@@ -203,7 +211,7 @@ export async function startSmokeServer(
   }
 }
 
-async function allocatePort(): Promise<number> {
+export async function allocatePort(): Promise<number> {
   const probe = createServer();
   await new Promise<void>((resolve, reject) => {
     probe.once("error", reject);

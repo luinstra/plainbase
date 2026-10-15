@@ -5,7 +5,6 @@ import { createRoot } from "react-dom/client";
 import { ApiError } from "./api/client";
 import { createAppRouter } from "./router";
 import { applyTheme, resolveTheme } from "./theme";
-import "./styles/app.css";
 
 // Re-assert the bootstrap theme (index.html applied it pre-paint) so React-side state agrees.
 applyTheme(resolveTheme());

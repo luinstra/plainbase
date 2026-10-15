@@ -2,6 +2,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseSync, Visitor } from "vite";
 import { describe, expect, it } from "vitest";
 
 const ownFile = fileURLToPath(import.meta.url);
@@ -106,6 +107,28 @@ function firstArgument(source: string, start: number): string {
   return source.slice(start).trim();
 }
 
+function importSpecifiers(source: string, filename = "module.tsx"): string[] {
+  const parsed = parseSync(filename, source, { preserveParens: false });
+  if (parsed.errors.length > 0) throw new Error(`Cannot scan module imports in ${filename}: ${parsed.errors[0].message}`);
+  const specifiers: string[] = [];
+  new Visitor({
+    ImportDeclaration(node) { specifiers.push(node.source.value); },
+    ExportAllDeclaration(node) { specifiers.push(node.source.value); },
+    ExportNamedDeclaration(node) {
+      if (node.source) specifiers.push(node.source.value);
+    },
+    ImportExpression(node) {
+      const target = node.source;
+      if (target.type === "Literal" && typeof target.value === "string") specifiers.push(target.value);
+      else if (target.type === "TemplateLiteral" && target.expressions.length === 0) {
+        const value = target.quasis[0].value.cooked;
+        if (value !== null) specifiers.push(value);
+      }
+    },
+  }).visit(parsed.program);
+  return specifiers;
+}
+
 function writeArguments(source: string): string[] {
   const argumentsFound: string[] = [];
   for (let index = 0; index < source.length; index++) {
@@ -163,13 +186,66 @@ describe("candidate theme boundaries", () => {
       "tailwindcss",
     ]);
     expect(cssImports(path.join(frontendRoot, "src", "styles", "themes"))).toEqual([]);
-    const stylesheetLinks = [...readFileSync(indexFile, "utf8").matchAll(/<link\b[^>]*>/gi)]
+    const html = readFileSync(indexFile, "utf8");
+    const stylesheetLinks = [...html.matchAll(/<link\b[^>]*>/gi)]
       .filter(([tag]) => {
         const relation = tag.match(/\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
         return relation && (relation[1] ?? relation[2] ?? relation[3]).toLowerCase().split(/\s+/).includes("stylesheet");
-      })
-      .map(([tag]) => tag);
-    expect(stylesheetLinks).toEqual([]);
+      });
+    expect(stylesheetLinks).toHaveLength(1);
+    const [appLink] = stylesheetLinks;
+    expect(appLink[0]).toMatch(/\bhref\s*=\s*["']\/src\/styles\/app\.css["']/);
+    expect(appLink[0]).not.toMatch(/\s(?:media|disabled)(?:\s|=|\/?>)/i);
+    const bootstrap = html.match(/<script\b(?![^>]*\bsrc\s*=)[^>]*>[\s\S]*?<\/script>/i);
+    expect(bootstrap).not.toBeNull();
+    expect(appLink.index).toBeGreaterThanOrEqual(bootstrap!.index! + bootstrap![0].length);
+    expect(appLink.index! + appLink[0].length).toBeLessThanOrEqual(html.indexOf("</head>"));
+  });
+
+  it("application modules import no stylesheets", () => {
+    const offending = filesUnder(path.join(frontendRoot, "src"))
+      .filter((file) => /\.(ts|tsx)$/.test(file))
+      .filter((file) => !path.relative(frontendRoot, file).split(path.sep).includes("__tests__"))
+      .filter((file) => importSpecifiers(readFileSync(file, "utf8"), file).some((specifier) => /\.css(?:\?|$)/.test(specifier)))
+      .map((file) => path.relative(frontendRoot, file));
+    expect(offending, `stylesheet imports in application modules: ${offending.join(", ")}`).toEqual([]);
+  });
+
+  it("tripwire: the import scan recognizes stylesheet specifiers and skips comments and strings", () => {
+    const imports = [
+      ['import sheet from "./a.css";', "./a.css"],
+      ['export { sheet } from "./a.css";', "./a.css"],
+      ['export * from "./a.css";', "./a.css"],
+      ['export * as sheet from "./a.css";', "./a.css"],
+      ['export type { Sheet } from "./a.css";', "./a.css"],
+      ['import "./a.css";', "./a.css"],
+      ['import("./a.css");', "./a.css"],
+      ['import("./a.css?inline");', "./a.css?inline"],
+      ['import { sheet } /* note */ from "./a.css";', "./a.css"],
+      ['import(/* note */ "./a.css", { with: { type: "css" } });', "./a.css"],
+      ['import(`./a.css`);', "./a.css"],
+      ['`${import("./a.css")}`', "./a.css"],
+    ];
+    for (const [source, specifier] of imports) {
+      expect(importSpecifiers(source), source).toEqual([specifier]);
+      expect(importSpecifiers(source).filter((value) => /\.css(?:\?|$)/.test(value)), source).toEqual([specifier]);
+    }
+    for (const source of [
+      '// import "./a.css";',
+      '// export * from "./a.css";',
+      '/* import("./a.css"); */',
+      'const example = \'import "./a.css";\';',
+      'const example = `import "./a.css";`;',
+      'loader.import("./a.css");',
+      'import("./a.css" + suffix);',
+      'import(`./${name}.css`);',
+    ]) expect(importSpecifiers(source), source).toEqual([]);
+  });
+
+  it("tripwire: a quote in a regular expression does not hide a later stylesheet import", () => {
+    expect(importSpecifiers(`const pattern = /'/; import("./a.css");`)).toEqual(["./a.css"]);
+    expect(importSpecifiers(`const pattern = /["']/; import("./a.css");`)).toEqual(["./a.css"]);
+    expect(importSpecifiers(`const ratio = total / (await import("./a.css")).value / count;`)).toEqual(["./a.css"]);
   });
 
   it("theme candidates and fixtures are not public assets", () => {
