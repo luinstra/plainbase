@@ -9,16 +9,21 @@
     <link rel="preload" href="/fonts/jetbrains-mono-400.woff2" as="font" type="font/woff2" crossorigin />
     <title>Plainbase</title>
     <script>
-      // Pre-paint theme bootstrap (inline copy of theme.ts's resolveTheme) — avoids a
-      // light-mode flash before React mounts. Pure data-theme swap; tokens.css does the rest.
+      // Pre-paint resolveDisplayMode twin: stored choice, then system, with light on system failure.
       (function () {
+        var stored = null;
         try {
-          var stored = localStorage.getItem("pb-theme");
-          var dark = stored === "dark" || (stored !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
-          if (dark) document.documentElement.dataset.theme = "dark";
-        } catch (e) {
-          /* no localStorage (privacy mode) — fall through to light */
+          stored = localStorage.getItem("pb-theme");
+        } catch (e) {}
+        var dark = stored === "dark";
+        if (stored !== "light" && stored !== "dark") {
+          try {
+            dark = matchMedia("(prefers-color-scheme: dark)").matches;
+          } catch (e) {
+            dark = false;
+          }
         }
+        if (dark) document.documentElement.dataset.theme = "dark";
       })();
     </script>
     <link rel="stylesheet" href="/src/styles/app.css" />

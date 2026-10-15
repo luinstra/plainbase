@@ -4,10 +4,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ApiError } from "./api/client";
 import { createAppRouter } from "./router";
-import { applyTheme, resolveTheme } from "./theme";
+import { applyDisplayMode, getDisplayMode } from "./theme";
 
-// Re-assert the bootstrap theme (index.html applied it pre-paint) so React-side state agrees.
-applyTheme(resolveTheme());
+// Prime the display-mode owner from the same rule index.html applied pre-paint, and project it onto the root.
+applyDisplayMode(getDisplayMode());
 
 const queryClient = new QueryClient({
   defaultOptions: {

@@ -3,14 +3,20 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { APIRequestContext } from "@playwright/test";
 import { expect, test, type Page, type Route } from "./smoke-fixtures";
-import { gotoAndWaitForSearchReady } from "./helpers";
+import { gotoAndWaitForSearchReady, waitForSearchReady } from "./helpers";
 import { normalizeColors } from "./theme-colors";
 
 type Violation = { violatedDirective: string; blockedURI: string };
 type Color = [number, number, number, number];
 type FirstMount = { time: number; backgroundColor: string; color: string; textRendering: string; overrideLoaded: boolean };
 type FirstLogo = { light: string; dark: string };
-type ThemeRecords = { __cspViolations: Violation[]; __pbFirstMount?: FirstMount; __pbFirstLogo?: FirstLogo };
+type ThemeTransition = { from: string | null; to: string | null; rootEmpty: boolean };
+type ThemeRecords = {
+  __cspViolations: Violation[];
+  __pbFirstMount?: FirstMount;
+  __pbFirstLogo?: FirstLogo;
+  __pbThemeTransitions: ThemeTransition[];
+};
 type PaintState = { theme: string | null; backgroundColor: string; color: string; rootEmpty: boolean; violations: Violation[] };
 type FrozenMode = {
   sections: {
@@ -95,6 +101,26 @@ async function recordFirstMount(page: Page): Promise<void> {
   });
 }
 
+async function recordThemeTransitions(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const records = window as unknown as ThemeRecords;
+    records.__pbThemeTransitions = [];
+    const observer = new MutationObserver((mutations) => {
+      const changes = mutations.filter((mutation) => mutation.target === document.documentElement);
+      changes.forEach((mutation, index) => {
+        const from = mutation.oldValue;
+        const to = index + 1 < changes.length ? changes[index + 1].oldValue : document.documentElement.getAttribute("data-theme");
+        if (from !== to) records.__pbThemeTransitions.push({
+          from,
+          to,
+          rootEmpty: (document.getElementById("root")?.childElementCount ?? 0) === 0,
+        });
+      });
+    });
+    observer.observe(document, { attributes: true, subtree: true, attributeOldValue: true, attributeFilter: ["data-theme"] });
+  });
+}
+
 async function readPaintState(page: Page): Promise<PaintState | null> {
   return page.evaluate(() => {
     if (!document.body) return null;
@@ -103,7 +129,7 @@ async function readPaintState(page: Page): Promise<PaintState | null> {
       theme: document.documentElement.getAttribute("data-theme"),
       backgroundColor: style.backgroundColor,
       color: style.color,
-      rootEmpty: document.getElementById("root")?.childElementCount === 0,
+      rootEmpty: (document.getElementById("root")?.childElementCount ?? 0) === 0,
       violations: (window as unknown as ThemeRecords).__cspViolations,
     };
   });
@@ -343,6 +369,141 @@ test("first mount waits for a delayed override sheet", async ({ page, request, s
     expect.soft(colorDifference(colors[0], expected.backgroundColor), "first mount background").toBeLessThanOrEqual(colorTolerance);
     expect.soft(colorDifference(colors[1], expected.color), "first mount foreground").toBeLessThanOrEqual(colorTolerance);
     expect.soft(first.logos, "first logo visibility").toEqual(expected.logos);
+  } finally {
+    override.abort();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+for (const scenario of [
+  { name: "first paint follows the system when the storage getter throws", storage: "getter", mode: "dark" },
+  { name: "first paint follows the system when reading storage throws", storage: "getItem", mode: "dark" },
+  { name: "a stored light choice stays light through first mount", storage: "light", mode: "light" },
+  { name: "first paint and mount stay light when color-scheme queries throw", storage: "system", mode: "light" },
+] as const) {
+  test(scenario.name, async ({ page, request, smokeServer }, testInfo) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.addInitScript((storage) => {
+      if (storage === "getter") {
+        Object.defineProperty(window, "localStorage", { configurable: true, get() { throw new Error("Storage unavailable"); } });
+      } else if (storage === "getItem") {
+        Storage.prototype.getItem = () => { throw new Error("Storage read unavailable"); };
+      } else if (storage === "light") {
+        localStorage.setItem("pb-theme", "light");
+      } else {
+        window.matchMedia = (query) => {
+          if (query.includes("prefers-color-scheme")) throw new Error("Color-scheme query unavailable");
+          return {
+            matches: false, media: query, onchange: null,
+            addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; },
+          };
+        };
+      }
+    }, scenario.storage);
+    await captureViolations(page);
+    await recordFirstMount(page);
+    await recordThemeTransitions(page);
+    const shellURL = new URL("/docs/scratch/todo", smokeServer.baseURL).href;
+    const entryURL = await entryModuleURL(request, shellURL);
+    const entry = holdEntry();
+    const shellRoute = documentRoute(false);
+    const expected = expectedAppearance(scenario.mode);
+    try {
+      await page.route(shellURL, shellRoute.handler);
+      await page.route(entryURL, entry.handler);
+      await page.goto(shellURL, { waitUntil: "commit" });
+      await expect.poll(() => entry.requested).toBe(true);
+      await expect.poll(() => page.evaluate(() => Boolean(document.body) && Array.from(document.styleSheets).some((sheet) =>
+        sheet.href && /^\/assets\/[^/]+\.css$/.test(new URL(sheet.href).pathname) && sheet.cssRules.length > 0))).toBe(true);
+      const held = await readPaintState(page);
+      if (!held) throw new Error("Missing body after app stylesheet readiness");
+      const heldColors = await normalizeColors(page, [held.backgroundColor, held.color]);
+      expect.soft(held.theme, "held theme").toBe(scenario.mode === "dark" ? "dark" : null);
+      expect.soft(held.rootEmpty, "root empty while entry is held").toBe(true);
+      expect.soft(colorDifference(heldColors[0], expected.backgroundColor), "held background").toBeLessThanOrEqual(colorTolerance);
+      expect.soft(colorDifference(heldColors[1], expected.color), "held foreground").toBeLessThanOrEqual(colorTolerance);
+      entry.release();
+      await expect.poll(() => page.evaluate(() => {
+        const records = window as unknown as ThemeRecords;
+        return Boolean(records.__pbFirstMount && records.__pbFirstLogo);
+      })).toBe(true);
+      await waitForSearchReady(page);
+      const first = await page.evaluate(() => {
+        const records = window as unknown as ThemeRecords;
+        return {
+          mount: records.__pbFirstMount,
+          logos: records.__pbFirstLogo,
+          transitions: records.__pbThemeTransitions,
+          violations: records.__cspViolations,
+        };
+      });
+      if (!first.mount || !first.logos) throw new Error("First-mount observations missing after readiness");
+      const colors = await normalizeColors(page, [first.mount.backgroundColor, first.mount.color]);
+      const snapshotPath = testInfo.outputPath("display-mode-paint.json");
+      writeFileSync(snapshotPath, JSON.stringify({ held, heldColors, first, colors }, null, 2) + "\n");
+      await testInfo.attach("display-mode-paint", { path: snapshotPath, contentType: "application/json" });
+      expect.soft(colorDifference(colors[0], expected.backgroundColor), "first mount background").toBeLessThanOrEqual(colorTolerance);
+      expect.soft(colorDifference(colors[1], expected.color), "first mount foreground").toBeLessThanOrEqual(colorTolerance);
+      expect.soft(first.logos, "first logo visibility").toEqual(expected.logos);
+      expect.soft(first.transitions, "complete theme transitions").toEqual(scenario.mode === "dark"
+        ? [{ from: null, to: "dark", rootEmpty: true }]
+        : []);
+      expect.soft(first.violations, "CSP violations").toEqual([]);
+      expect.soft(shellRoute.observation?.csp, "served bootstrap hash").toContain(shellRoute.observation?.originalBootstrapHash);
+    } finally {
+      entry.abort();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+}
+
+test("unreadable storage keeps dark first paint while an override sheet is delayed", async ({ page, request, smokeServer }, testInfo) => {
+  writeFileSync(path.join(smokeServer.dataDir, "custom.css"), probe);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", { configurable: true, get() { throw new Error("Storage unavailable"); } });
+  });
+  await captureViolations(page);
+  await recordFirstMount(page);
+  const shellURL = new URL("/docs/scratch/todo", smokeServer.baseURL).href;
+  const entryURL = await entryModuleURL(request, shellURL);
+  const override = holdEntry();
+  const settleMs = 1500;
+  const expected = expectedAppearance("dark");
+  try {
+    await page.route("**/_plainbase/custom.css", override.handler);
+    const entryResponse = page.waitForResponse(entryURL);
+    await page.goto(shellURL, { waitUntil: "commit" });
+    await (await entryResponse).finished();
+    await expect.poll(() => override.requested).toBe(true);
+    await page.waitForTimeout(settleMs);
+    const settled = await readPaintState(page);
+    if (!settled) throw new Error("Missing body while override is held");
+    const settledColors = await normalizeColors(page, [settled.backgroundColor, settled.color]);
+    expect.soft(settled.theme, "theme while override is held").toBe("dark");
+    expect.soft(settled.rootEmpty, "root empty while override is held").toBe(true);
+    expect.soft(colorDifference(settledColors[0], expected.backgroundColor), "settled background").toBeLessThanOrEqual(colorTolerance);
+    expect.soft(colorDifference(settledColors[1], expected.color), "settled foreground").toBeLessThanOrEqual(colorTolerance);
+    override.release();
+    await expect.poll(() => page.evaluate(() => {
+      const records = window as unknown as ThemeRecords;
+      return Boolean(records.__pbFirstMount && records.__pbFirstLogo);
+    })).toBe(true);
+    const first = await page.evaluate(() => {
+      const records = window as unknown as ThemeRecords;
+      return { mount: records.__pbFirstMount, logos: records.__pbFirstLogo, violations: records.__cspViolations };
+    });
+    if (!first.mount || !first.logos) throw new Error("First-mount observations missing after readiness");
+    const colors = await normalizeColors(page, [first.mount.backgroundColor, first.mount.color]);
+    const snapshotPath = testInfo.outputPath("unreadable-storage-override.json");
+    writeFileSync(snapshotPath, JSON.stringify({ settleMs, settled, settledColors, first, colors }, null, 2) + "\n");
+    await testInfo.attach("unreadable-storage-override", { path: snapshotPath, contentType: "application/json" });
+    expect.soft(first.mount.textRendering.toLowerCase(), "first mount operator text-rendering").toBe("geometricprecision");
+    expect.soft(first.mount.overrideLoaded, "override loaded at first mount").toBe(true);
+    expect.soft(colorDifference(colors[0], expected.backgroundColor), "first mount background").toBeLessThanOrEqual(colorTolerance);
+    expect.soft(colorDifference(colors[1], expected.color), "first mount foreground").toBeLessThanOrEqual(colorTolerance);
+    expect.soft(first.logos, "first logo visibility").toEqual(expected.logos);
+    expect.soft(first.violations, "CSP violations").toEqual([]);
   } finally {
     override.abort();
     await page.unrouteAll({ behavior: "wait" });
