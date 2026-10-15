@@ -10,6 +10,7 @@ import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.get
@@ -130,13 +131,21 @@ class RestRedirectTest : FunSpec({
                     val misdirected = HttpStatusCode(421, "Misdirected Request")
                     client.get("/docs/guides/deploy-guide").status shouldBe misdirected
                     client.get("/docs/anything").status shouldBe misdirected // even the shell-fallback arm refuses
-                    client.get("/docs").status shouldBe misdirected // the bare /docs shell arm refuses too
+                    val docs = client.get("/docs")
+                    docs.status shouldBe misdirected // the bare /docs shell arm refuses too
+                    docs.headers.getAll(HttpHeaders.CacheControl).shouldBeNull()
                     // The bare `/` REDIRECT arm refuses too. A3 names redirect arms explicitly: the 302 to the
                     // primary is a downgrade, not a deny behavior, so the guard runs BEFORE respondRedirect.
                     // This row is the falsifier that arm had none of when it was added.
-                    client.get("/").status shouldBe misdirected
-                    client.get("/admin").status shouldBe misdirected
-                    client.get("/index.html").status shouldBe misdirected
+                    val home = client.get("/")
+                    home.status shouldBe misdirected
+                    home.headers.getAll(HttpHeaders.CacheControl).shouldBeNull()
+                    val admin = client.get("/admin")
+                    admin.status shouldBe misdirected
+                    admin.headers.getAll(HttpHeaders.CacheControl).shouldBeNull()
+                    val index = client.get("/index.html")
+                    index.status shouldBe misdirected
+                    index.headers.getAll(HttpHeaders.CacheControl).shouldBeNull()
                     client.get("/browse/guides/deploy-guide.md").status shouldBe misdirected
                     client.get("/p/$id").status shouldBe misdirected
 

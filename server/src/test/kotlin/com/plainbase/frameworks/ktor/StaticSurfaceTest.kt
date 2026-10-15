@@ -20,7 +20,7 @@ private const val SHELL_CSP = "Content-Security-Policy"
 private const val REFERRER_POLICY = "Referrer-Policy"
 private const val NOSNIFF = "X-Content-Type-Options"
 
-private fun assertShellHeaders(response: io.ktor.client.statement.HttpResponse) {
+internal fun assertShellHeaders(response: io.ktor.client.statement.HttpResponse) {
     response.headers[SHELL_CSP].shouldNotBeNull()
     response.headers[REFERRER_POLICY] shouldBe "strict-origin-when-cross-origin"
     response.headers[NOSNIFF] shouldBe "nosniff"

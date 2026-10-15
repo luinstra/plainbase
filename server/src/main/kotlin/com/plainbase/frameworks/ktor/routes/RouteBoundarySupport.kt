@@ -230,6 +230,7 @@ private suspend fun ApplicationCall.respondShell(status: HttpStatusCode) {
     if (shell == null) {
         respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "SPA shell is not bundled")
     } else {
+        response.header(HttpHeaders.CacheControl, CACHE_CONTROL_NO_CACHE)
         // The content type is load-bearing, not cosmetic: shellSecurityHeadersPlugin gates the shell
         // CSP on it alone, so bytes emitted without it render the shell with no CSP at all.
         respondBytes(shell, ContentType.Text.Html.withCharset(Charsets.UTF_8), status)
@@ -276,6 +277,9 @@ internal const val CONTENT_SECURITY_POLICY = "Content-Security-Policy"
 
 /** The MIME-sniff defense header (not a named constant in this Ktor); shared by the asset + shell paths. */
 internal const val X_CONTENT_TYPE_OPTIONS = "X-Content-Type-Options"
+
+/** Revalidate shell HTML on every request. */
+internal const val CACHE_CONTROL_NO_CACHE = "no-cache"
 
 /** The small extension → content-type map for served assets (§A4); unknown → octet-stream. */
 internal fun assetContentType(fileName: String): ContentType {
