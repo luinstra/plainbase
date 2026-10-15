@@ -7,6 +7,7 @@ import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.filesystem.DataDirLock
+import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -41,6 +42,15 @@ class RootCommandTest : FunSpec({
             block(World(base, data, content))
         } finally {
             base.toFile().deleteRecursively()
+        }
+    }
+
+    test("root list remains available when theme values are rejected") {
+        world(plainbaseConf = "theme { light = \"../paper.css\", dark = 5 }") { w ->
+            assertSoftly {
+                val err = captureStderr { w.root("list") shouldBe 0 }
+                err.lineSequence().filter { it.startsWith("root list:") }.toList() shouldBe emptyList()
+            }
         }
     }
 

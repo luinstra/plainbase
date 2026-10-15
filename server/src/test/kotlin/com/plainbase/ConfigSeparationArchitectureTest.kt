@@ -35,6 +35,7 @@ class ConfigSeparationArchitectureTest : FunSpec({
         configRoot.resolve("AuthConfig.kt"),
         configRoot.resolve("ConfigValuePolicy.kt"),
         plainbase,
+        configRoot.resolve("ThemeConfig.kt"),
     )
     val loader = configRoot.resolve("ConfigLoader.kt")
     val decoder = configRoot.resolve("ConfigDecoder.kt")
@@ -164,8 +165,10 @@ class ConfigSeparationArchitectureTest : FunSpec({
         Regex("(?m)^data class AuthConfig\\b").findAll(stripComments(valueFiles[4].readText())).count() shouldBe 1
         Regex("(?m)^internal object ConfigValuePolicy\\b").findAll(stripComments(valueFiles[5].readText())).count() shouldBe 1
         Regex("(?m)^data class PlainbaseConfig\\b").findAll(stripComments(plainbase.readText())).count() shouldBe 1
+        Regex("(?m)^data class ThemeConfig\\b").findAll(stripComments(valueFiles[7].readText())).count() shouldBe 1
         val policyCode = stripComments(valueFiles[5].readText())
         policyCode shouldContain "fun storageWarnings(config: PlainbaseConfig): List<String>"
+        policyCode shouldContain "fun themeWarnings(config: PlainbaseConfig): List<String>"
         policyCode shouldContain "fun ignoredContentDirWarning(config: PlainbaseConfig): String?"
         policyCode shouldContain "fun editableGlobWarnings(config: PlainbaseConfig): List<String>"
         Regex("(?m)^internal object ConfigLoader\\b").findAll(stripComments(loader.readText())).count() shouldBe 1

@@ -51,6 +51,7 @@ import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
@@ -237,6 +238,39 @@ class ServerRunTest : FunSpec({
                 } finally {
                     applicationLogger.detachAppender(appender)
                 }
+            }
+        }
+    }
+
+    test("a rejected theme warns once before the bind refusal without echoing its value") {
+        withLocalFixture { content, data ->
+            Files.writeString(data.resolve("plainbase.conf"), "theme { light = \"../zz-sentinel-a1.css\" }")
+            val timeline = Collections.synchronizedList(mutableListOf<String>())
+            val output = RecordingOutput(timeline)
+            val applicationLogger = LoggerFactory.getLogger("com.plainbase.Application") as Logger
+            val appender = LogTimelineAppender(timeline).apply { start() }
+            applicationLogger.addAppender(appender)
+            try {
+                val config = ConfigLoader.fromEnvAndFile(
+                    mapOf(
+                        "CONTENT_DIR" to content.toString(),
+                        "DATA_DIR" to data.toString(),
+                        "PLAINBASE_HOST" to "0.0.0.0",
+                        "PLAINBASE_GIT_ENABLED" to "false",
+                    ),
+                )
+                runServerBounded { runServer(config, output) } shouldBe 1
+                val expectedWarning =
+                    "warn:theme.light is not a DATA_DIR stylesheet name: 1 to 64 ASCII letters, digits, '_' or '-' " +
+                        "starting with a letter or digit, then .css; serving the bundled light theme"
+                val bindError = timeline.indexOfFirst { it.startsWith("error:serve: binds 0.0.0.0") }
+                assertSoftly {
+                    timeline.count { it == expectedWarning } shouldBe 1
+                    (timeline.indexOf(expectedWarning) < bindError) shouldBe true
+                    timeline.none { it.contains("zz-sentinel") } shouldBe true
+                }
+            } finally {
+                applicationLogger.detachAppender(appender)
             }
         }
     }
