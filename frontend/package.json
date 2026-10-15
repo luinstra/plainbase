@@ -23,6 +23,7 @@
     "@lezer/highlight": "1.2.3",
     "@tanstack/react-query": "5.102.8",
     "@tanstack/react-router": "1.170.36",
+    "colorjs.io": "0.7.1",
     "highlight.js": "11.12.0",
     "mermaid": "12.0.0",
     "react": "19.3.0",

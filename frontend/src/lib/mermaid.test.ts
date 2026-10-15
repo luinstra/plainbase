@@ -1,5 +1,6 @@
 import { waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { fakeSystem } from "../__tests__/displayModeTestSupport";
 
 type RenderResult = { svg: string };
 type Render = (id: string, source: string, scratch: HTMLDivElement) => Promise<RenderResult>;
@@ -15,8 +16,30 @@ function fakeMermaid(): FakeMermaid {
   };
 }
 
-async function loadHelper(fake: FakeMermaid, onImport = () => undefined) {
+function deferredRender() {
+  let resolve!: (result: RenderResult) => void;
+  const promise = new Promise<RenderResult>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function observeTitles(container: HTMLElement) {
+  const titles: string[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node instanceof Element) {
+          for (const title of node.querySelectorAll("svg > title")) titles.push(title.textContent ?? "");
+        }
+      }
+    }
+  });
+  observer.observe(container, { childList: true, subtree: true });
+  return { titles, disconnect: () => observer.disconnect() };
+}
+
+async function loadHelper(fake: FakeMermaid, onImport = () => undefined, convert = (color: string) => color) {
   vi.resetModules();
+  vi.doMock("./mermaidColor", () => ({ toMermaidColor: convert }));
   vi.doMock("mermaid", () => {
     onImport();
     return { default: fake };
@@ -43,9 +66,12 @@ async function waitForDiagrams(container: HTMLElement, count: number): Promise<v
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
+  localStorage.clear();
   document.body.innerHTML = "";
   document.documentElement.removeAttribute("data-theme");
   vi.doUnmock("mermaid");
+  vi.doUnmock("./mermaidColor");
   vi.resetModules();
 });
 
@@ -134,6 +160,7 @@ describe("renderMermaidBlocks", () => {
     const fake = fakeMermaid();
     let attempts = 0;
     vi.resetModules();
+    vi.doMock("./mermaidColor", () => ({ toMermaidColor: (color: string) => color }));
     vi.doMock("mermaid", () => {
       attempts += 1;
       if (attempts === 1) throw new Error("load failed");
@@ -203,6 +230,8 @@ describe("renderMermaidBlocks", () => {
   });
 
   it("keeps the successful diagram until a theme replacement is ready and cleans pending scratch on unmount", async () => {
+    const system = fakeSystem();
+    vi.stubGlobal("matchMedia", system.matchMedia);
     const fake = fakeMermaid();
     let resolveTheme: ((result: RenderResult) => void) | undefined;
     fake.render
@@ -213,20 +242,17 @@ describe("renderMermaidBlocks", () => {
         }),
       );
     const { renderMermaidBlocks } = await loadHelper(fake);
+    const { toggleDisplayMode } = await import("../theme");
     const container = diagramContainer(["flowchart LR\nA --> B"]);
     const cleanup = renderMermaidBlocks(container);
     await waitForDiagrams(container, 1);
     const initialDiagram = container.querySelector("[data-pb-mermaid]");
 
-    document.documentElement.dataset.theme = "dark";
+    toggleDisplayMode();
     await waitFor(() => expect(fake.render).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(document.body.querySelectorAll("[data-pb-mermaid-scratch]")).toHaveLength(1));
     expect(container.querySelector("[data-pb-mermaid]")).toBe(initialDiagram);
     expect(container.querySelector("pre")?.hidden).toBe(true);
-
-    document.documentElement.setAttribute("data-theme", "dark");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fake.render).toHaveBeenCalledTimes(2);
 
     cleanup();
     expect(document.body.querySelectorAll("[data-pb-mermaid-scratch]")).toHaveLength(0);
@@ -236,6 +262,8 @@ describe("renderMermaidBlocks", () => {
   });
 
   it("restores Mermaid source when a theme replacement fails", async () => {
+    const system = fakeSystem();
+    vi.stubGlobal("matchMedia", system.matchMedia);
     const fake = fakeMermaid();
     fake.render
       .mockImplementationOnce(async () => ({ svg: "<svg><title>light</title></svg>" }))
@@ -243,11 +271,12 @@ describe("renderMermaidBlocks", () => {
         throw new Error("theme failed");
       });
     const { renderMermaidBlocks } = await loadHelper(fake);
+    const { toggleDisplayMode } = await import("../theme");
     const container = diagramContainer(["flowchart LR\nA --> B"]);
     const cleanup = renderMermaidBlocks(container);
     await waitForDiagrams(container, 1);
 
-    document.documentElement.dataset.theme = "dark";
+    toggleDisplayMode();
     await waitFor(() => expect(fake.render).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(container.querySelector("pre")?.hidden).toBe(false));
 
@@ -255,5 +284,210 @@ describe("renderMermaidBlocks", () => {
     expect(container.querySelector("code")?.textContent).toBe("flowchart LR\nA --> B");
     expect(container.querySelector('[role="status"]')).not.toBeNull();
     cleanup();
+  });
+
+  it("never inserts an obsolete theme render while a newer render is queued", async () => {
+    const system = fakeSystem();
+    vi.stubGlobal("matchMedia", system.matchMedia);
+    const pending = deferredRender();
+    const latest = deferredRender();
+    const fake = fakeMermaid();
+    fake.render
+      .mockResolvedValueOnce({ svg: "<svg><title>A</title></svg>" })
+      .mockImplementationOnce(() => pending.promise)
+      .mockImplementationOnce(() => latest.promise);
+    const { renderMermaidBlocks } = await loadHelper(fake);
+    const { toggleDisplayMode } = await import("../theme");
+    const container = diagramContainer(["flowchart LR\nA --> B"]);
+    const log = observeTitles(container);
+    const cleanup = renderMermaidBlocks(container);
+    try {
+      await waitFor(() => expect(log.titles).toEqual(["A"]));
+      toggleDisplayMode();
+      await waitFor(() => expect(fake.render).toHaveBeenCalledTimes(2));
+      toggleDisplayMode();
+      await waitFor(() => expect(document.documentElement.dataset.theme).toBeUndefined());
+
+      pending.resolve({ svg: "<svg><title>B</title></svg>" });
+      await waitFor(() => expect(fake.render).toHaveBeenCalledTimes(3));
+      expect(log.titles).toEqual(["A"]);
+      latest.resolve({ svg: "<svg><title>C</title></svg>" });
+      await waitFor(() => expect(log.titles).toEqual(["A", "C"]));
+
+      expect(log.titles).not.toContain("B");
+      expect(container.querySelector("svg > title")?.textContent).toBe("C");
+    } finally {
+      cleanup();
+      log.disconnect();
+    }
+  });
+
+  it("inserts a completed replacement after one display mode change", async () => {
+    const system = fakeSystem();
+    vi.stubGlobal("matchMedia", system.matchMedia);
+    const pending = deferredRender();
+    const fake = fakeMermaid();
+    fake.render
+      .mockResolvedValueOnce({ svg: "<svg><title>A</title></svg>" })
+      .mockImplementationOnce(() => pending.promise);
+    const { renderMermaidBlocks } = await loadHelper(fake);
+    const { toggleDisplayMode } = await import("../theme");
+    const container = diagramContainer(["flowchart LR\nA --> B"]);
+    const log = observeTitles(container);
+    const cleanup = renderMermaidBlocks(container);
+    try {
+      await waitFor(() => expect(log.titles).toEqual(["A"]));
+      toggleDisplayMode();
+      await waitFor(() => expect(fake.render).toHaveBeenCalledTimes(2));
+      pending.resolve({ svg: "<svg><title>B</title></svg>" });
+
+      await waitFor(() => expect(log.titles).toEqual(["A", "B"]));
+      expect(container.querySelector("svg > title")?.textContent).toBe("B");
+    } finally {
+      cleanup();
+      log.disconnect();
+    }
+  });
+
+  it("skips an obsolete queued block before rendering it in the current display mode", async () => {
+    const system = fakeSystem();
+    vi.stubGlobal("matchMedia", system.matchMedia);
+    const oldFirst = deferredRender();
+    const currentFirst = deferredRender();
+    const fake = fakeMermaid();
+    fake.render
+      .mockImplementationOnce(() => oldFirst.promise)
+      .mockImplementationOnce(() => currentFirst.promise)
+      .mockResolvedValueOnce({ svg: "<svg><title>second</title></svg>" });
+    const { renderMermaidBlocks } = await loadHelper(fake);
+    const { toggleDisplayMode } = await import("../theme");
+    const firstSource = "flowchart LR\nA --> B";
+    const secondSource = "sequenceDiagram\nAlice->>Bob: hi";
+    const container = diagramContainer([firstSource, secondSource]);
+    const log = observeTitles(container);
+    const cleanup = renderMermaidBlocks(container);
+    try {
+      await waitFor(() => expect(fake.render).toHaveBeenCalledTimes(1));
+      toggleDisplayMode();
+      await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+      oldFirst.resolve({ svg: "<svg><title>obsolete</title></svg>" });
+      await waitFor(() => expect(fake.render).toHaveBeenCalledTimes(2));
+      currentFirst.resolve({ svg: "<svg><title>first</title></svg>" });
+      await waitForDiagrams(container, 2);
+      await waitFor(() => expect(log.titles).toEqual(["first", "second"]));
+
+      expect(fake.render.mock.calls.filter(([, source]) => source === secondSource)).toHaveLength(1);
+      expect(fake.render.mock.calls.filter(([, source]) => source === firstSource)).toHaveLength(2);
+      expect(fake.render).toHaveBeenCalledTimes(3);
+      expect(container.querySelectorAll('[data-pb-mermaid-theme="dark"]')).toHaveLength(2);
+    } finally {
+      cleanup();
+      log.disconnect();
+    }
+  });
+
+  it("listens to display mode while diagrams are mounted and stops on cleanup", async () => {
+    const system = fakeSystem();
+    vi.stubGlobal("matchMedia", system.matchMedia);
+    const pending = deferredRender();
+    const fake = fakeMermaid();
+    fake.render.mockImplementationOnce(() => pending.promise);
+    const { renderMermaidBlocks } = await loadHelper(fake);
+    const container = diagramContainer(["flowchart LR\nA --> B"]);
+    const log = observeTitles(container);
+    const cleanup = renderMermaidBlocks(container);
+    try {
+      await waitFor(() => expect(fake.render).toHaveBeenCalledTimes(1));
+      pending.resolve({ svg: "<svg><title>diagram</title></svg>" });
+      await waitFor(() => expect(log.titles).toEqual(["diagram"]));
+
+      expect.soft(system.activeListeners, "mounted system listeners").toBe(1);
+      cleanup();
+      expect.soft(system.activeListeners, "system listeners after cleanup").toBe(0);
+    } finally {
+      cleanup();
+      log.disconnect();
+    }
+  });
+
+  it("stops listening to display mode when a rerender finds no diagram blocks", async () => {
+    const system = fakeSystem();
+    vi.stubGlobal("matchMedia", system.matchMedia);
+    const fake = fakeMermaid();
+    const { renderMermaidBlocks } = await loadHelper(fake);
+    const { toggleDisplayMode } = await import("../theme");
+    const container = diagramContainer(["flowchart LR\nA --> B"]);
+    const cleanup = renderMermaidBlocks(container);
+    try {
+      await waitForDiagrams(container, 1);
+      expect.soft(system.activeListeners, "mounted system listeners").toBe(1);
+
+      container.replaceChildren();
+      toggleDisplayMode();
+
+      expect.soft(system.activeListeners, "system listeners when no blocks remain").toBe(0);
+      expect(fake.render).toHaveBeenCalledTimes(1);
+      cleanup();
+      expect.soft(system.activeListeners, "system listeners after cleanup").toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("removes the sampling probe and scratch when conversion fails and keeps the source readable", async () => {
+    const fake = fakeMermaid();
+    const convert = vi.fn((color: string) => {
+      if (convert.mock.calls.length === 3) throw new Error("conversion failed");
+      return color;
+    });
+    const { renderMermaidBlocks } = await loadHelper(fake, undefined, convert);
+    const source = "flowchart LR\nA --> B";
+    const container = diagramContainer([source]);
+    const log = observeTitles(container);
+    const cleanup = renderMermaidBlocks(container);
+    try {
+      await waitFor(() => expect(container.querySelector('[role="status"]')).not.toBeNull());
+
+      expect.soft(document.querySelectorAll("[data-pb-mermaid-probe]")).toHaveLength(0);
+      expect.soft(document.querySelectorAll("[data-pb-mermaid-scratch]")).toHaveLength(0);
+      expect.soft(container.querySelector("pre")?.hidden).toBe(false);
+      expect.soft(container.querySelector("code")?.textContent).toBe(source);
+      expect.soft(container.querySelector('[role="status"]')?.textContent).toContain("source is shown");
+      expect(convert).toHaveBeenCalledTimes(3);
+      expect(fake.render).not.toHaveBeenCalled();
+      expect(log.titles).toEqual([]);
+    } finally {
+      cleanup();
+      log.disconnect();
+    }
+  });
+
+  it("reuses one sampling probe for every token and removes it after conversion succeeds", async () => {
+    const probes: Element[][] = [];
+    const convert = vi.fn((color: string) => {
+      probes.push([...document.querySelectorAll("[data-pb-mermaid-probe]")]);
+      return color;
+    });
+    const pending = deferredRender();
+    const fake = fakeMermaid();
+    fake.render.mockImplementationOnce(() => pending.promise);
+    const { renderMermaidBlocks } = await loadHelper(fake, undefined, convert);
+    const container = diagramContainer(["flowchart LR\nA --> B"]);
+    const log = observeTitles(container);
+    const cleanup = renderMermaidBlocks(container);
+    try {
+      await waitFor(() => expect(fake.render).toHaveBeenCalledTimes(1));
+      pending.resolve({ svg: "<svg><title>diagram</title></svg>" });
+      await waitFor(() => expect(log.titles).toEqual(["diagram"]));
+
+      expect(convert).toHaveBeenCalledTimes(9);
+      expect(probes).toHaveLength(9);
+      expect(probes.every((sample) => sample.length === 1)).toBe(true);
+      expect(new Set(probes.flat()).size).toBe(1);
+      expect(document.querySelectorAll("[data-pb-mermaid-probe]")).toHaveLength(0);
+    } finally {
+      cleanup();
+      log.disconnect();
+    }
   });
 });
