@@ -1,5 +1,5 @@
 {
-  "description": "Unreleased --pb-theme-* CSS inputs, separate from the pb-theme localStorage display-mode key. Floors are minimum consumers; dependency closure may move more.",
+  "description": "Public --pb-theme-* CSS inputs, version 1, separate from the pb-theme localStorage display-mode key. Floors are minimum consumers; dependency closure may move more.",
   "inputs": {
     "--pb-theme-background": {
       "required": true,
@@ -14,7 +14,7 @@
       "builtin-dark": [
         "--pb-surface"
       ],
-      "adaptation": "Base document surface; mode-specific translucent scrim and shadow also depend on it.",
+      "adaptation": "Page background, and the base that default card, muted, border and selection colors mix from.",
       "tinted-base16": "base00",
       "tinted-base24": "base00"
     },
@@ -31,7 +31,7 @@
       "builtin-dark": [
         "--pb-text"
       ],
-      "adaptation": "Base document ink; default card ink and links also depend on it.",
+      "adaptation": "Page text, and the base for default card text, muted text, borders, links, and feedback and syntax colors.",
       "tinted-base16": "base05",
       "tinted-base24": "base05"
     },
@@ -59,7 +59,7 @@
         "--pb-discussion-highlight-edge",
         "--pb-primary-opaque"
       ],
-      "adaptation": "Action fill keeps input alpha; primary-opaque supplies opaque accent ink and callout mixtures.",
+      "adaptation": "Primary action fill, and the base for links, accents, the default selection and the default focus outline.",
       "tinted-base16": "base0D",
       "tinted-base24": "base0D"
     },
@@ -78,7 +78,7 @@
       "builtin-dark": [
         "--pb-primary-text"
       ],
-      "adaptation": "Action ink; the dark built-in accent-contrast retains its current expression.",
+      "adaptation": "Text on primary actions and accent fills.",
       "tinted-base16": "base00",
       "tinted-base24": "base00"
     },
@@ -101,7 +101,7 @@
       "builtin-dark": [
         "--pb-surface-raised"
       ],
-      "adaptation": "Raised surfaces; built-in refinements preserve distinct field, code and diagram surfaces where specified.",
+      "adaptation": "Raised surfaces such as cards, dialogs, form fields, code blocks and diagram nodes.",
       "tinted-base16": null,
       "tinted-base24": null
     },
@@ -122,7 +122,7 @@
         "--pb-card-foreground",
         "--pb-diagram-node-text"
       ],
-      "adaptation": "Generic code, diagram, discussion card and new-page dialog ink follows card-foreground; current built-in code-text remains refined.",
+      "adaptation": "Text in discussion cards, list cards, evidence and notices, the new-page dialog, code text (code blocks, diffs and code in the editor) and diagram node labels.",
       "tinted-base16": null,
       "tinted-base24": null
     },
@@ -142,7 +142,7 @@
       "builtin-dark": [
         "--pb-surface-chrome"
       ],
-      "adaptation": "Quiet surfaces; built-in inline-code-bg and the dark table-header-bg retain their current expressions.",
+      "adaptation": "Quiet surfaces such as the header, sidebar, table headers and inline code.",
       "tinted-base16": "base01",
       "tinted-base24": "base01"
     },
@@ -160,7 +160,7 @@
       "builtin-dark": [
         "--pb-text-muted"
       ],
-      "adaptation": "Secondary and faint ink, archived status and the default syntax-comment dependency.",
+      "adaptation": "Secondary and faint text, archived status and the default comment color.",
       "tinted-base16": "base04",
       "tinted-base24": "base04"
     },
@@ -180,7 +180,7 @@
         "--pb-border",
         "--pb-code-border"
       ],
-      "adaptation": "Edge colour; generic stronger edges mix in foreground ink.",
+      "adaptation": "Edges and dividers, and the base for stronger edges, blockquote rules and diagram node borders.",
       "tinted-base16": null,
       "tinted-base24": null
     },
@@ -197,7 +197,7 @@
       "builtin-dark": [
         "--pb-focus-ring"
       ],
-      "adaptation": "Focus-outline colour; default uses opaque primary channels.",
+      "adaptation": "Keyboard focus outline.",
       "tinted-base16": "base0D",
       "tinted-base24": "base16"
     },
@@ -219,7 +219,7 @@
         "--pb-selection-bg",
         "--pb-deeplink-pulse"
       ],
-      "adaptation": "Selection highlight; built-in navigation and discussion refinements retain their current expressions.",
+      "adaptation": "Text selection, the active navigation item, discussion highlights and the deep-link pulse.",
       "tinted-base16": "base02",
       "tinted-base24": "base02"
     },
@@ -236,7 +236,7 @@
       "builtin-dark": [
         "--pb-selection-text"
       ],
-      "adaptation": "Selected text ink.",
+      "adaptation": "Text inside a selection, including the editor's.",
       "tinted-base16": "base05",
       "tinted-base24": "base05"
     },
@@ -255,7 +255,7 @@
       "builtin-dark": [
         "--pb-danger"
       ],
-      "adaptation": "Destructive ink; generic feedback and diff tints are in its dependency closure.",
+      "adaptation": "Danger callouts, errors, deprecated status and diff deletions.",
       "tinted-base16": "base08",
       "tinted-base24": "base12"
     },
@@ -277,7 +277,7 @@
         "--pb-warning",
         "--pb-link-broken"
       ],
-      "adaptation": "Warning ink; the light built-in syntax-literal dependency belongs to its public syntax definition.",
+      "adaptation": "Warning callouts, broken links and draft status.",
       "tinted-base16": "base0A",
       "tinted-base24": "base13"
     },
@@ -294,7 +294,7 @@
       "builtin-dark": [
         "--pb-status-active"
       ],
-      "adaptation": "Successful-state ink; generic diff-add-bg is in its dependency closure.",
+      "adaptation": "Active status and diff additions.",
       "tinted-base16": "base0B",
       "tinted-base24": "base14"
     },
@@ -311,7 +311,7 @@
       "builtin-dark": [
         "--pb-syntax-keyword"
       ],
-      "adaptation": "Maps the public syntax-keyword input to --pb-syntax-keyword.",
+      "adaptation": "Keywords in highlighted code.",
       "tinted-base16": "base0E",
       "tinted-base24": "base17"
     },
@@ -328,7 +328,7 @@
       "builtin-dark": [
         "--pb-syntax-string"
       ],
-      "adaptation": "Maps the public syntax-string input to --pb-syntax-string.",
+      "adaptation": "Strings in highlighted code.",
       "tinted-base16": "base0B",
       "tinted-base24": "base14"
     },
@@ -345,7 +345,7 @@
       "builtin-dark": [
         "--pb-syntax-comment"
       ],
-      "adaptation": "Maps the public syntax-comment input to --pb-syntax-comment.",
+      "adaptation": "Comments in highlighted code.",
       "tinted-base16": "base04",
       "tinted-base24": "base04"
     },
@@ -362,7 +362,7 @@
       "builtin-dark": [
         "--pb-syntax-literal"
       ],
-      "adaptation": "Maps the public syntax-literal input to --pb-syntax-literal.",
+      "adaptation": "Numbers and literals in highlighted code.",
       "tinted-base16": "base09",
       "tinted-base24": "base09"
     },
@@ -379,7 +379,7 @@
       "builtin-dark": [
         "--pb-syntax-title"
       ],
-      "adaptation": "also colours hljs-name and hljs-selector-tag (app.css hljs title group)",
+      "adaptation": "Titles such as function, class and tag names in highlighted code.",
       "tinted-base16": "base0D",
       "tinted-base24": "base16"
     },
@@ -396,7 +396,7 @@
       "builtin-dark": [
         "--pb-syntax-attr"
       ],
-      "adaptation": "Maps the public syntax-attribute input to --pb-syntax-attr.",
+      "adaptation": "Attribute names in highlighted code.",
       "tinted-base16": "base08",
       "tinted-base24": "base12"
     },
@@ -413,7 +413,7 @@
       "builtin-dark": [
         "--pb-font-sans"
       ],
-      "adaptation": "Uses the current app.css sans-serif stack; built-ins inherit the private role from generic.",
+      "adaptation": "Interface and prose font family.",
       "tinted-base16": null,
       "tinted-base24": null
     },
@@ -430,7 +430,7 @@
       "builtin-dark": [
         "--pb-font-mono"
       ],
-      "adaptation": "Uses the current app.css monospace stack; built-ins inherit the private role from generic.",
+      "adaptation": "Code and editor font family.",
       "tinted-base16": null,
       "tinted-base24": null
     },
@@ -447,7 +447,7 @@
       "builtin-dark": [
         "--pb-radius"
       ],
-      "adaptation": "Base radius; seven scaled private steps are in its dependency closure.",
+      "adaptation": "Base corner radius; seven decorative steps scale from it.",
       "tinted-base16": null,
       "tinted-base24": null
     }

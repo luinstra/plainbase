@@ -1,7 +1,6 @@
 /*
- * Unreleased theme contract, linked by the app before selected definitions.
- * Public --pb-theme-* inputs are separate from the pb-theme localStorage display-mode key.
- * Freeze artifact: generic-frozen.json.
+ * Plainbase theme contract, version 1: the generic layer, linked before the selected definitions.
+ * Public --pb-theme-* inputs are separate from the pb-theme localStorage display-mode key. See docs/theming.md.
  */
 
 :where(:root:not([data-theme="dark"])) {

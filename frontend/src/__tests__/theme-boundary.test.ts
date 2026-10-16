@@ -167,7 +167,10 @@ describe("theme source boundaries", () => {
   it("theme source and fixtures are not app imports", () => {
     const applicationFiles = filesUnder(path.join(frontendRoot, "src"))
       .filter((file) => /\.(ts|tsx|html)$/.test(file))
+      .filter((file) => !/\.test\.tsx?$/.test(file))
       .filter((file) => !path.relative(frontendRoot, file).split(path.sep).includes("__tests__"));
+    expect.soft(applicationFiles).toContain(path.join(frontendRoot, "src", "lib", "mermaid.ts"));
+    expect.soft(applicationFiles).not.toContain(path.join(frontendRoot, "src", "lib", "mermaid.test.ts"));
     const indexFile = path.join(frontendRoot, "index.html");
     const forbidden = ["styles/themes/", "__tests__/fixtures", "e2e/", "contrib/", "__tests__/tinted"];
     const imported = [...applicationFiles, indexFile].flatMap((file) => {
@@ -274,22 +277,39 @@ describe("theme source boundaries", () => {
     expect(fixtureWrites).toEqual([]);
   });
 
-  it("the contract is unreleased", () => {
+  it("the contract ships with its documentation", () => {
     const tintedRoot = path.join(repositoryRoot, "contrib", "tinted");
-    expect(readFileSync(path.join(tintedRoot, "README.md"), "utf8").toLowerCase()).toContain("unreleased");
+    expect.soft(existsSync(path.join(repositoryRoot, "docs", "theming.md")), "theming guide exists").toBe(true);
+    const releaseNotes = readFileSync(path.join(repositoryRoot, "docs", "release-notes", "unreleased.md"), "utf8");
+    expect.soft(releaseNotes, "release notes name theme inputs").toContain("--pb-theme-");
+    expect.soft(releaseNotes, "release notes link the guide").toContain("](../theming.md");
+    const readme = readFileSync(path.join(tintedRoot, "README.md"), "utf8").toLowerCase();
+    expect.soft(readme, "Tinted README is released").not.toContain("unreleased");
+    expect.soft(readme, "Tinted README names the contract").not.toContain("candidate");
     for (const file of readdirSync(path.join(tintedRoot, "generated")).sort()) {
       const output = readFileSync(path.join(tintedRoot, "generated", file), "utf8");
       const outputHeader = output.match(/^\s*\/\*([\s\S]*?)\*\//)?.[1] ?? "";
-      expect(outputHeader, file).toContain("Unreleased");
+      expect.soft(outputHeader.toLowerCase(), `generated header ${file}`).not.toContain("unreleased");
     }
-    expect(existsSync(path.join(repositoryRoot, "docs", "theming.md"))).toBe(false);
-    const releaseNotes = readFileSync(path.join(repositoryRoot, "docs", "release-notes", "unreleased.md"), "utf8");
-    expect(releaseNotes).not.toContain("--pb-theme");
+    const template = readFileSync(path.join(tintedRoot, "templates", "default.mustache"), "utf8");
+    const templateHeader = template.match(/^\s*\/\*([\s\S]*?)\*\//)?.[1] ?? "";
+    expect.soft(templateHeader.toLowerCase(), "Tinted template header").not.toContain("unreleased");
+    for (const file of ["generic.css", "light.css", "dark.css"]) {
+      const css = readFileSync(path.join(frontendRoot, "src", "styles", "themes", file), "utf8");
+      const cssHeader = css.match(/^\s*\/\*([\s\S]*?)\*\//)?.[1] ?? "";
+      expect.soft(cssHeader.toLowerCase(), `theme header ${file}`).not.toContain("unreleased");
+    }
+    const roster = JSON.parse(readFileSync(path.join(frontendRoot, "src", "__tests__", "fixtures", "theme", "roster.json"), "utf8")) as { description: string };
+    expect.soft(roster.description.toLowerCase(), "roster description").not.toContain("unreleased");
+    const frozen = JSON.parse(readFileSync(path.join(frontendRoot, "src", "__tests__", "fixtures", "theme", "generic-frozen.json"), "utf8")) as { notes: string[] };
+    expect.soft(frozen.notes.join("\n").toLowerCase(), "generic frozen notes").not.toContain("unreleased");
+    const helper = readFileSync(path.join(frontendRoot, "src", "__tests__", "themeCandidates.ts"), "utf8");
+    const notes = helper.match(/notes:\s*\[([^\]]*)\]/)?.[1] ?? "unreleased";
+    expect.soft(notes.toLowerCase(), "theme helper notes").not.toContain("unreleased");
     const generic = readFileSync(path.join(frontendRoot, "src", "styles", "themes", "generic.css"), "utf8");
     const header = generic.match(/^\s*\/\*([\s\S]*?)\*\//)?.[1] ?? "";
-    expect(header.toLowerCase()).toContain("unreleased");
-    for (const marker of ["--pb-theme-", "localStorage"]) expect(header).toContain(marker);
-    expect(header).toMatch(/(?<![\w-])pb-theme(?![\w-])/);
+    for (const marker of ["--pb-theme-", "localStorage"]) expect.soft(header, `generic marker ${marker}`).toContain(marker);
+    expect.soft(header, "generic display-mode marker").toMatch(/(?<![\w-])pb-theme(?![\w-])/);
   });
 
   it("contrib tooling is neither an app input nor an embedded resource", () => {

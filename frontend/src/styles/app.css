@@ -31,9 +31,9 @@
 }
 
 /*
- * Tailwind v4 bridge: utilities compile to var() references into the SEMANTIC tier
- * (`inline` keeps the var() indirection in the emitted utility, so runtime token
- * overrides — dark mode, theme: block, custom.css — flow through utilities too).
+ * Tailwind v4 bridge: utilities compile to var() references into the semantic roles
+ * (`inline` keeps the var() indirection in the emitted utility, so display mode,
+ * selected theme definitions and custom.css flow through utilities too).
  */
 @theme inline {
   --color-*: initial;

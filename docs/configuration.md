@@ -5,8 +5,8 @@ table for the everyday knobs (`CONTENT_DIR`, `DATA_DIR`, `PLAINBASE_HOST`, `PLAI
 `PLAINBASE_LOG_LEVEL`); this is the complete surface. `ConfigLoader` loads the configuration sources;
 `ConfigDecoder` and the pure `ConfigValuePolicy` decode them into `PlainbaseConfig`
 (`server/src/main/kotlin/com/plainbase/frameworks/config/`). The exception is
-`PLAINBASE_LOG_LEVEL`, a logback-level env var noted below. The one
-file-only key with no env twin is the `roots {}` block (its own section below).
+`PLAINBASE_LOG_LEVEL`, a logback-level env var noted below. Some settings are file-only, with no env
+twin; the `roots {}` block and the `theme` keys are examples, each with its own section below.
 
 ## Logging and command channels
 
@@ -73,6 +73,8 @@ is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUS
 | `PLAINBASE_S3_PREFIX` | `storage.object.prefix` | `""` | ConfigDecoder.kt (validated through the `TreePath` funnel when non-empty) |
 | `PLAINBASE_S3_PATH_STYLE` | `storage.object.pathStyle` | `true` (R2 account-endpoint) | ConfigDecoder.kt |
 | `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | ConfigDecoder.kt |
+| - (file only) | `theme.light` | bundled light definition | ConfigDecoder.kt |
+| - (file only) | `theme.dark` | bundled dark definition | ConfigDecoder.kt |
 
 Any `storage.object.*` key set while `storage.backend=local` is ignored with a single startup warning
 that names the keys (a shared `plainbase.conf` across a local and an object deploy stays legal). In
@@ -572,6 +574,45 @@ Author labels and kinds are server-derived snapshots, not client-supplied fields
 Discussion limits are fixed, not new HOCON/environment knobs; the existing `maxWriteBodyBytes` can
 further constrain JSON envelopes. See [the authoritative limits table](http-agent-workflow.md#discussion-limits)
 and [operator recovery](operating-plainbase.md#discussions).
+
+## Themes
+
+`theme.light` and `theme.dark` select complete CSS definitions; the optional `custom.css` adds partial
+overrides. Put the selections in `DATA_DIR/plainbase.conf`:
+
+```hocon
+theme {
+  light = "paper.css"
+  dark = "dracula.css"
+}
+```
+
+These names select `DATA_DIR/paper.css` and `DATA_DIR/dracula.css` directly, without a theme
+subdirectory. A name must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.css`; `custom.css` is reserved,
+case-insensitively. The dotted form, such as `theme.light = "paper.css"`, is equivalent. You can set
+only one mode, leaving the other bundled, or select the same file for both modes. An absent or empty
+`theme` block uses both bundled definitions silently; unknown keys in that block are ignored.
+
+The selections come from the operator file, not managed `roots.conf`, and have no dedicated
+environment settings. The fixed `DATA_DIR/custom.css` needs no setting and applies in both modes.
+
+Each definition must scope its rules with its mode's selector: `:where(:root:not([data-theme="dark"]))`
+for light and `:where(:root[data-theme="dark"])` for dark. All four theme stylesheets load in both
+modes, so an unscoped `:root` rule in a light definition also applies in dark mode.
+
+An invalid selection value logs one startup warning naming the key and uses the bundled definition
+for that mode; a valid selection for the other mode is retained. Submitted paths and URLs are not
+echoed in the warning. Malformed HOCON and unresolved substitutions refuse `serve` configuration
+loading.
+
+Restart Plainbase after changing a selection. Selected files and `custom.css` are read again for each
+GET request to their stylesheet endpoints, so reload the page after editing their contents.
+
+If Plainbase cannot read a selected file, that mode serves the bundled definition. If it cannot read
+`custom.css`, the override is an empty sheet. A `custom.css` that is missing, empty or only whitespace
+(space, tab, line feed, form feed or carriage return), with or without a leading byte order mark, is
+silent. Other read failures log a warning, at most one read-failure warning per 60 seconds. See the
+[theming guide](theming.md) for the input contract, examples and what makes a file unreadable.
 
 ## Heap size (native binary) - not an env var
 

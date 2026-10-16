@@ -146,7 +146,7 @@ export function recomputeFreeze(): Freeze {
   const floors = Object.fromEntries(Object.entries(roster.inputs).map(([name, input]) => [name, {
     generic: input.generic, "builtin-light": input["builtin-light"], "builtin-dark": input["builtin-dark"],
   }]));
-  return { fixtures, floors, notes: ["Unreleased generic contract, manually reviewed and frozen after contrast and dependency checks."] };
+  return { fixtures, floors, notes: ["Generic contract version 1, manually reviewed and frozen after contrast and dependency checks."] };
 }
 
 // Read inside test bodies, never at module load, so a missing freeze does not prevent collection.

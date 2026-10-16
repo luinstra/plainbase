@@ -2629,6 +2629,6 @@
     }
   },
   "notes": [
-    "Unreleased generic contract, manually reviewed and frozen after contrast and dependency checks."
+    "Generic contract version 1, manually reviewed and frozen after contrast and dependency checks."
   ]
 }

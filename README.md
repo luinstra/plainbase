@@ -127,12 +127,13 @@ not routed through the logger.
 - Object mode (`storage.backend=object`) - the S3-compatible **bucket** is
   canonical instead; `CONTENT_DIR` is ignored and `DATA_DIR/mirror` is a
   derived, deletable cache. One authority per deployment, never two.
-- `DATA_DIR` - app-owned identity, workflow and security state. Never canonical content.
+- `DATA_DIR` - app-owned identity, workflow and security state, plus any theme files you place there. Never canonical content.
 - Search indexes - fully derived; delete them any time and rebuild.
 
 ## Docs
 
 - [Configuration](docs/configuration.md) - the full environment-variable reference.
+- [Theming](docs/theming.md) - custom light and dark themes, partial overrides and Base16/Base24 conversion.
 - [Operating Plainbase](docs/operating-plainbase.md) - search freshness, manual reindex, adopting
   an existing repo, backups, performance + the startup gate, known limitations.
 - [Object-storage backend](docs/deploy/object-storage.md) - serve an S3-compatible bucket (R2-first)

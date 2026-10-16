@@ -1,4 +1,4 @@
-/* Unreleased bundled dark definition, served at /_plainbase/theme-dark.css. */
+/* Bundled dark definition, served at /_plainbase/theme-dark.css. */
 :where(:root[data-theme="dark"]) {
   /* public inputs */
   --pb-theme-background: var(--pb-gray-850);

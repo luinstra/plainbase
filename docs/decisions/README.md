@@ -21,3 +21,4 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 | [0011](0011-multi-root-document-directories.md) | Multi-root document directories: composite (root, path) keys, reserved root names, per-root editability/history | Accepted, superseded in part by 0012 (page identity) and the in-place URL-grammar notes |
 | [0012](0012-per-root-page-identity.md) | Per-root page identity: `(RootName, PageId)`, rooted permalinks, no cross-root contest | Accepted |
 | [0013](0013-discussions-are-files-in-a-per-root-collection.md) | Discussions are Markdown files in a per-root collection, anchored by quote, never written into pages | Accepted |
+| [0014](0014-custom-themes-are-css-definitions-selected-from-data-dir.md) | Custom themes are complete CSS definitions selected from DATA_DIR, over one public input contract | Accepted |
