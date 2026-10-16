@@ -31,7 +31,7 @@
       "builtin-dark": [
         "--pb-text"
       ],
-      "adaptation": "Base document ink; mixed faint ink and links also depend on it.",
+      "adaptation": "Base document ink; default card ink and links also depend on it.",
       "tinted-base16": "base05",
       "tinted-base24": "base05"
     },
@@ -122,7 +122,7 @@
         "--pb-card-foreground",
         "--pb-diagram-node-text"
       ],
-      "adaptation": "Generic code and diagram ink follows card-foreground; current built-in code-text remains refined.",
+      "adaptation": "Generic code, diagram, discussion card and new-page dialog ink follows card-foreground; current built-in code-text remains refined.",
       "tinted-base16": null,
       "tinted-base24": null
     },
@@ -151,7 +151,8 @@
       "kind": "colour",
       "default": "color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 15%)",
       "generic": [
-        "--pb-text-muted"
+        "--pb-text-muted",
+        "--pb-text-faint"
       ],
       "builtin-light": [
         "--pb-text-muted"
@@ -159,7 +160,7 @@
       "builtin-dark": [
         "--pb-text-muted"
       ],
-      "adaptation": "Secondary ink and the default syntax-comment dependency.",
+      "adaptation": "Secondary and faint ink, archived status and the default syntax-comment dependency.",
       "tinted-base16": "base04",
       "tinted-base24": "base04"
     },

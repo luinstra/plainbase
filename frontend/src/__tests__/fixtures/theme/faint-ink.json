@@ -1,0 +1,35 @@
+{
+  "source": {
+    "repository": "https://github.com/tinted-theming/schemes",
+    "commit": "3ac91137e879502c442ab89ba0f1a98077d0da9d",
+    "upstreamPath": "base16/gruvbox-light-hard.yaml",
+    "pinnedPath": "contrib/tinted/sources/upstream/base16-gruvbox-light-hard.yaml",
+    "copiedFrom": "contrib/tinted/generated/base16-gruvbox-light-hard-adapted.css",
+    "restored": "Both foreground and selection-foreground restore upstream base05, preserving the scheme's intended body ink.",
+    "retainedAdjustments": {
+      "base09": "Keeps the darker syntax literal for contrast on the deletion tint.",
+      "base0A": "Keeps darker warning, broken-link and draft ink for their surface and callout contrast floors.",
+      "base0B": "Keeps darker syntax-string and active-status ink for their surface and diff-tint contrast floors."
+    }
+  },
+  "declarations": {
+    "--pb-theme-background": "#f9f5d7",
+    "--pb-theme-foreground": "#504945",
+    "--pb-theme-primary": "#076678",
+    "--pb-theme-primary-foreground": "#f9f5d7",
+    "--pb-theme-muted": "#ebdbb2",
+    "--pb-theme-muted-foreground": "#665c54",
+    "--pb-theme-ring": "#076678",
+    "--pb-theme-selection": "#d5c4a1",
+    "--pb-theme-selection-foreground": "#504945",
+    "--pb-theme-destructive": "#9d0006",
+    "--pb-theme-warning": "#86570f",
+    "--pb-theme-success": "#66610c",
+    "--pb-theme-syntax-keyword": "#8f3f71",
+    "--pb-theme-syntax-string": "#66610c",
+    "--pb-theme-syntax-comment": "#665c54",
+    "--pb-theme-syntax-literal": "#aa3803",
+    "--pb-theme-syntax-title": "#076678",
+    "--pb-theme-syntax-attribute": "#9d0006"
+  }
+}

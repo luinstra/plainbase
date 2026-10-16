@@ -117,7 +117,7 @@
   },
   "notes": [
     "Each definition supplies only the four required public inputs; optional values come from generic defaults.",
-    "Opaque-light uses darker document ink to keep --pb-text-faint on --pb-surface-hover above its contrast minimum.",
+    "Opaque-light retains its approved document ink; faint ink follows the muted-foreground default and shares its contrast floors.",
     "All custom fixture and probe colours differ from every built-in primitive.",
     "Translucent-dark keeps the opaque-dark base and document ink, with 15%-alpha primary channels and matching action ink.",
     "Probe separation from every relevant floor consumer is asserted by the later candidate tests before each probe is used."

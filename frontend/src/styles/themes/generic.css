@@ -1,5 +1,5 @@
 /*
- * Unreleased candidate theme contract. Never imported by the app.
+ * Unreleased theme contract, linked by the app before selected definitions.
  * Public --pb-theme-* inputs are separate from the pb-theme localStorage display-mode key.
  * Freeze artifact: generic-frozen.json.
  */
@@ -49,7 +49,8 @@
   --pb-callout-danger-bg: color-mix(in srgb, var(--pb-theme-destructive) 10%, var(--pb-theme-background));
   --pb-text: var(--pb-theme-foreground);
   --pb-text-muted: var(--pb-theme-muted-foreground);
-  --pb-text-faint: color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 35%);
+  /* Faint ink shares the muted contrast floors. */
+  --pb-text-faint: var(--pb-theme-muted-foreground);
   --pb-border: var(--pb-theme-border);
   --pb-border-strong: color-mix(in srgb, var(--pb-border), var(--pb-theme-foreground) 20%);
   --pb-diagram-node-bg: var(--pb-theme-card);
@@ -147,7 +148,8 @@
   --pb-callout-danger-bg: color-mix(in srgb, var(--pb-theme-destructive) 10%, var(--pb-theme-background));
   --pb-text: var(--pb-theme-foreground);
   --pb-text-muted: var(--pb-theme-muted-foreground);
-  --pb-text-faint: color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 35%);
+  /* Faint ink shares the muted contrast floors. */
+  --pb-text-faint: var(--pb-theme-muted-foreground);
   --pb-border: var(--pb-theme-border);
   --pb-border-strong: color-mix(in srgb, var(--pb-border), var(--pb-theme-foreground) 20%);
   --pb-diagram-node-bg: var(--pb-theme-card);
