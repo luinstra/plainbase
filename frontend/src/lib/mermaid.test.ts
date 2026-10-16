@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeSystem } from "../__tests__/displayModeTestSupport";
@@ -7,6 +8,11 @@ type Render = (id: string, source: string, scratch: HTMLDivElement) => Promise<R
 type FakeMermaid = {
   initialize: ReturnType<typeof vi.fn>;
   render: ReturnType<typeof vi.fn<Render>>;
+};
+
+const mapping = JSON.parse(readFileSync("src/__tests__/fixtures/theme/mermaid-mapping.json", "utf8")) as {
+  variables: Record<string, string>;
+  shadow: string;
 };
 
 function fakeMermaid(): FakeMermaid {
@@ -491,7 +497,7 @@ describe("renderMermaidBlocks", () => {
     }
   });
 
-  it("pairs node and tertiary ink with the card while retaining page colors", async () => {
+  it("maps every Mermaid color to its theme role", async () => {
     const fake = fakeMermaid();
     const { renderMermaidBlocks } = await loadHelper(fake);
     const container = diagramContainer(["flowchart LR\nA --> B"]);
@@ -499,14 +505,13 @@ describe("renderMermaidBlocks", () => {
     try {
       await waitForDiagrams(container, 1);
       const variables = fake.initialize.mock.calls[0]?.[0].themeVariables;
-      for (const key of ["primaryTextColor", "nodeTextColor", "tertiaryTextColor"]) {
-        expect.soft(variables[key], key).toBe("var(--pb-diagram-node-text)");
+      const nonColors = ["darkMode", "dropShadow", "useGradient", "fontFamily", "fontSize"];
+      const colorKeys = Object.keys(variables).filter((key) => !nonColors.includes(key));
+      expect.soft(colorKeys.sort(), "color variable keys").toEqual(Object.keys(mapping.variables).sort());
+      for (const [key, role] of Object.entries(mapping.variables)) {
+        expect.soft(variables[key], key).toBe(["var(", role, ")"].join(""));
       }
-      expect.soft(variables.textColor, "textColor").toBe("var(--pb-text)");
-      expect.soft(variables.secondaryTextColor, "secondaryTextColor").toBe("var(--pb-text)");
-      expect.soft(variables.titleColor, "titleColor").toBe("var(--pb-text)");
-      expect.soft(variables.secondaryColor, "secondaryColor").toBe("var(--pb-surface)");
-      expect.soft(variables.tertiaryColor, "tertiaryColor").toBe("var(--pb-surface-raised)");
+      expect.soft(variables.dropShadow, "dropShadow").toContain(["var(", mapping.shadow, ")"].join(""));
     } finally {
       cleanup();
     }

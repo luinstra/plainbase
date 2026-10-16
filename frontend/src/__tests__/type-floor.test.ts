@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { declarations, stripComments, topLevelBlocks } from "./contrastResolver";
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const css = strip(readFileSync("src/styles/app.css", "utf8"));
 const read = (name: string) => readFileSync(`src/components/${name}.tsx`, "utf8");
@@ -72,6 +73,165 @@ function nativeSelection(source: string) {
   expect(body).toMatch(/backgroundColor:\s*"var\(--pb-selection-bg\)"/);
 }
 
+const cardInput = "--pb-theme-card-foreground";
+const cardAliases = ["--pb-card-foreground", "--pb-code-text", "--pb-diagram-node-text"];
+const cardMembers = new Set([cardInput, ...cardAliases]);
+const cssVar = (name: string) => ["var(", name, ")"].join("");
+const definitions = ["generic", "light", "dark"].map((name) => readFileSync(`src/styles/themes/${name}.css`, "utf8"));
+function inkAliases(sources: string[]): string[] {
+  const found = new Set<string>();
+  for (const source of sources) for (const { body } of topLevelBlocks(source)) {
+    const graph = Object.fromEntries(Object.entries(declarations(body)).map(([name, value]) =>
+      [name, [...value.matchAll(/var\((--[\w-]+)/g)].map((match) => match[1])]));
+    const reachesCard = (name: string, seen = new Set<string>()): boolean => {
+      if (name === cardInput) return true;
+      if (seen.has(name)) return false;
+      return (graph[name] ?? []).some((next) => reachesCard(next, new Set([...seen, name])));
+    };
+    for (const name of Object.keys(graph)) {
+      if (name.startsWith("--pb-") && !name.startsWith("--pb-theme-") && reachesCard(name)) found.add(name);
+    }
+  }
+  return [...found].sort();
+}
+type StyleBlock = { selector: string; own: string[]; ancestors: string[] };
+function styleBlocks(source: string): StyleBlock[] {
+  const blocks: StyleBlock[] = [];
+  const walk = (text: string, selector = "", ancestors: string[] = []) => {
+    const own: string[] = [];
+    if (selector) blocks.push({ selector, own, ancestors });
+    let depth = 0;
+    let start = 0;
+    let bodyStart = 0;
+    let child = "";
+    let quote = "";
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      if (char === "\\") { i++; continue; }
+      if (quote) { if (char === quote) quote = ""; continue; }
+      if (char === '"' || char === "'") { quote = char; continue; }
+      if (char === "{" && depth++ === 0) {
+        child = text.slice(start, i).trim().replace(/\s+/g, " ");
+        bodyStart = i + 1;
+      } else if (char === "}") {
+        if (--depth < 0) throw new Error("unbalanced CSS block");
+        if (depth === 0) {
+          walk(text.slice(bodyStart, i), child, selector ? [...ancestors, selector] : ancestors);
+          start = i + 1;
+        }
+      } else if (char === ";" && depth === 0) { own.push(text.slice(start, i)); start = i + 1; }
+    }
+    if (depth || quote) throw new Error("unbalanced CSS block");
+    own.push(text.slice(start));
+  };
+  walk(stripComments(source));
+  return blocks;
+}
+function stylesheetConsumers(source: string, members: ReadonlySet<string> = cardMembers): string[] {
+  return styleBlocks(source).flatMap(({ selector, own }) => own.flatMap((segment) => {
+    const declaration = segment.match(/^\s*([\w-]+)\s*:\s*([\s\S]+)$/);
+    if (!declaration) return [];
+    return [...declaration[2].matchAll(/--[a-z0-9-]*[a-z0-9]/g)]
+      .filter(([name]) => members.has(name)).map(([name]) => `${selector} | ${declaration[1]} | ${name}`);
+  })).sort();
+}
+// Runtime-assembled role names evade this source heuristic. A // in JSX text or a regex literal
+// can hide the rest of a line; an apostrophe in JSX text, such as Don't, can desynchronise quotes.
+function stripScriptComments(source: string, html: boolean): string {
+  let result = "";
+  let quote = "";
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (quote) {
+      result += char;
+      if (char === "\\") result += source[++i] ?? "";
+      else if (char === quote) quote = "";
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") { quote = char; result += char; continue; }
+    let end: number | undefined;
+    if (source.startsWith("/*", i)) {
+      const close = source.indexOf("*/", i + 2);
+      end = close < 0 ? source.length : close + 2;
+    } else if (source.startsWith("//", i)) {
+      const close = source.indexOf("\n", i + 2);
+      end = close < 0 ? source.length : close;
+    } else if (html && source.startsWith("<!--", i)) {
+      const close = source.indexOf("-->", i + 4);
+      end = close < 0 ? source.length : close + 3;
+    }
+    if (end === undefined) result += char;
+    else { result += source.slice(i, end).replace(/[^\n]/g, " "); i = end - 1; }
+  }
+  return result;
+}
+function scriptConsumers(file: string, source: string, members: ReadonlySet<string> = cardMembers): string[] {
+  return [...stripScriptComments(source, file.endsWith(".html")).matchAll(/--[a-z0-9-]*[a-z0-9]/g)]
+    .filter(([name]) => members.has(name)).map(([name]) => `${file} | ${name}`).sort();
+}
+function sourceFiles(directory = "src"): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const file = `${directory}/${entry.name}`;
+    return entry.isDirectory() ? sourceFiles(file) : entry.isFile() ? [file] : [];
+  }).sort();
+}
+function consumerDiff(actual: string[], expected: string[]): string[] {
+  const remaining = [...expected];
+  const added: string[] = [];
+  for (const entry of actual) {
+    const index = remaining.indexOf(entry);
+    if (index < 0) added.push(`+ ${entry}`);
+    else remaining.splice(index, 1);
+  }
+  return [...added, ...remaining.map((entry) => `- ${entry}`)].sort();
+}
+
+describe("card ink consumer checks", () => {
+  it("detects an additional transitive alias", () => {
+    const extra = ["--pb-extra-ink: ", cssVar("--pb-code-text"), ";"].join("");
+    const changed = definitions.map((source, index) => index ? source : source.replace("{", `{ ${extra}`));
+    expect(consumerDiff(inkAliases(changed), cardAliases)).toEqual(["+ --pb-extra-ink"]);
+  });
+  const inkDeclaration = ["color: ", cssVar("--pb-code-text"), ";"].join("");
+  it.each([
+    ["an extra rule", `.extra { ${inkDeclaration} }`, ".extra | color | --pb-code-text"],
+    ["a rule inside media", `@media (min-width: 1px) { .inside { ${inkDeclaration} } }`, ".inside | color | --pb-code-text"],
+    ["a declaration before a child rule", `.outer { ${inkDeclaration} &:hover { opacity: 1; } }`, ".outer | color | --pb-code-text"],
+    ["a declaration after a child rule", `.outer { &:hover { opacity: 1; } ${inkDeclaration} }`, ".outer | color | --pb-code-text"],
+    ["a declaration inside a child rule", `.outer { &:hover { ${inkDeclaration} } }`, "&:hover | color | --pb-code-text"],
+    ["a theme key", ["@theme inline { --color-extra: ", cssVar("--pb-diagram-node-text"), "; }"].join(""),
+      "@theme inline | --color-extra | --pb-diagram-node-text"],
+    ["a declaration after quoted braces", `.quoted { content: "\\\"{;}"; ${inkDeclaration} }`, ".quoted | color | --pb-code-text"],
+  ])("finds %s", (_name, source, entry) => {
+    expect(consumerDiff(stylesheetConsumers(source), [])).toEqual([`+ ${entry}`]);
+  });
+  it("excludes child preludes and comments from own declarations", () => {
+    const source = `.outer { &[data-token="--pb-code-text"] { opacity: 1; } /* ${inkDeclaration} */ }`;
+    expect(consumerDiff(stylesheetConsumers(source), [])).toEqual([]);
+  });
+  it("detects a removed expected consumer", () => {
+    const expected = [".removed | color | --pb-code-text"];
+    expect(consumerDiff(stylesheetConsumers(".removed { padding: 0; }"), expected)).toEqual([`- ${expected[0]}`]);
+  });
+  it.each([
+    ["an inline style", ['<p style={{ color: "', cssVar("--pb-card-foreground"), '" }} />'].join(""), "--pb-card-foreground"],
+    ["an arbitrary utility", ['<p className="text-[', cssVar("--pb-code-text"), ']" />'].join(""), "--pb-code-text"],
+    ["a member after a quoted URL", ['const url = "https://example.invalid"; const ink = "',
+      cssVar("--pb-code-text"), '";'].join(""), "--pb-code-text"],
+    ["a member after a template URL", ['const url = `https://example.invalid`; const ink = "',
+      cssVar("--pb-code-text"), '";'].join(""), "--pb-code-text"],
+    ["a member after an escaped quote", ['const text = "escaped \\" https://example.invalid"; const ink = "',
+      cssVar("--pb-code-text"), '";'].join(""), "--pb-code-text"],
+  ])("finds %s in script text", (_name, source, member) => {
+    expect(consumerDiff(scriptConsumers("extra.tsx", source), [])).toEqual([`+ extra.tsx | ${member}`]);
+  });
+  it("ignores script and HTML comments and longer token names", () => {
+    const source = ["/* ", cssVar("--pb-code-text"), " */ // ", cssVar("--pb-card-foreground"),
+      "\n<!-- ", cssVar("--pb-diagram-node-text"), ' -->\nconst other = "--pb-code-text-extra";'].join("");
+    expect(consumerDiff(scriptConsumers("index.html", source), [])).toEqual([]);
+  });
+});
+
 describe("type floor", () => {
   it("checks a nonempty CSS and TSX inventory", () => {
     expect(sizes(css, "css").length).toBeGreaterThan(30);
@@ -95,6 +255,44 @@ describe("type floor", () => {
   });
 });
 describe("semantic alias and consumer wiring", () => {
+  it("card ink reaches only its known consumers", () => {
+    const files = sourceFiles();
+    const stylesheetFiles = files.filter((file) => file.endsWith(".css") && !file.startsWith("src/styles/themes/"));
+    const scriptFiles = [...files.filter((file) => /\.tsx?$/.test(file)
+      && !file.split("/").includes("__tests__") && !/\.test\.tsx?$/.test(file) && file !== "src/test-setup.ts"), "index.html"].sort();
+    const aliases = inkAliases(definitions);
+    const members = new Set([cardInput, ...aliases]);
+    const stylesheets = stylesheetFiles.flatMap((file) => stylesheetConsumers(readFileSync(file, "utf8"), members)).sort();
+    const scripts = scriptFiles.flatMap((file) => scriptConsumers(file, readFileSync(file, "utf8"), members)).sort();
+    const blocks = stylesheetFiles.flatMap((file) => styleBlocks(readFileSync(file, "utf8")).map((block) => ({ file, ...block })));
+    process.stdout.write("Card ink source inventory\n" + JSON.stringify({
+      aliases, stylesheets, scripts, stylesheetFiles, scriptPopulation: scriptFiles.length,
+      scriptKnownMember: scriptFiles.includes("src/components/SearchPalette.tsx"),
+      nestedStyleRules: blocks.filter((block) => block.ancestors.some((selector) => !selector.startsWith("@"))),
+      atRuleParents: [...new Set(blocks.flatMap((block) => block.ancestors))].sort(),
+      nestingAtRules: blocks.filter((block) => /^@(media|keyframes)\b/.test(block.selector))
+        .map((block) => ({ file: block.file, selector: block.selector })),
+      wideMediaChildren: blocks.filter((block) => block.ancestors.includes("@media (min-width: 1280px)"))
+        .map((block) => block.selector).sort(),
+    }, null, 2) + "\n");
+    expect.soft(aliases, `aliases: ${JSON.stringify(aliases)}`).toEqual(cardAliases);
+    expect.soft(stylesheetFiles, "application stylesheet population").toContain("src/styles/app.css");
+    const cardSelectors = [
+      ".pb-discussion-card, .pb-discussion-evidence, .pb-discussion-notice",
+      ":is(.pb-discussion-card, .pb-discussion-evidence, .pb-discussion-notice, .pb-discussion-list-card, .pb-new-dialog) .text-ink",
+      ".pb-discussion-list-card", ".pb-discussion-card-quote",
+      ":is(.pb-discussion-card, .pb-discussion-list-card) .pb-discussion-author",
+      ".pb-new-dialog", ".pb-new-location", ".pb-new-title", ".pb-new-field",
+    ];
+    const expectedStylesheets = [...cardSelectors.map((selector) => `${selector} | color | --pb-card-foreground`),
+      ".pb-prose pre code | color | --pb-code-text", ".pb-diff-code | color | --pb-code-text"].sort();
+    expect.soft(stylesheets, `stylesheets: ${JSON.stringify(stylesheets)}`).toEqual(expectedStylesheets);
+    expect.soft(scriptFiles.length, "production script and markup population").toBeGreaterThan(50);
+    expect.soft(scriptFiles, "known production script").toContain("src/components/SearchPalette.tsx");
+    expect.soft(scripts, `scripts: ${JSON.stringify(scripts)}`).toEqual([
+      "src/components/EditorPage.tsx | --pb-code-text", "src/lib/mermaid.ts | --pb-diagram-node-text",
+    ]);
+  });
   it.each(Object.entries(aliases))("registers %s inside @theme inline", (name, token) => bridge(css, `--color-${name}`, `--pb-${token}`));
   it("rejects missing, external and misbound aliases", () => {
     const valid = "@theme inline { --color-chrome: var(--pb-surface-chrome); }";
@@ -111,6 +309,14 @@ describe("semantic alias and consumer wiring", () => {
       for (const broken of [valid.replace(`var(${token})`, "serif"), valid.replace(token, other), valid.replace("@theme inline", ":root")]) {
         expect(() => bridge(broken, key, token)).toThrow();
       }
+    }
+  });
+  it("the editor uses the mono font", () => {
+    const source = strip(read("EditorPage"));
+    for (const selector of ["content", "scroller"]) {
+      const matches = [...source.matchAll(new RegExp(`"\\.cm-${selector}"\\s*:\\s*\\{([^{}]*)\\}`, "g"))];
+      expect.soft(matches, `.cm-${selector}`).toHaveLength(1);
+      expect.soft(matches[0]?.[1], `.cm-${selector}`).toMatch(/(?:^|,)\s*fontFamily:\s*"var\(--font-mono\)"/);
     }
   });
   const radiusBridges = [["--radius", "--pb-radius"], ["--radius-md", "--pb-radius-md"], ["--radius-xl", "--pb-radius-2xl"]];

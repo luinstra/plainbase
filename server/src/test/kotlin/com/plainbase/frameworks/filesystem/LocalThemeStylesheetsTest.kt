@@ -329,6 +329,21 @@ class LocalThemeStylesheetsTest : FunSpec({
         }
     }
 
+    test("a symlinked override warns and produces an empty sheet with the not regular category") {
+        withDataDir { data ->
+            val target = Files.write(data.resolve("target.css"), css)
+            val path = Files.createSymbolicLink(data.resolve("custom.css"), target)
+            val adapter = LocalThemeStylesheets(data, ThemeSelection.BUNDLED, builtins)
+            var served = css
+            val events = captureThemeWarnings { served = adapter.override() }
+            assertSoftly {
+                served shouldBe ByteArray(0)
+                adapter.read(path) shouldBe ThemeRead.Failure(ThemeReadFailure.NOT_REGULAR)
+                events.map { it.formattedMessage } shouldBe listOf("Theme stylesheet custom.css NOT_REGULAR; serving no override")
+            }
+        }
+    }
+
     test("an override open failure produces an empty sheet and the unreadable category") {
         withDataDir { data ->
             val path = Files.write(data.resolve("custom.css"), css)

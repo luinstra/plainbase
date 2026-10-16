@@ -4,7 +4,7 @@ import type { APIRequestContext, TestInfo } from "@playwright/test";
 import { parse, type Color } from "../src/__tests__/contrastResolver";
 import {
   assemble, builtinCss, builtinSlots, fixtureDefinitions, fourInputDefinition, genericCss, primitiveNames,
-  readFrozen, tokenValue, type FixtureMode, type Mode,
+  readFrozen, selectors, tokenValue, type FixtureMode, type Mode,
 } from "../src/__tests__/themeCandidates";
 import { gotoAndWaitForSearchReady, gotoExpectStatus } from "./helpers";
 import { expect, test, type Page } from "./smoke-fixtures";
@@ -13,6 +13,7 @@ import { normalizeColors } from "./theme-colors";
 import { themeMarkdown } from "./themePages";
 
 type Readings = Array<Record<string, unknown>>;
+type Violation = { violatedDirective: string; blockedURI: string };
 type BodyBaseline = {
   modes: Record<Mode, { sections: { body: { body: { elements: Array<Record<string, Color>> } } } }>;
 };
@@ -144,6 +145,132 @@ test.describe("a selected light definition", () => {
   });
 });
 
+test.describe("selected file contents and startup selection", () => {
+  test.use({ smokeData: { files: lightFile, theme: { light: "opaque-light.css" } } });
+
+  test("a selection is fixed until restart while its file is reread on reload", async ({ page, request, smokeServer }, testInfo) => {
+    const readings: Readings = [];
+    await openDocument(page, request, smokeServer, "light");
+    const initial = await readColor(page, "body", "background-color");
+    const original = parse(fixtureDefinitions()["opaque-light"]["--pb-theme-background"]);
+    const expected = parse(fixtureDefinitions()["opaque-dark"]["--pb-theme-background"]);
+    const builtin = tokenValue(assemble("light", builtinSlots()), "--pb-surface") as Color;
+    readings.push({ observable: "initial selected body background", actual: initial, expected: original, difference: distance(initial, original) });
+    expect.soft(distance(initial, original), "initial selected body background").toBeLessThanOrEqual(0.002);
+    for (const [observable, other] of [["edited background differs from initial", initial], ["edited background differs from bundled light", builtin]] as const) {
+      const separation = distance(expected, other);
+      readings.push({ observable, expected, other, separation });
+      expect.soft(separation, observable).toBeGreaterThanOrEqual(0.02);
+    }
+    writeFileSync(path.join(smokeServer.dataDir, "opaque-light.css"), fourInputDefinition("opaque-dark").replace(selectors.dark, selectors.light));
+    await page.reload();
+    const edited = await readColor(page, "body", "background-color");
+    const editedDifference = distance(edited, expected);
+    readings.push({ observable: "selected file edit after reload", actual: edited, expected, difference: editedDifference });
+    expect.soft(editedDifference, "selected file edit after reload").toBeLessThanOrEqual(0.002);
+
+    const configurationPath = path.join(smokeServer.dataDir, "plainbase.conf");
+    const before = readFileSync(configurationPath, "utf8");
+    const blocks = before.match(/^theme \{\n  light = "opaque-light\.css"\n\}\n$/gm) ?? [];
+    expect(blocks, "exact appended theme block").toHaveLength(1);
+    const after = before.replace(blocks[0]!, "");
+    writeFileSync(configurationPath, after);
+    const stored = readFileSync(configurationPath, "utf8");
+    expect.soft(stored, "configuration rewrite is stored").toBe(after);
+    expect.soft(stored, "configuration selection removed").not.toContain("theme");
+    expect.soft(stored, "configuration rewrite changes the file").not.toBe(before);
+    readings.push({ observable: "configuration rewrite", before, after, stored, changed: stored !== before });
+    await page.reload();
+    const persisted = await readColor(page, "body", "background-color");
+    const persistedDifference = distance(persisted, edited);
+    readings.push({ observable: "startup selection after configuration rewrite", actual: persisted, expected: edited, difference: persistedDifference });
+    expect.soft(persistedDifference, "startup selection after configuration rewrite").toBeLessThanOrEqual(0.002);
+    await retain(testInfo, readings);
+  });
+});
+
+test.describe("light scoped override order", () => {
+  test.use({ smokeData: {
+    files: { ...lightFile, "custom.css": `${selectors.light} { --pb-theme-primary: ${probes["--pb-theme-primary"].value}; }` },
+    theme: { light: "opaque-light.css" },
+  } });
+
+  test("a light-only override with the light scope selector wins by order", async ({ page, request, smokeServer }, testInfo) => {
+    const readings: Readings = [];
+    const probe = parse(probes["--pb-theme-primary"].value);
+    const selected = parse(fixtureDefinitions()["opaque-light"]["--pb-theme-primary"]);
+    const builtinDark = tokenValue(assemble("dark", builtinSlots()), "--pb-primary-bg") as Color;
+    for (const [observable, other] of [["probe differs from selected light primary", selected], ["probe differs from bundled dark primary", builtinDark]] as const) {
+      const separation = distance(probe, other);
+      readings.push({ observable, probe, other, separation });
+      expect.soft(separation, observable).toBeGreaterThanOrEqual(0.02);
+    }
+    for (const mode of modes) {
+      await openDocument(page, request, smokeServer, mode);
+      await gotoExpectStatus(page, "/new");
+      await page.locator("[data-pb-new-title]").fill("Scoped theme page");
+      await expect(page.locator("[data-pb-new-create]")).toBeEnabled();
+      const actual = await readColor(page, "[data-pb-new-create]", "background-color");
+      const expected = mode === "light" ? probe : builtinDark;
+      const difference = distance(actual, expected);
+      const observable = `${mode} scoped primary action`;
+      readings.push({ observable, actual, expected, difference });
+      expect.soft(difference, observable).toBeLessThanOrEqual(0.002);
+    }
+    await retain(testInfo, readings);
+  });
+});
+
+test.describe("theme stylesheet security", () => {
+  test.use({ smokeData: { files: { "custom.css": [
+    '@import url("https://example.invalid/pb-remote.css");',
+    '@font-face { font-family: "PbRemoteSans"; src: url("https://example.invalid/pb-remote.woff2"); }',
+    '@font-face { font-family: "PbDataMono"; src: url("data:font/woff2;base64,AAAA"); }',
+    ':root { --pb-theme-font-sans: "PbRemoteSans", sans-serif; --pb-theme-font-mono: "PbDataMono", monospace; }',
+    '[data-pb-header] { background-image: url("https://example.invalid/pb-remote.png"); }',
+  ].join("\n") } } });
+
+  test("theme CSS obeys the shell CSP", async ({ page, request, smokeServer }, testInfo) => {
+    const readings: Readings = [];
+    await page.addInitScript(() => {
+      const sink: Violation[] = [];
+      (window as unknown as { __cspViolations: Violation[] }).__cspViolations = sink;
+      window.addEventListener("securitypolicyviolation", (event) => {
+        sink.push({ violatedDirective: event.violatedDirective, blockedURI: event.blockedURI });
+      });
+    });
+    const requests: string[] = [];
+    page.on("request", (request) => requests.push(request.url()));
+    await openDocument(page, request, smokeServer, "light");
+    await expect(page.locator(".pb-prose pre code").first()).toBeVisible();
+    await page.evaluate(async () => { await document.fonts.ready; });
+    const violations = () => page.evaluate(() => (window as unknown as { __cspViolations: Violation[] }).__cspViolations);
+    const classes = [
+      ["remote stylesheet violation", "style-src", "remote"],
+      ["remote font violation", "font-src", "remote"],
+      ["data font violation", "font-src", "data"],
+    ] as const;
+    const count = (events: Violation[], directive: string, source: string) => events.filter((event) =>
+      event.violatedDirective.startsWith(directive) && (source === "data"
+        ? event.blockedURI.startsWith("data") : /^https:\/\/example\.invalid(?:\/|$)/.test(event.blockedURI))).length;
+    for (const [observable, directive, source] of classes) {
+      await expect.soft.poll(async () => count(await violations(), directive, source), { message: observable }).toBeGreaterThanOrEqual(1);
+    }
+    const backgroundImage = await page.locator("[data-pb-header]").evaluate((element) => getComputedStyle(element).backgroundImage);
+    expect.soft(backgroundImage, "remote image is applied").toContain("pb-remote.png");
+    await expect.soft.poll(() => requests.filter((url) => url === "https://example.invalid/pb-remote.png").length,
+      { message: "remote image request is observed" }).toBeGreaterThanOrEqual(1);
+    const observed = await violations();
+    const imageViolations = observed.filter((event) => event.violatedDirective.startsWith("img-src"));
+    expect.soft(imageViolations, "remote image is allowed by CSP").toEqual([]);
+    readings.push({ observable: "theme CSS CSP", violations: observed,
+      violationCounts: Object.fromEntries(classes.map(([name, directive, source]) => [name, count(observed, directive, source)])),
+      backgroundImage, requests, imageRequests: requests.filter((url) => url === "https://example.invalid/pb-remote.png").length,
+      imageViolations, fontReady: true, codeBlocks: await page.locator(".pb-prose pre code").count() });
+    await retain(testInfo, readings);
+  });
+});
+
 test.describe("a selected dark definition", () => {
   test.use({ smokeData: { files: darkFile, theme: { dark: "opaque-dark.css" } } });
 
@@ -186,6 +313,33 @@ test.describe("two selected definitions", () => {
       await retain(testInfo, values);
     });
   }
+});
+
+test.describe("invalid selection at startup", () => {
+  test.use({ smokeData: { files: darkFile, theme: { light: "pb-rejected-probe.txt", dark: "opaque-dark.css" } } });
+
+  test("an invalid selection warns at startup and serves the bundled definition", async ({ page, request, smokeServer }, testInfo) => {
+    const readings: Readings = [];
+    await openDocument(page, request, smokeServer, "light");
+    await baselineBody(page, "light", readings);
+    await openDocument(page, request, smokeServer, "dark");
+    const expected = parse(fixtureDefinitions()["opaque-dark"]["--pb-theme-background"]);
+    await customColor(page, "dark", "body", "background-color", expected, "--pb-surface", readings);
+    await smokeServer.stop();
+    const log = readFileSync(testInfo.outputPath("server.log"), "utf8");
+    const rejection = /\bWARN\b\s+\S+ - theme(?:\.(?:light|dark))? /;
+    const rejections = log.split("\n").filter((line) => rejection.test(line));
+    expect.soft(rejections, "one rejected selection warning").toHaveLength(1);
+    for (const line of rejections) {
+      expect.soft(line, "warning names the setting").toContain("theme.light");
+      expect.soft(line, "warning names the fallback").toContain("serving the bundled light theme");
+    }
+    expect.soft(log, "submitted value is not logged").not.toContain("pb-rejected-probe");
+    expect.soft(log, "known boot line").toContain("Application started in");
+    readings.push({ observable: "invalid selection boot warning", rejections,
+      submittedValueLogged: log.includes("pb-rejected-probe"), knownBootLine: log.includes("Application started in") });
+    await retain(testInfo, readings);
+  });
 });
 
 test.describe("unreadable selected definitions", () => {
