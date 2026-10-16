@@ -26,11 +26,16 @@ import com.plainbase.frameworks.protocol.ErrorEnvelope
 import com.plainbase.frameworks.protocol.RestJson
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.content.TextContent
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.request.httpMethod
 import io.ktor.server.request.queryString
 import io.ktor.server.request.uri
 import io.ktor.server.response.header
+import io.ktor.server.response.respond
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import kotlinx.serialization.KSerializer
@@ -40,7 +45,22 @@ import java.nio.charset.CodingErrorAction
 
 /** Responds [value] through the scoped [RestJson] serializer (present-null guaranteed, §A4). */
 internal suspend fun <T> ApplicationCall.respondRest(serializer: KSerializer<T>, value: T, status: HttpStatusCode = HttpStatusCode.OK) {
-    respondText(RestJson.encodeToString(serializer, value), ContentType.Application.Json, status)
+    respondHeadAware(TextContent(RestJson.encodeToString(serializer, value), ContentType.Application.Json, status))
+}
+
+/**
+ * Answers HEAD with the GET status and headers but no body bytes. No AutoHeadResponse is installed and CIO writes
+ * whatever a handler emits, so a body sent on HEAD by an all-method handler (the API and theme catch-alls, the
+ * StatusPages envelopes) lands in front of the next response on a keep-alive connection.
+ */
+internal suspend fun ApplicationCall.respondHeadAware(content: OutgoingContent) {
+    respond(if (request.httpMethod == HttpMethod.Head) HeadContent(content) else content)
+}
+
+private class HeadContent(content: OutgoingContent) : OutgoingContent.NoContent() {
+    override val status = content.status
+    override val contentType = content.contentType
+    override val contentLength = content.contentLength
 }
 
 /** A bodiless 204 (logout / no-content admin actions). */

@@ -3,16 +3,11 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.theming.ThemeMode
 import com.plainbase.frameworks.ktor.RouteContext
-import com.plainbase.frameworks.protocol.ErrorBody
 import com.plainbase.frameworks.protocol.ErrorCodes
-import com.plainbase.frameworks.protocol.ErrorEnvelope
-import com.plainbase.frameworks.protocol.RestJson
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
-import io.ktor.http.content.OutgoingContent
-import io.ktor.http.content.TextContent
 import io.ktor.http.withCharset
 import io.ktor.server.request.httpMethod
 import io.ktor.server.response.header
@@ -49,24 +44,7 @@ fun Route.themeRoutes(ctx: RouteContext) {
         handle {
             call.response.header(HttpHeaders.CacheControl, CACHE_CONTROL_NO_STORE)
             call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
-            val content = missingThemeContent()
-            if (call.request.httpMethod == HttpMethod.Head) {
-                call.respond(ThemeHeadContent(content))
-            } else {
-                call.respond(content)
-            }
+            call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such theme endpoint")
         }
     }
-}
-
-private fun missingThemeContent(): TextContent = TextContent(
-    RestJson.encodeToString(ErrorEnvelope.serializer(), ErrorEnvelope(ErrorBody(ErrorCodes.NOT_FOUND, "No such theme endpoint"))),
-    ContentType.Application.Json,
-    HttpStatusCode.NotFound,
-)
-
-private class ThemeHeadContent(content: TextContent) : OutgoingContent.NoContent() {
-    override val status = content.status
-    override val contentType = content.contentType
-    override val contentLength = content.contentLength
 }
