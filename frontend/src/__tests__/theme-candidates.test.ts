@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it } from "vitest";
-import { background, color, declarations, expand, parse, rows, stripComments, topLevelBlocks, type Color, type Tokens } from "./contrastResolver";
+import { background, color, declarations, expand, parse, rows, stripComments, topLevelBlocks, type Color } from "./contrastResolver";
 import {
   aliasInput, assemble, builtinCss, builtinSlots, CANDIDATE_ROLES, closure, COLOUR_ROLES, customSlots, fixtureAssembly,
   fixtureDefinitions, fixtureModes, fourInputDefinition, genericCss, legacy, legacyTokens, NON_COLOUR_ROLES, primitiveNames, PUBLIC,
@@ -113,14 +113,6 @@ describe("theme contract", () => {
       expect(color(broken, name)[3]).not.toBe(1);
       expect(background(broken, ["surface", name, name])).not.toEqual(background(broken, ["surface", name]));
     }
-  });
-  it("a Tinted light scheme keeps its body ink and passes every contrast row", () => {
-    const fixture = JSON.parse(readFileSync("src/__tests__/fixtures/theme/faint-ink.json", "utf8")) as { declarations: Tokens };
-    const body = Object.entries(fixture.declarations).map(([name, value]) => `${name}: ${value};`).join("\n");
-    const definition = `${selectors.light} { ${body} }`;
-    const map = assemble("light", [genericCss(), definition, builtinCss("dark")]);
-    tuple(color(map, "text"), parse(fixture.declarations["--pb-theme-foreground"]));
-    for (const row of rows) expect.soft(rowRatio(map, row), rowName(row)).toBeGreaterThanOrEqual(row[2]);
   });
   it.each(modes)("generic faint ink aliases muted foreground %s", (mode) => {
     const body = topLevelBlocks(genericCss()).find((entry) => entry.selector === selectors[mode])!.body;

@@ -103,6 +103,29 @@ describe("adapted scheme examples", () => {
     for (const value of Object.values(result.declarations)) expect(parse(value)[3]).toBe(1);
   });
 
+  it("each palette adjustment lists exactly the rows that fail without it", () => {
+    const computed = Object.fromEntries(examples.map((example) => {
+      const palette = metadata(example.adapted).palette;
+      const column = example.system === "base16" ? "tinted-base16" : "tinted-base24";
+      return [example.id, Object.fromEntries(example.adjustments.map((adjustment) => {
+        const reverted = { ...palette, [adjustment.slot]: adjustment.from };
+        const body = MAPPED.map((name) => `${name}: ${hexOf(reverted[roster.inputs[name][column]!])};`).join("\n");
+        const definition = `${selectors[example.mode]} { ${body} }`;
+        const slots = example.mode === "light" ? [genericCss(), definition, builtinCss("dark")] as const
+          : [genericCss(), builtinCss("light"), definition] as const;
+        const tokens = assemble(example.mode, slots);
+        const failing = rows.filter((row) => rowRatio(tokens, row) < row[2]).map(rowName);
+        return [adjustment.slot, [...new Set(failing)].sort()];
+      }))];
+    }));
+    process.stdout.write("Computed adjustment rows\n" + JSON.stringify(computed, null, 2) + "\n");
+    for (const example of examples) for (const adjustment of example.adjustments) {
+      const actual = computed[example.id][adjustment.slot];
+      expect.soft(actual, `${example.id} ${adjustment.slot} rows`).toEqual([...adjustment.rows].sort());
+      expect.soft(actual.length, `${example.id} ${adjustment.slot} necessary`).toBeGreaterThan(0);
+    }
+  });
+
   it("E4: example records are host-independent", () => {
     const facts = [...hostFacts(), ...Object.keys(process.env).filter((key) => key.startsWith("PB_TINTED_")).sort()
       .map((key) => process.env[key]).filter((value): value is string => Boolean(value))];

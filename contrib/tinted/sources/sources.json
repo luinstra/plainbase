@@ -125,24 +125,6 @@
       "generated": "generated/base16-gruvbox-light-hard-adapted.css",
       "adjustments": [
         {
-          "slot": "base05",
-          "from": "#504945",
-          "to": "#110f0e",
-          "rows": [
-            "status-archived on surface (4.5)",
-            "status-archived on surface-hover (3)",
-            "status-archived on surface-raised (4.5)",
-            "text-faint on surface (4.5)",
-            "text-faint on surface-chrome (3)",
-            "text-faint on surface-chrome (4.5)",
-            "text-faint on surface-chrome + nav-active-bg (3)",
-            "text-faint on surface-field (4.5)",
-            "text-faint on surface-hover (3)",
-            "text-faint on surface-hover (4.5)",
-            "text-faint on surface-raised (4.5)"
-          ]
-        },
-        {
           "slot": "base09",
           "from": "#af3a03",
           "to": "#aa3803",
@@ -167,7 +149,6 @@
             "link-broken on surface-raised + callout-note-bg (4.5)",
             "link-broken on surface-raised + callout-warning-bg (4.5)",
             "status-draft on surface (4.5)",
-            "status-draft on surface-hover (3)",
             "status-draft on surface-raised (4.5)",
             "warning on surface + warning-soft (4.5)"
           ]
@@ -188,8 +169,7 @@
         }
       ],
       "notes": [
-        "The base05 change is forced by the frozen text-faint mix: text-faint on surface-chrome (base01) clears 4.5 only with a near-black foreground.",
-        "The darker base05 also darkens surface-hover, which is why status-draft on surface-hover (3) is listed under base0A."
+        "base05 keeps the upstream 504945: faint text follows muted-foreground (base04), so the scheme's body ink passes unchanged."
       ]
     }
   ]
