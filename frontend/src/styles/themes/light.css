@@ -1,4 +1,4 @@
-/* Unreleased built-in light candidate. Never imported by the app. */
+/* Unreleased bundled light definition, served at /_plainbase/theme-light.css. */
 :where(:root:not([data-theme="dark"])) {
   /* public inputs */
   --pb-theme-background: var(--pb-warm-25);

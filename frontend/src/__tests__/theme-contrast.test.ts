@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { background, block, color, contrast, declarations, expand, over, parse, rows, stripComments, type Color } from "./contrastResolver";
+import { background, color, contrast, declarations, expand, over, parse, rows, stripComments, type Color } from "./contrastResolver";
+import { aliasInput, assemble, builtinCss, builtinSlots } from "./themeCandidates";
 
-const source = stripComments(readFileSync("src/styles/tokens.css", "utf8"));
-const light = block(source, ":root");
-const dark = { ...light, ...block(source, '[data-theme="dark"]') };
+const source = stripComments(builtinCss("light") + builtinCss("dark"));
+const light = assemble("light", builtinSlots());
+const dark = assemble("dark", builtinSlots());
 function tuple(actual: Color, expected: number[]) {
   actual.forEach((v, i) => expect(Math.abs(v - expected[i])).toBeLessThan(0.0001));
 }
@@ -41,7 +42,9 @@ describe("contrast resolver independent controls", () => {
 for (const [theme, tokens] of Object.entries({ light, dark })) {
   describe(`${theme} rendered-state contrast matrix`, () => {
     it("selected foreground follows text ink", () => {
-      expect(tokens["--pb-selection-text"]).toBe("var(--pb-text)");
+      // The built-in optional-input floor rows in theme-candidates.test.ts verify independent selection ink.
+      expect(aliasInput("--pb-selection-text", tokens)).toBe("--pb-theme-selection-foreground");
+      tuple(color(tokens, "selection-text"), color(tokens, "text"));
     });
     it.each(rows.map(([ink, stack, floor]) => [`${ink} on ${stack.join(" + ")} (${floor})`, ink, stack, floor] as const))("%s", (_, ink, stack, floor) => {
       const ratio = contrast(color(tokens, ink), background(tokens, [...stack]));

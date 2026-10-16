@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:net";
 import type { Readable } from "node:stream";
@@ -32,7 +32,12 @@ export type SmokeServer = {
   stop: () => Promise<void>;
 };
 
-export type SmokeServerOptions = {
+export type SmokeData = {
+  files?: Record<string, string | Buffer>;
+  theme?: { light?: string; dark?: string };
+};
+
+export type SmokeServerOptions = SmokeData & {
   port?: number;
   onAttemptCreated?: (attemptRoot: string) => void;
 };
@@ -151,6 +156,17 @@ export async function startSmokeServer(
           "",
         ].join("\n"),
       );
+    }
+
+    for (const [name, contents] of Object.entries(options.files ?? {})) {
+      writeFileSync(path.join(dataDir, name), contents);
+    }
+    if (options.theme) {
+      appendFileSync(path.join(dataDir, "plainbase.conf"), [
+        "theme {",
+        ...Object.entries(options.theme).map(([mode, leaf]) => `  ${mode} = ${JSON.stringify(leaf)}`),
+        "}", "",
+      ].join("\n"));
     }
 
     const port = options.port ?? (await allocatePort());

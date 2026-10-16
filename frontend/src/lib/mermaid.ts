@@ -66,7 +66,7 @@ function themeConfig(convert: (color: string) => string): Parameters<MermaidInst
   probe.style.visibility = "hidden";
   document.body.appendChild(probe);
   try {
-    const [background, raised, border, strongBorder, link, text, nodeBackground, nodeBorder, shadow] = [
+    const [background, raised, border, strongBorder, link, text, nodeBackground, nodeBorder, shadow, nodeText] = [
       "--pb-surface",
       "--pb-surface-raised",
       "--pb-border",
@@ -76,6 +76,7 @@ function themeConfig(convert: (color: string) => string): Parameters<MermaidInst
       "--pb-diagram-node-bg",
       "--pb-diagram-node-border",
       "--pb-diagram-shadow",
+      "--pb-diagram-node-text",
     ].map((token) => {
       probe.style.backgroundColor = `var(${token})`;
       return convert(getComputedStyle(probe).backgroundColor);
@@ -96,14 +97,14 @@ function themeConfig(convert: (color: string) => string): Parameters<MermaidInst
         useGradient: false,
         background,
         primaryColor: nodeBackground,
-        primaryTextColor: text,
+        primaryTextColor: nodeText,
         primaryBorderColor: nodeBorder,
         lineColor: link,
         secondaryColor: background,
         secondaryTextColor: text,
         secondaryBorderColor: strongBorder,
         tertiaryColor: raised,
-        tertiaryTextColor: text,
+        tertiaryTextColor: nodeText,
         tertiaryBorderColor: border,
         mainBkg: nodeBackground,
         nodeBorder,
@@ -112,7 +113,7 @@ function themeConfig(convert: (color: string) => string): Parameters<MermaidInst
         textColor: text,
         titleColor: text,
         edgeLabelBackground: background,
-        nodeTextColor: text,
+        nodeTextColor: nodeText,
         fontFamily,
         fontSize: `${fontSize}px`,
       },

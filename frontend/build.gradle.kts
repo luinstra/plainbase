@@ -30,9 +30,8 @@ val npmBuild = tasks.register<NpmTask>("npmBuild") {
     outputs.dir(layout.projectDirectory.dir("dist"))
 }
 
-// Unit/snapshot tests + the §5.9 token-discipline gate (vitest). Part of `build`, so the
-// JAR floor (`./gradlew build`) rejects hex colors outside src/styles/tokens.css,
-// src/styles/themes/light.css and src/styles/themes/dark.css.
+// Unit/snapshot tests and the token-discipline gate (vitest). Part of `build`, so the
+// JAR floor rejects hex colors outside src/styles/themes/light.css and src/styles/themes/dark.css.
 val npmTest = tasks.register<NpmTask>("npmTest") {
     dependsOn(tasks.npmInstall)
     args.set(listOf("run", "test"))

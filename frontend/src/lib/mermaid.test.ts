@@ -480,14 +480,35 @@ describe("renderMermaidBlocks", () => {
       pending.resolve({ svg: "<svg><title>diagram</title></svg>" });
       await waitFor(() => expect(log.titles).toEqual(["diagram"]));
 
-      expect(convert).toHaveBeenCalledTimes(9);
-      expect(probes).toHaveLength(9);
+      expect(convert).toHaveBeenCalledTimes(10);
+      expect(probes).toHaveLength(10);
       expect(probes.every((sample) => sample.length === 1)).toBe(true);
       expect(new Set(probes.flat()).size).toBe(1);
       expect(document.querySelectorAll("[data-pb-mermaid-probe]")).toHaveLength(0);
     } finally {
       cleanup();
       log.disconnect();
+    }
+  });
+
+  it("pairs node and tertiary ink with the card while retaining page colors", async () => {
+    const fake = fakeMermaid();
+    const { renderMermaidBlocks } = await loadHelper(fake);
+    const container = diagramContainer(["flowchart LR\nA --> B"]);
+    const cleanup = renderMermaidBlocks(container);
+    try {
+      await waitForDiagrams(container, 1);
+      const variables = fake.initialize.mock.calls[0]?.[0].themeVariables;
+      for (const key of ["primaryTextColor", "nodeTextColor", "tertiaryTextColor"]) {
+        expect.soft(variables[key], key).toBe("var(--pb-diagram-node-text)");
+      }
+      expect.soft(variables.textColor, "textColor").toBe("var(--pb-text)");
+      expect.soft(variables.secondaryTextColor, "secondaryTextColor").toBe("var(--pb-text)");
+      expect.soft(variables.titleColor, "titleColor").toBe("var(--pb-text)");
+      expect.soft(variables.secondaryColor, "secondaryColor").toBe("var(--pb-surface)");
+      expect.soft(variables.tertiaryColor, "tertiaryColor").toBe("var(--pb-surface-raised)");
+    } finally {
+      cleanup();
     }
   });
 });

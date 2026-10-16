@@ -132,6 +132,32 @@ class FrontendBundleTest : FunSpec({
         }
     }
 
+    test("the app stylesheets carry no palette declarations") {
+        val sheets = bundleAssetsLevel().filter { (name, _) -> name.endsWith(".css") }
+        sheets.isNotEmpty() shouldBe true
+        val declaration = Regex("""(?:^|[;{])\s*(--pb-[\w-]+)\s*:\s*([^;{}]*)""")
+        val activeSearch = Regex("""(?:^|[{}])\s*\.pb-search\s+\[data-pb-search-active]\s*\{([^{}]*)}""")
+        var activeSearchOverrides = 0
+        val forbidden = sheets.flatMap { (name, file) ->
+            val css = Files.readString(file)
+            val activeSearchBodies = activeSearch.findAll(css).map { requireNotNull(it.groups[1]).range }.toList()
+            declaration.findAll(css)
+                .filterNot { match ->
+                    val approved = match.groupValues[1] == "--pb-text-faint" &&
+                        match.groupValues[2].trim() == "var(--pb-text-muted)" &&
+                        activeSearchBodies.any { match.range.last in it }
+                    if (approved) activeSearchOverrides++
+                    approved
+                }
+                .map { "$name: ${it.groupValues[1]}" }
+                .toList()
+        }.distinct()
+        withClue("structural CSS may declare only the active-search faint override; palette definitions belong in theme stylesheets") {
+            forbidden.shouldBeEmpty()
+            activeSearchOverrides shouldBe 1
+        }
+    }
+
     test("H2: the FrontendBundle ledger and the served tree name exactly the same top-level entries") {
         // DISTINCT from the reservation row above, and the difference IS the trap that makes one list get
         // written from the other: drop `favicon.svg` from `FrontendBundle.files` and the reservation row

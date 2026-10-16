@@ -35,11 +35,16 @@ export function themeStylesheets(): Plugin {
     },
     transformIndexHtml: {
       order: "post",
-      handler: () => [{
+      handler: () => [
+        "/plainbase-theme-generic.css",
+        "/_plainbase/theme-light.css",
+        "/_plainbase/theme-dark.css",
+        "/_plainbase/custom.css",
+      ].map((href) => ({
         tag: "link",
-        attrs: { rel: "stylesheet", href: "/_plainbase/custom.css" },
-        injectTo: "head",
-      }],
+        attrs: { rel: "stylesheet", href },
+        injectTo: "head" as const,
+      })),
     },
     generateBundle() {
       for (const [sourcePath, fileName] of themeSheets) {

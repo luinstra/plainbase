@@ -5,7 +5,7 @@ import type { Locator } from "@playwright/test";
 import { expect, test, type Page } from "./smoke-fixtures";
 import { gotoAndWaitForSearchReady, gotoExpectStatus } from "./helpers";
 import { normalizeColors } from "./theme-colors";
-import { declarations, stripComments, topLevelBlocks } from "../src/__tests__/contrastResolver";
+import { themeMarkdown as markdown } from "./themePages";
 
 type Color = [number, number, number, number];
 type StyleValue = string | Color;
@@ -33,10 +33,7 @@ type Baseline = {
 
 const captureCommand = "./gradlew :frontend:smokeTest -PsmokeArgs='theme-baseline.spec.ts --project=open' --console=plain";
 const colorProperties = new Set(["background-color", "color", "border-color", "border-left-color", "border-right-color", "fill", "stroke"]);
-const tokenSource = stripComments(readFileSync("src/styles/tokens.css", "utf8"));
-const rootBody = topLevelBlocks(tokenSource).find((entry) => entry.selector === ":root")?.body;
-if (!rootBody?.includes("color-scheme: light;")) throw new Error("missing built-in semantic boundary");
-const semanticNames = Object.keys(declarations(rootBody.split("color-scheme: light;")[1]));
+const semanticNames = (JSON.parse(readFileSync("src/__tests__/fixtures/theme/legacy-tokens.json", "utf8")) as { semantic: string[] }).semantic;
 
 async function readStyles(page: Page, selector: string, properties: string[], pseudo?: string): Promise<Reading> {
   const elements: Array<Record<string, StyleValue>> = await page.locator(selector).evaluateAll((elements, { properties, pseudo }) =>
@@ -113,18 +110,6 @@ function compareFrozen(actual: unknown, expected: unknown, location: string) {
     for (const [key, value] of Object.entries(expected)) compareFrozen(values[key], value, `${location}.${key}`);
   } else expect(actual, location).toBe(expected);
 }
-
-const markdown = [
-  "---", "title: Theme baseline", "owner: Ada Lovelace", "status: active", "---", "",
-  "# Theme baseline", "", "A paragraph with [a link](https://example.com) and inline `code`.", "",
-  "> A blockquote.", "", "| Name | Value |", "| --- | --- |", "| Sample | Baseline |", "",
-  ...["NOTE", "WARNING", "CAUTION"].flatMap((kind) => [
-    `> [!${kind}]`, "> Callout with [a link](https://example.com).", ">", `> > [!${kind}]`, "> > Nested callout.", "",
-  ]),
-  "```javascript", 'function greet(name) { return { count: 1, label: "x" }; } // note', "```", "",
-  "```json", '{ "count": 1, "label": "x" }', "```", "",
-  "```mermaid", "flowchart LR", " subgraph Group", " A[Start]", " B[Finish]", " end", " A -->|go| B", "```", "",
-].join("\n");
 
 test("built-in modes match the frozen appearance baseline", async ({ page, request, browser, smokeServer }, testInfo) => {
   test.setTimeout(120_000);
@@ -291,7 +276,8 @@ test("built-in modes match the frozen appearance baseline", async ({ page, reque
 
   const modes = { light: await capture("light"), dark: await capture("dark") };
   const sourcePaths = [
-    "src/styles/tokens.css", "src/styles/app.css", "src/theme.ts", "src/lib/mermaid.ts", "index.html",
+    "src/styles/themes/generic.css", "src/styles/themes/light.css", "src/styles/themes/dark.css",
+    "src/styles/app.css", "src/theme.ts", "src/lib/mermaid.ts", "index.html",
     "src/__tests__/contrastResolver.ts", "e2e/theme-baseline.spec.ts", "e2e/theme-colors.ts", "e2e/smoke-fixtures.ts", "playwright.config.ts", "package-lock.json",
   ];
   const baseline: Baseline = {

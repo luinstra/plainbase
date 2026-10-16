@@ -48,7 +48,16 @@ function classes(source: string, hook: string, required: string[], obsolete: str
   }
 }
 const aliases = { chrome: "surface-chrome", field: "surface-field", primary: "primary-bg", "primary-edge": "primary-border", "primary-ink": "primary-text" };
-function alias(source: string, name: string, token: string) { property(source, "@theme inline", `--color-${name}`, `var(--pb-${token})`); }
+function bridge(source: string, key: string, token: string) { property(source, "@theme inline", key, `var(${token})`); }
+function radii(source: string) {
+  const values = [...strip(source).matchAll(/\bborder-radius\s*:\s*([^;}]+)/g)].map((match) => match[1].trim());
+  expect(values.length).toBeGreaterThan(0);
+  const allowed = /^(?:var\(--pb-radius(?:-(?:xs|sm|md|lg|xl|2xl|3xl))?\)|50%|20px|inherit)$/;
+  expect(values.filter((value) => !allowed.test(value))).toEqual([]);
+}
+function hoverInk(source: string) {
+  expect(rule(source, ".pb-discussion-card-link:hover")).not.toMatch(/(?:^|;)\s*color\s*:/);
+}
 function label(source: string, selector: string, size: number, weight?: number) {
   property(source, selector, "font-family", "var(--font-sans)");
   property(source, selector, "font-size", `${size}px`);
@@ -86,11 +95,41 @@ describe("type floor", () => {
   });
 });
 describe("semantic alias and consumer wiring", () => {
-  it.each(Object.entries(aliases))("registers %s inside @theme inline", (name, token) => alias(css, name, token));
+  it.each(Object.entries(aliases))("registers %s inside @theme inline", (name, token) => bridge(css, `--color-${name}`, `--pb-${token}`));
   it("rejects missing, external and misbound aliases", () => {
     const valid = "@theme inline { --color-chrome: var(--pb-surface-chrome); }";
-    alias(valid, "chrome", "surface-chrome");
-    for (const broken of ["@theme inline { --color-other: var(--pb-surface); }", valid.replace("@theme inline", ":root"), valid.replace("surface-chrome", "surface-raised")]) expect(() => alias(broken, "chrome", "surface-chrome")).toThrow();
+    bridge(valid, "--color-chrome", "--pb-surface-chrome");
+    for (const broken of ["@theme inline { --color-other: var(--pb-surface); }", valid.replace("@theme inline", ":root"), valid.replace("surface-chrome", "surface-raised")]) expect(() => bridge(broken, "--color-chrome", "--pb-surface-chrome")).toThrow();
+  });
+  const fontBridges = [["--font-sans", "--pb-font-sans"], ["--font-mono", "--pb-font-mono"]];
+  it.each(fontBridges)("registers %s inside @theme inline", (key, token) => bridge(css, key, token));
+  it("bridge checker rejects literal stacks, wrong tokens and keys outside @theme inline", () => {
+    for (const [key, token] of fontBridges) {
+      const valid = `@theme inline { ${key}: var(${token}); }`;
+      bridge(valid, key, token);
+      const other = token === "--pb-font-sans" ? "--pb-font-mono" : "--pb-font-sans";
+      for (const broken of [valid.replace(`var(${token})`, "serif"), valid.replace(token, other), valid.replace("@theme inline", ":root")]) {
+        expect(() => bridge(broken, key, token)).toThrow();
+      }
+    }
+  });
+  const radiusBridges = [["--radius", "--pb-radius"], ["--radius-md", "--pb-radius-md"], ["--radius-xl", "--pb-radius-2xl"]];
+  it.each(radiusBridges)("registers %s inside @theme inline", (key, token) => bridge(css, key, token));
+  it("decorative radii follow the radius scale", () => radii(css));
+  it("radius checker rejects literals and calculations", () => {
+    const values = ["", "-xs", "-sm", "-md", "-lg", "-xl", "-2xl", "-3xl"].map((step) => `var(--pb-radius${step})`);
+    values.push("50%", "20px", "inherit");
+    const valid = values.map((value) => `.a { border-radius: ${value}; }`).join("\n");
+    radii(valid + " /* border-radius: 4px; */");
+    radii(".a { border-radius: var(--pb-radius) }");
+    for (const value of ["4px", ".375rem", "calc(4px)"]) {
+      expect(() => radii(`${valid}\n.a { border-radius: ${value}; }`)).toThrow();
+    }
+    expect(() => radii(".a { padding: 1rem; }")).toThrow();
+  });
+  it("card link hover leaves ink to its descendants", () => {
+    hoverInk(css);
+    expect(() => hoverInk(".pb-discussion-card-link:hover { background: var(--pb-surface-hover); color: var(--pb-text); }")).toThrow();
   });
   const primary = ["border-primary-edge", "bg-primary", "text-primary-ink"];
   it.each([["EditorPage", "data-pb-save"], ["EditorPage", "data-pb-save-as-new"], ["NewPageDialog", "data-pb-new-create"]])("wires %s %s primary styles", (owner, hook) => classes(read(owner), hook, primary, ["border-edge", "border-accent", "bg-accent", "text-accent-contrast"]));
@@ -118,6 +157,19 @@ describe("semantic alias and consumer wiring", () => {
     ["::selection", "color", "var(--pb-selection-text)"],
     ["::placeholder", "color", "var(--pb-text-muted)"],
     ["::placeholder", "opacity", "1"],
+    [".pb-discussion-card, .pb-discussion-evidence, .pb-discussion-notice", "color", "var(--pb-card-foreground)"],
+    [".pb-discussion-list-card", "color", "var(--pb-card-foreground)"],
+    [".pb-discussion-card-quote", "color", "var(--pb-card-foreground)"],
+    [":is(.pb-discussion-card, .pb-discussion-list-card) .pb-discussion-author", "color", "var(--pb-card-foreground)"],
+    [".pb-discussion-card-link:hover :is(.pb-discussion-card-quote, .pb-discussion-author)", "color", "var(--pb-text)"],
+    [".pb-discussion-history .pb-discussion-evidence", "color", "inherit"],
+    [".pb-new-dialog", "color", "var(--pb-card-foreground)"],
+    [".pb-new-title", "color", "var(--pb-card-foreground)"],
+    [".pb-new-location", "color", "var(--pb-card-foreground)"],
+    [".pb-new-field", "color", "var(--pb-card-foreground)"],
+    [".pb-template-card:has(:checked)", "color", "var(--pb-text)"],
+    [":is(.pb-discussion-card, .pb-discussion-evidence, .pb-discussion-notice, .pb-discussion-list-card, .pb-new-dialog) .text-ink", "color", "var(--pb-card-foreground)"],
+    [".pb-discussion-history .pb-discussion-evidence .text-ink", "color", "var(--pb-text)"],
   ];
   it.each(bindings)("binds %s %s", (selector, key, value) => property(css, selector, key, value));
   it("property checker rejects every omitted and misbound declaration", () => {

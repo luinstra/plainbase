@@ -163,8 +163,8 @@ function targetsFrozenFixtures(argument: string): boolean {
   });
 }
 
-describe("candidate theme boundaries", () => {
-  it("theme candidates and fixtures are not app imports", () => {
+describe("theme source boundaries", () => {
+  it("theme source and fixtures are not app imports", () => {
     const applicationFiles = filesUnder(path.join(frontendRoot, "src"))
       .filter((file) => /\.(ts|tsx|html)$/.test(file))
       .filter((file) => !path.relative(frontendRoot, file).split(path.sep).includes("__tests__"));
@@ -180,11 +180,11 @@ describe("candidate theme boundaries", () => {
       }));
     });
     expect(imported).toEqual([]);
-    expect([...new Set(cssImports(path.join(frontendRoot, "src", "styles")))].sort()).toEqual([
+    expect.soft([...new Set(cssImports(path.join(frontendRoot, "src", "styles")))].sort()).toEqual([
       "./fonts.css",
-      "./tokens.css",
       "tailwindcss",
     ]);
+    expect.soft(existsSync(path.join(frontendRoot, "src", "styles", "tokens.css"))).toBe(false);
     expect(cssImports(path.join(frontendRoot, "src", "styles", "themes"))).toEqual([]);
     const html = readFileSync(indexFile, "utf8");
     const stylesheetLinks = [...html.matchAll(/<link\b[^>]*>/gi)]
@@ -248,7 +248,7 @@ describe("candidate theme boundaries", () => {
     expect(importSpecifiers(`const ratio = total / (await import("./a.css")).value / count;`)).toEqual(["./a.css"]);
   });
 
-  it("theme candidates and fixtures are not public assets", () => {
+  it("theme source and fixtures are not public assets", () => {
     const assets = filesUnder(path.join(frontendRoot, "public"))
       .filter((file) => /\.(css|json)$/i.test(file))
       .map((file) => path.relative(frontendRoot, file));

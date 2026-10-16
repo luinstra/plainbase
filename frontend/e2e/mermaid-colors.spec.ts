@@ -164,7 +164,7 @@ test("a same-mode stylesheet edit changes diagram colors only after reload", asy
 });
 
 for (const element of [
-  { name: "node ink accepts a modern color", role: "--pb-text", selector: ".node text", property: "fill", family: "lab" },
+  { name: "node ink accepts a modern color", role: "--pb-diagram-node-text", selector: ".node text", property: "fill", family: "lab" },
   { name: "node stroke accepts a modern color", role: "--pb-diagram-node-border", selector: ".node rect", property: "stroke", family: "oklab" },
 ]) {
   test(element.name, async ({ page, smokeServer }, testInfo) => {

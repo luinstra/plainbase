@@ -1,19 +1,21 @@
 import { expect, test as base } from "@playwright/test";
 import { existsSync } from "node:fs";
-import { startSmokeServer, type SmokeScenario, type SmokeServer } from "./smoke-server";
+import { startSmokeServer, type SmokeData, type SmokeScenario, type SmokeServer } from "./smoke-server";
 
 type SmokeFixtures = {
+  smokeData: SmokeData;
   smokeServer: SmokeServer;
 };
 
 export const test = base.extend<SmokeFixtures>({
+  smokeData: [{}, { option: true }],
   smokeServer: [
-    async ({}, use, testInfo) => {
+    async ({ smokeData }, use, testInfo) => {
       const scenario = scenarioFor(testInfo.project.name);
       const logPath = testInfo.outputPath("server.log");
       let server: SmokeServer | undefined;
       try {
-        server = await startSmokeServer(scenario, logPath);
+        server = await startSmokeServer(scenario, logPath, smokeData);
         await use(server);
       } finally {
         let teardownError: unknown;

@@ -44,14 +44,16 @@ describe("theme stylesheet emission", () => {
     expect(plugin.apply).toBeUndefined();
   });
 
-  it("the HTML hook appends only the override link after built stylesheets", () => {
+  it("the HTML hook appends the generic, selected and override links after built stylesheets", () => {
     const hook = themeStylesheets().transformIndexHtml;
     expect(hook).toMatchObject({ order: "post" });
-    expect(invokeHook(hook, {})).toEqual([{
+    expect(invokeHook(hook, {})).toEqual([
+      "/plainbase-theme-generic.css", "/_plainbase/theme-light.css", "/_plainbase/theme-dark.css", "/_plainbase/custom.css",
+    ].map((href) => ({
       tag: "link",
-      attrs: { rel: "stylesheet", href: "/_plainbase/custom.css" },
+      attrs: { rel: "stylesheet", href },
       injectTo: "head",
-    }]);
+    })));
   });
 
   it("emits exactly the three resource names in source order", () => {

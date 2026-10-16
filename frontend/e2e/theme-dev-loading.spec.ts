@@ -14,6 +14,7 @@ async function readDevStylesheetState(page: Page) {
       element instanceof HTMLLinkElement && element.rel === "stylesheet" ? [{ index, path: new URL(element.href).pathname }] : []);
     return {
       bootstrap,
+      stylesheets: links.map((link) => link.path),
       appLinks: links.filter((link) => link.path === "/src/styles/app.css").map((link) => link.index),
       overrideLinks: links.filter((link) => link.path === "/_plainbase/custom.css").map((link) => link.index),
       appDevStyles: Array.from(document.querySelectorAll("style[data-vite-dev-id]")).flatMap((style) => {
@@ -30,6 +31,9 @@ function expectDevStylesheetState(state: Awaited<ReturnType<typeof readDevStyles
   expect.soft(state.appLinks, `${phase}: single app stylesheet link`).toHaveLength(1);
   expect.soft(state.overrideLinks, `${phase}: single override stylesheet link`).toHaveLength(1);
   expect.soft(state.bootstrap[0], `${phase}: bootstrap before app stylesheet`).toBeLessThan(state.appLinks[0]);
+  expect.soft(state.stylesheets, `${phase}: stylesheet order`).toEqual([
+    "/src/styles/app.css", "/plainbase-theme-generic.css", "/_plainbase/theme-light.css", "/_plainbase/theme-dark.css", "/_plainbase/custom.css",
+  ]);
   expect.soft(state.appLinks[0], `${phase}: app stylesheet before override`).toBeLessThan(state.overrideLinks[0]);
   expect.soft(state.appDevStyles, `${phase}: no injected app stylesheet`).toEqual([]);
   expect.soft(state.textRendering.toLowerCase(), `${phase}: operator text-rendering`).toBe("geometricprecision");

@@ -26,11 +26,6 @@ export function topLevelBlocks(css: string): Array<{ selector: string; body: str
   if (depth || quote) throw new Error("unbalanced CSS block");
   return blocks;
 }
-export function block(css: string, selector: string): Tokens {
-  const match = topLevelBlocks(css).find((entry) => entry.selector === selector.trim());
-  if (!match) throw new Error(`missing ${selector}`);
-  return declarations(match.body);
-}
 export function declarations(css: string): Tokens {
   const entries = [...css.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]);
   if (!entries.length) throw new Error("empty declarations");

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { background, block, color, contrast, declarations, expand, parse, rows, stripComments, topLevelBlocks, type Color, type Tokens } from "./contrastResolver";
+import { background, color, contrast, declarations, expand, parse, rows, stripComments, topLevelBlocks, type Color, type Tokens } from "./contrastResolver";
 
 export type Mode = "light" | "dark";
 export type FixtureMode = "opaque-light" | "opaque-dark" | "translucent-dark";
@@ -25,9 +25,11 @@ export const roster = JSON.parse(readFileSync("src/__tests__/fixtures/theme/rost
   inputs: Record<string, Input>; independentInk: string[]; newPrivates: string[]; description: string;
 };
 export const PUBLIC = Object.keys(roster.inputs);
-export const tokensSource = stripComments(readFileSync("src/styles/tokens.css", "utf8"));
-const lightBody = topLevelBlocks(tokensSource).find((entry) => entry.selector === ":root")!.body;
-export const SEMANTIC = Object.keys(declarations(lightBody.split("color-scheme: light;")[1]));
+export const legacyTokens = JSON.parse(readFileSync("src/__tests__/fixtures/theme/legacy-tokens.json", "utf8")) as {
+  source: { path: string; commit: string; sha256: string };
+  light: Tokens; dark: Tokens; primitives: string[]; semantic: string[];
+};
+export const SEMANTIC = legacyTokens.semantic;
 export const CANDIDATE_ROLES = [...SEMANTIC, ...roster.newPrivates];
 export const COLOUR_ROLES = [...SEMANTIC, "--pb-card-foreground", "--pb-diagram-node-text", "--pb-primary-opaque"];
 export const NON_COLOUR_ROLES = CANDIDATE_ROLES.filter((name) => !COLOUR_ROLES.includes(name));
@@ -51,24 +53,51 @@ export function fixtureAssembly(fixtureMode: FixtureMode): Tokens {
   return assemble(fixtureMode === "opaque-light" ? "light" : "dark", customSlots(fixtureMode === "translucent-dark" ? fixtureMode : "opaque-dark"));
 }
 
-// Slots are generic, light definition, dark definition. Later applicable declarations win.
-// Textual order differs from Chromium: :root outranks :where regardless of order.
-// T10 excludes that divergence in valid definitions; the later P2/P5 browser tests witness it.
-export function assemble(mode: Mode, slots: Slots): Tokens {
+// Definitions use zero-specificity exclusive selectors, so textual order models the browser.
+// Overrides apply last, with :root ranked above :where and source order preserved within each specificity.
+export function assemble(mode: Mode, slots: Slots, override = ""): Tokens {
+  const sources = [["generic", slots[0]], ["light", slots[1]], ["dark", slots[2]], ["override", override]] as const;
+  const parsed = sources.map(([slot, css]) => ({ slot, blocks: topLevelBlocks(css) }));
+  for (const { slot, blocks } of parsed) {
+    const seen = new Set<string>();
+    for (const { selector, body } of blocks) {
+      const blockMode = selector === selectors.light ? "light" : "dark";
+      if (selector === ":root") {
+        if (slot !== "override") throw new Error(`root block in ${slot} slot`);
+      } else if (selector !== selectors.light && selector !== selectors.dark) {
+        throw new Error(`unsupported selector ${selector} in ${slot} slot`);
+      } else {
+        if ((slot === "light" || slot === "dark") && blockMode !== slot) throw new Error(`wrong scope ${selector} in ${slot} slot`);
+      }
+      if (slot !== "override") {
+        if (seen.has(selector)) throw new Error(`duplicate ${blockMode} block in ${slot} slot`);
+        const properties = new Set<string>();
+        for (const [, name] of body.matchAll(/(--[\w-]+)\s*:/g)) {
+          if (properties.has(name)) throw new Error(`duplicate property ${name} in ${slot} slot`);
+          properties.add(name);
+        }
+      }
+      seen.add(selector);
+    }
+    const requiredModes: Mode[] = slot === "generic" ? ["light", "dark"] : slot === "override" ? [] : [slot];
+    for (const required of requiredModes) {
+      if (!seen.has(selectors[required])) throw new Error(`missing ${required} block in ${slot} slot`);
+    }
+  }
   const result: Tokens = {};
-  for (const css of slots) for (const entry of topLevelBlocks(css)) {
-    let applies: boolean;
-    if (entry.selector === ":root") applies = true;
-    else if (entry.selector === selectors.light) applies = mode === "light";
-    else if (entry.selector === selectors.dark) applies = mode === "dark";
-    else throw new Error(`unsupported selector ${entry.selector}`);
-    if (applies) Object.assign(result, declarations(entry.body));
+  for (const { slot, blocks } of parsed) {
+    const ranked = slot === "override"
+      ? [...blocks].sort((left, right) => Number(left.selector === ":root") - Number(right.selector === ":root"))
+      : blocks;
+    for (const entry of ranked) {
+      if (entry.selector === ":root" || entry.selector === selectors[mode]) Object.assign(result, declarations(entry.body));
+    }
   }
   return result;
 }
 export function legacy(mode: Mode): Tokens {
-  const light = block(tokensSource, ":root");
-  return mode === "light" ? light : { ...light, ...block(tokensSource, '[data-theme="dark"]') };
+  const light = { ...legacyTokens.light };
+  return mode === "light" ? light : { ...light, ...legacyTokens.dark };
 }
 export function primitiveNames(): string[] {
   const names = Object.keys(declarations(stripComments(builtinCss("light") + builtinCss("dark"))));

@@ -210,6 +210,9 @@ test("an operator override beats the equal-specificity app rule after modules ru
   await testInfo.attach("stylesheet-loading", { path: snapshotPath, contentType: "application/json" });
   expect.soft(state.stylesheets, "stylesheet order").toEqual([
     expect.stringMatching(/^\/assets\/[^/]+\.css$/),
+    "/plainbase-theme-generic.css",
+    "/_plainbase/theme-light.css",
+    "/_plainbase/theme-dark.css",
     "/_plainbase/custom.css",
   ]);
   expect.soft(state.textRendering.toLowerCase(), "operator text-rendering").toBe("geometricprecision");
@@ -301,10 +304,10 @@ test("a bootstrap whose bytes miss the pinned hash is refused", async ({ page, r
       .catch((error: unknown) => {
         if (!(error instanceof Error) || error.name !== "TimeoutError") throw error;
       });
-    await expect.poll(() => page.evaluate(() => Boolean(document.body) && Array.from(document.styleSheets).some((sheet) =>
-      sheet.href && /^\/assets\/[^/]+\.css$/.test(new URL(sheet.href).pathname) && sheet.cssRules.length > 0))).toBe(true);
+    await expect.poll(() => page.evaluate(() => Boolean(document.body)
+      && Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')).every((link) => link.sheet !== null))).toBe(true);
     const state = await readPaintState(page);
-    if (!state) throw new Error("Missing body after app stylesheet readiness");
+    if (!state) throw new Error("Missing body after stylesheet readiness");
     const [background] = await normalizeColors(page, [state.backgroundColor]);
     const snapshotPath = testInfo.outputPath("refused-bootstrap.json");
     writeFileSync(snapshotPath, JSON.stringify({ entryURL, shell: shellRoute.observation, state, background }, null, 2) + "\n");
@@ -315,6 +318,59 @@ test("a bootstrap whose bytes miss the pinned hash is refused", async ({ page, r
       .toBeLessThanOrEqual(colorTolerance);
   } finally {
     entry.abort();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("first mount waits for a delayed selected sheet", async ({ page, request, smokeServer }, testInfo) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await captureViolations(page);
+  await recordFirstMount(page);
+  const shellURL = new URL("/docs/scratch/todo", smokeServer.baseURL).href;
+  const entryURL = await entryModuleURL(request, shellURL);
+  const selected = holdEntry();
+  const settleMs = 1500;
+  const expected = expectedAppearance("dark");
+  try {
+    await page.route("**/_plainbase/theme-dark.css", selected.handler);
+    const entryResponse = page.waitForResponse(entryURL);
+    await page.goto(shellURL, { waitUntil: "commit" });
+    await (await entryResponse).finished();
+    await page.waitForTimeout(settleMs);
+    const selectedRequested = selected.requested;
+    const settled = await readPaintState(page);
+    expect.soft(selectedRequested, "selected sheet requested").toBe(true);
+    expect.soft(settled?.theme, "theme while selected sheet is held").toBe("dark");
+    expect.soft(settled?.rootEmpty, "root empty while selected sheet is held").toBe(true);
+    selected.release();
+    await expect.poll(() => page.evaluate(() => {
+      const records = window as unknown as ThemeRecords;
+      return Boolean(records.__pbFirstMount && records.__pbFirstLogo);
+    })).toBe(true);
+    const first = await page.evaluate((url) => {
+      const records = window as unknown as ThemeRecords;
+      const entry = performance.getEntriesByName(url, "resource")[0] as PerformanceResourceTiming | undefined;
+      return {
+        mount: records.__pbFirstMount,
+        logos: records.__pbFirstLogo,
+        violations: records.__cspViolations,
+        entryResponseEnd: entry?.responseEnd,
+      };
+    }, entryURL);
+    if (!first.mount || !first.logos || first.entryResponseEnd === undefined) {
+      throw new Error("First-mount observations or entry timing missing after readiness");
+    }
+    const colors = await normalizeColors(page, [first.mount.backgroundColor, first.mount.color]);
+    const mountLatencyMs = first.mount.time - first.entryResponseEnd;
+    const snapshotPath = testInfo.outputPath("delayed-selected.json");
+    writeFileSync(snapshotPath, JSON.stringify({ entryURL, settleMs, selectedRequested, settled, first, colors, mountLatencyMs }, null, 2) + "\n");
+    await testInfo.attach("delayed-selected", { path: snapshotPath, contentType: "application/json" });
+    expect.soft(colorDifference(colors[0], expected.backgroundColor), "first mount background").toBeLessThanOrEqual(colorTolerance);
+    expect.soft(colorDifference(colors[1], expected.color), "first mount foreground").toBeLessThanOrEqual(colorTolerance);
+    expect.soft(first.logos, "first logo visibility").toEqual(expected.logos);
+    expect.soft(first.violations, "CSP violations").toEqual([]);
+  } finally {
+    selected.abort();
     await page.unrouteAll({ behavior: "wait" });
   }
 });
@@ -413,10 +469,10 @@ for (const scenario of [
       await page.route(entryURL, entry.handler);
       await page.goto(shellURL, { waitUntil: "commit" });
       await expect.poll(() => entry.requested).toBe(true);
-      await expect.poll(() => page.evaluate(() => Boolean(document.body) && Array.from(document.styleSheets).some((sheet) =>
-        sheet.href && /^\/assets\/[^/]+\.css$/.test(new URL(sheet.href).pathname) && sheet.cssRules.length > 0))).toBe(true);
+      await expect.poll(() => page.evaluate(() => Boolean(document.body)
+        && Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')).every((link) => link.sheet !== null))).toBe(true);
       const held = await readPaintState(page);
-      if (!held) throw new Error("Missing body after app stylesheet readiness");
+      if (!held) throw new Error("Missing body after stylesheet readiness");
       const heldColors = await normalizeColors(page, [held.backgroundColor, held.color]);
       expect.soft(held.theme, "held theme").toBe(scenario.mode === "dark" ? "dark" : null);
       expect.soft(held.rootEmpty, "root empty while entry is held").toBe(true);

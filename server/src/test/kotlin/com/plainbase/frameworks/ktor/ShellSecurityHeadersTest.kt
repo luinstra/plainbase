@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.frameworks.filesystem.Fixtures
+import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.ints.shouldBeLessThan
@@ -49,7 +50,7 @@ class ShellSecurityHeadersTest : FunSpec({
         inlineScripts.single().range.last shouldBeLessThan firstStylesheet.range.first
     }
 
-    test("the bundled shell links the app stylesheet before only the custom override") {
+    test("the bundled shell links the app stylesheet, then generic, the selected definitions and the custom override") {
         val shell = bundledShellHtml().shouldNotBeNull()
         val hrefAttribute = Regex("""\shref\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
         val hrefs = stylesheetTag.findAll(shell)
@@ -57,8 +58,15 @@ class ShellSecurityHeadersTest : FunSpec({
             .toList()
         val appSheets = hrefs.filter { Regex("""/assets/[^/]+\.css""").matches(it) }
         appSheets.size shouldBe 1
-        hrefs shouldBe listOf(appSheets.single(), "/_plainbase/custom.css")
-        hrefs.none { "plainbase-theme-" in it || "/_plainbase/theme-" in it } shouldBe true
+        assertSoftly {
+            hrefs shouldBe listOf(
+                appSheets.single(),
+                "/plainbase-theme-generic.css",
+                "/_plainbase/theme-light.css",
+                "/_plainbase/theme-dark.css",
+                "/_plainbase/custom.css",
+            )
+        }
     }
 
     test("the shell CSP is stamped on BOTH shell-serving paths with the full directive set + companion headers") {
