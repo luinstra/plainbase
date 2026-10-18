@@ -556,8 +556,12 @@ directory.** Which stores those are depends on `storage.backend`:
   `roots {}` block cannot be combined with `storage.backend=object` (ADR-0011 D10).
 
 Back up `DATA_DIR/plainbase.db` too, in EITHER mode: it holds durable identity bindings, retirement history and
-aliases as well as users, agent tokens, proposals, roles, sessions and the audit log - the one piece of `DATA_DIR`
-holding *real*, non-derived state. `DATA_DIR/search.db` and `DATA_DIR/discussions.db` need no backup:
+aliases as well as users, agent tokens, proposals, roles, sessions and the audit log - the one database in `DATA_DIR`
+holding *real*, non-derived state. Advice: Also back up selected CSS and YAML/YML scheme files directly
+in `DATA_DIR` or `DATA_DIR/themes`, plus `DATA_DIR/custom.css` and `DATA_DIR/plainbase.conf`
+whenever it holds a `theme` block; see
+[theme deployment and editing](theming.md#deploying-and-editing).
+`DATA_DIR/search.db` and `DATA_DIR/discussions.db` need no backup:
 both are fully [derived state](#searchdb-and-discussionsdb-are-derived-state). Search rebuilds from the content tree;
 discussions rebuild at boot from `.plainbase/discussions/` in each enabled editable local root. Back up all authoritative
 collections with their content roots, including configured-disabled roots. Object-mode, read-only and non-local roots do not support
@@ -754,6 +758,8 @@ bucket on the next boot). The authoritative content is the source of truth, so m
   [Configuration: the order of the block](configuration.md#the-order-of-the-block-decides-source-precedence-not-permalinks)).
   Lose these files without a backup and a restore has the pages back but not the topology that made
   them a multi-root install.
+- Advice: Back up selected CSS and YAML/YML scheme files directly in `DATA_DIR` or `DATA_DIR/themes`,
+  plus `DATA_DIR/custom.css` and `DATA_DIR/plainbase.conf` whenever it holds a `theme` block, on a single-root install too.
 
 Two disaster-recovery drills run on every build: `IndexDestroyRebuildDrillTest` (stop → delete
 `search.db` → `plainbase reindex`, with `SearchEquivalenceTest` covering the engine level) and

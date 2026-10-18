@@ -22,6 +22,7 @@ import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.domain.theming.ThemeStylesheets
 import com.plainbase.frameworks.runtime.ServingRuntime
 import com.plainbase.frameworks.security.ProxyCsrf
 import io.ktor.server.application.ApplicationCall
@@ -30,6 +31,7 @@ internal fun buildGuardedApplication(
     serving: ServingRuntime,
     security: SecurityAssembly,
     transport: TransportSettings,
+    themes: ThemeStylesheets,
 ): RouteContext {
     val rooted = RootedContentInputs(serving)
     val published = PublishedReadInputs(serving)
@@ -83,6 +85,7 @@ internal fun buildGuardedApplication(
         read = read,
         mutate = mutate,
         proposals = proposals,
+        themes = themes,
         discussions = serving.discussionFacade,
         registry = rooted.registry,
         availability = rooted.availability,

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:net";
 import type { Readable } from "node:stream";
@@ -25,13 +25,19 @@ export type SmokeScenario = {
 export type SmokeServer = {
   baseURL: string;
   seed?: SmokeSeed;
+  dataDir: string;
   /** Per-attempt temporary fixture roots; tests may create their own content here. */
   contentDir: string;
   extraDir: string | null;
   stop: () => Promise<void>;
 };
 
-export type SmokeServerOptions = {
+export type SmokeData = {
+  files?: Record<string, string | Buffer>;
+  theme?: { light?: string; dark?: string };
+};
+
+export type SmokeServerOptions = SmokeData & {
   port?: number;
   onAttemptCreated?: (attemptRoot: string) => void;
 };
@@ -152,6 +158,20 @@ export async function startSmokeServer(
       );
     }
 
+    for (const [name, contents] of Object.entries(options.files ?? {})) {
+      if (path.isAbsolute(name) || name.includes("..")) throw new Error(`Invalid smoke data file path: ${name}`);
+      const target = path.join(dataDir, name);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, contents);
+    }
+    if (options.theme) {
+      appendFileSync(path.join(dataDir, "plainbase.conf"), [
+        "theme {",
+        ...Object.entries(options.theme).map(([mode, leaf]) => `  ${mode} = ${JSON.stringify(leaf)}`),
+        "}", "",
+      ].join("\n"));
+    }
+
     const port = options.port ?? (await allocatePort());
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -173,7 +193,14 @@ export async function startSmokeServer(
     const baseURL = `http://127.0.0.1:${port}`;
     await waitForOwnedBind(processState, logs, startupDeadline);
     await waitForHealth(processState, baseURL, logs, startupDeadline);
-    return { baseURL, seed, contentDir, extraDir: scenario.roots === "multi" || scenario.roots === "discussion-config" ? extraDir : null, stop };
+    return {
+      baseURL,
+      seed,
+      dataDir,
+      contentDir,
+      extraDir: scenario.roots === "multi" || scenario.roots === "discussion-config" ? extraDir : null,
+      stop,
+    };
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     try {
@@ -203,7 +230,7 @@ export async function startSmokeServer(
   }
 }
 
-async function allocatePort(): Promise<number> {
+export async function allocatePort(): Promise<number> {
   const probe = createServer();
   await new Promise<void>((resolve, reject) => {
     probe.once("error", reject);

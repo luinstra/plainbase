@@ -17,15 +17,18 @@ import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SessionService
 import com.plainbase.domain.service.SetupService
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.domain.theming.ThemeStylesheets
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.ConfigValuePolicy
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.filesystem.LocalThemeStylesheets
 import com.plainbase.frameworks.ktor.AuthServices
 import com.plainbase.frameworks.ktor.GuardedAdminFacade
 import com.plainbase.frameworks.ktor.IndexProposalBaseReader
 import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.buildGuardedApplication
+import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
 import com.plainbase.frameworks.ktor.securityAssembly
 import com.plainbase.frameworks.ktor.transportSettings
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
@@ -184,6 +187,10 @@ internal fun createRestModule(
         val build = { ProxyCsrf(loadOrCreateProxyCsrfKey(get<PlainbaseDb>())) }
         resourceOwner.construct("proxy CSRF key") { build() }
     }
+    single<ThemeStylesheets> {
+        val config = get<PlainbaseConfig>()
+        LocalThemeStylesheets(config.dataDir, config.theme.selection, embeddedThemeBuiltins())
+    }
     single<RouteContext> {
         resourceOwner.construct("route context") {
             val config = get<PlainbaseConfig>()
@@ -214,6 +221,7 @@ internal fun createRestModule(
                     serving = serving,
                     security = security,
                     transport = transport,
+                    themes = get(),
                 )
             }
             afterRouteContextBuilt(context)

@@ -10,6 +10,7 @@ internal object ServerTopLevel {
     const val BROWSE = "browse"
     const val HEALTHZ = "healthz"
     const val PERMALINK = "p"
+    const val PLAINBASE = "_plainbase"
 
-    val segments = listOf(API, ASSETS, BROWSE, HEALTHZ, PERMALINK)
+    val segments = listOf(API, ASSETS, BROWSE, HEALTHZ, PERMALINK, PLAINBASE)
 }

@@ -2,9 +2,10 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { themeStylesheets } from "./plugins/themeStylesheets.ts";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), themeStylesheets()],
   server: {
     // Dev mode proxies the API surfaces to a locally running server; the SPA handles
     // /docs/* and /p/* itself (vite's history fallback serves index.html for them).
@@ -13,6 +14,7 @@ export default defineConfig({
       "/assets/": "http://localhost:8080",
       "/browse": "http://localhost:8080",
       "/healthz": "http://localhost:8080",
+      "/_plainbase/": "http://localhost:8080",
     },
   },
   build: {

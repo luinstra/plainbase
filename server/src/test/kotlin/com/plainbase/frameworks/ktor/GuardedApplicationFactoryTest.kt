@@ -16,10 +16,13 @@ import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
+import com.plainbase.domain.theming.BundledThemeStylesheets
+import com.plainbase.domain.theming.ThemeStylesheets
 import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
 import com.plainbase.frameworks.runtime.HistoryProviders
 import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.RootStores
@@ -52,12 +55,14 @@ class GuardedApplicationFactoryTest : FunSpec({
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
                 val graph = GuardedTestGraph(root, harness)
-                val context = graph.context(AuthMode.BUILTIN)
+                val themes = mockk<ThemeStylesheets>()
+                val context = graph.context(AuthMode.BUILTIN, themes)
                 val pageId = harness.builder.current.pages.single().id
 
                 context.availability shouldBeSameInstanceAs harness.availability
                 context.convergence shouldBeSameInstanceAs harness.convergence
                 context.limbo shouldBeSameInstanceAs harness.limbo
+                context.themes shouldBeSameInstanceAs themes
                 context.read.pageById(Principal.Anonymous, pageId) shouldNotBe null
             }
         }
@@ -212,7 +217,10 @@ private class GuardedTestGraph(
         agentDirectCommitGlobs = emptyList(),
     )
 
-    fun context(mode: AuthMode): RouteContext = buildGuardedApplication(
+    fun context(
+        mode: AuthMode,
+        themes: ThemeStylesheets = BundledThemeStylesheets(embeddedThemeBuiltins()),
+    ): RouteContext = buildGuardedApplication(
         serving = serving,
         security = securityAssembly(
             config = PlainbaseConfig(
@@ -234,5 +242,6 @@ private class GuardedTestGraph(
             mcpAllowedOrigins = listOf("http://127.0.0.1", "http://localhost"),
             secureCookie = false,
         ),
+        themes = themes,
     )
 }

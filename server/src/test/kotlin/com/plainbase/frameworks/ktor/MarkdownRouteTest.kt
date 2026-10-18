@@ -227,6 +227,7 @@ private fun RouteContext.withRead(read: com.plainbase.domain.service.ReadFacade)
     read = read,
     mutate = mutate,
     proposals = proposals,
+    themes = themes,
     registry = registry,
     availability = availability,
     convergence = convergence,

@@ -7,6 +7,7 @@ import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.filesystem.DataDirLock
+import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -41,6 +42,15 @@ class RootCommandTest : FunSpec({
             block(World(base, data, content))
         } finally {
             base.toFile().deleteRecursively()
+        }
+    }
+
+    test("root list remains available when theme values are rejected") {
+        world(plainbaseConf = "theme { light = \"../paper.css\", dark = 5 }") { w ->
+            assertSoftly {
+                val err = captureStderr { w.root("list") shouldBe 0 }
+                err.lineSequence().filter { it.startsWith("root list:") }.toList() shouldBe emptyList()
+            }
         }
     }
 
@@ -307,6 +317,50 @@ class RootCommandTest : FunSpec({
             // A blanket "no new file in DATA_DIR" leg would assert something the implementation cannot satisfy, and
             // the first person to run it would delete it. Assert the property that MATTERS and is TRUE.
             Files.exists(w.data.resolve(DataDirLock.ROOTS_LOCK_FILE_NAME)) shouldBe true
+        }
+    }
+
+    test("root add refuses DATA_DIR/themes without changing managed roots") {
+        world { w ->
+            val notes = Files.createDirectory(w.tmp("notes"))
+            captureStdout { w.root("add", "notes", notes.toString()) shouldBe 0 }
+            val themes = Files.createDirectory(w.data.resolve("themes"))
+            val before = Files.readAllBytes(w.rootsConf)
+
+            val err = captureStderr { w.root("add", "shelf", themes.toString()) shouldBe 1 }
+            err shouldBe
+                "root add: roots.shelf is DATA_DIR/themes (${themes.toRealPath()}): theme files there are served before login, " +
+                "so it cannot be a content root${System.lineSeparator()}"
+
+            withClue("roots.conf is byte-identical after the refusal") {
+                Files.readAllBytes(w.rootsConf) shouldBe before
+            }
+        }
+    }
+
+    test("root add reports only the refusal for a pre-existing DATA_DIR/themes root") {
+        world { w ->
+            val themes = Files.createDirectory(w.data.resolve("themes"))
+            Files.writeString(
+                w.data.resolve("plainbase.conf"),
+                """
+                roots {
+                  docs { path = "${w.content}" }
+                  shelf { path = "$themes" }
+                }
+                """.trimIndent(),
+            )
+            val notes = Files.createDirectory(w.tmp("notes"))
+
+            val err = captureStderr { captureStdout { w.root("add", "notes", notes.toString()) shouldBe 0 } }
+
+            err shouldBe
+                "root add: WARNING: this config already refuses to boot, and this command did not cause it: " +
+                "roots.shelf is DATA_DIR/themes (${themes.toRealPath()}): theme files there are served before login, " +
+                "so it cannot be a content root${System.lineSeparator()}" +
+                "root add: WARNING: roots {} is configured: the explicitly set CONTENT_DIR/contentDir (via env) is " +
+                "ignored - primary's path comes from roots.docs.path${System.lineSeparator()}"
+            w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "shelf", "notes")
         }
     }
 

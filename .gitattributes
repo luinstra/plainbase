@@ -1,2 +1,3 @@
 # Preserve the authored CRLF interoperability fixture byte-for-byte.
 /server/src/test/resources/okf-documents/crlf.md -text
+/contrib/tinted/** -text

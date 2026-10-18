@@ -10,11 +10,14 @@ import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.CommitGlob
+import com.plainbase.domain.theming.ThemeLeaf
+import com.plainbase.domain.theming.ThemeSelection
 import com.plainbase.frameworks.filesystem.literalPrefix
 import com.plainbase.frameworks.net.RemoteAddress
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigObject
 import com.typesafe.config.ConfigValue
+import com.typesafe.config.ConfigValueType
 import java.nio.file.FileSystems
 import java.nio.file.Path
 import java.util.regex.PatternSyntaxException
@@ -68,7 +71,51 @@ internal object ConfigDecoder {
             ),
             git = buildGit(env, file),
             auth = buildAuth(env, file, insecureHttp, roots),
+            theme = parseTheme(file),
         )
+    }
+
+    private fun parseTheme(file: Config): ThemeConfig {
+        if (!file.hasPathOrNull("theme")) return ThemeConfig()
+        if (file.getIsNull("theme")) {
+            return ThemeConfig(rejections = listOf(ThemeKeyRejection("theme", ThemeRejectionReason.NULL)))
+        }
+        val parentType = file.getValue("theme").valueType()
+        if (parentType != ConfigValueType.OBJECT) {
+            return ThemeConfig(
+                rejections = listOf(ThemeKeyRejection("theme", ThemeRejectionReason.NOT_A_BLOCK, parentType.name)),
+            )
+        }
+
+        val rejections = mutableListOf<ThemeKeyRejection>()
+        fun leaf(key: String): ThemeLeaf? {
+            if (!file.hasPathOrNull(key)) return null
+            if (file.getIsNull(key)) {
+                rejections += ThemeKeyRejection(key, ThemeRejectionReason.NULL)
+                return null
+            }
+            val type = file.getValue(key).valueType()
+            if (type != ConfigValueType.STRING) {
+                rejections += ThemeKeyRejection(key, ThemeRejectionReason.NOT_A_STRING, type.name)
+                return null
+            }
+            val raw = file.getString(key)
+            val reason = when {
+                raw.isBlank() -> ThemeRejectionReason.BLANK
+                ThemeLeaf.namesOverride(raw) -> ThemeRejectionReason.OVERRIDE_NAME
+                else -> null
+            }
+            if (reason != null) {
+                rejections += ThemeKeyRejection(key, reason)
+                return null
+            }
+            val selected = ThemeLeaf.of(raw)
+            if (selected == null) rejections += ThemeKeyRejection(key, ThemeRejectionReason.NOT_A_LEAF)
+            return selected
+        }
+
+        val selection = ThemeSelection(leaf("theme.light"), leaf("theme.dark"))
+        return ThemeConfig(selection, rejections)
     }
 
     private fun contentDirSource(envValue: String?, fileValue: String?): ConfigSource =

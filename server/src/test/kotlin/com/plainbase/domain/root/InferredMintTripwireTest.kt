@@ -132,6 +132,8 @@ private fun Class<*>.instanceFieldNames(): Set<String> = declaredFields
 
 private val WALK_EXCLUDED_DIRECTORIES = setOf("node_modules", "build")
 
+// Judged on the path below the walk root: an absolute path leaks the checkout's own ancestors (a worktree under
+// `.claude/worktrees/` excluded every file and reported zero markers).
 private fun Path.isWalkExcluded(): Boolean = any { segment ->
     val name = segment.toString()
     name.startsWith(".") || name in WALK_EXCLUDED_DIRECTORIES
@@ -139,7 +141,7 @@ private fun Path.isWalkExcluded(): Boolean = any { segment ->
 
 private fun kotlinFiles(root: Path): List<Path> = Files.walk(root).use { paths ->
     paths.filter { path ->
-        !path.isWalkExcluded() && Files.isRegularFile(path) && path.fileName.toString().endsWith(".kt")
+        !root.relativize(path).isWalkExcluded() && Files.isRegularFile(path) && path.fileName.toString().endsWith(".kt")
     }.sorted().toList()
 }
 
@@ -166,7 +168,7 @@ private fun repoRoot(): Path {
 
 private fun gradleConfigurationFiles(root: Path): List<Path> = Files.walk(root).use { paths ->
     paths.filter { path ->
-        if (path.isWalkExcluded() || !Files.isRegularFile(path)) return@filter false
+        if (root.relativize(path).isWalkExcluded() || !Files.isRegularFile(path)) return@filter false
         val name = path.fileName.toString()
         name.endsWith(".gradle.kts") || name == "gradle.properties"
     }.sorted().toList()

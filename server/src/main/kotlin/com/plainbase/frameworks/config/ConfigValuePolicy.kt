@@ -12,6 +12,28 @@ internal object ConfigValuePolicy {
     fun dataDirFrom(env: Map<String, String>): Path =
         Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize()
 
+    /** Pure theme diagnostics retain the key and rejection category, never the rejected value. */
+    fun themeWarnings(config: PlainbaseConfig): List<String> = config.theme.rejections.map { rejection ->
+        val reason = when (rejection.reason) {
+            ThemeRejectionReason.NOT_A_BLOCK ->
+                "must be a block such as theme { light = \"<name>.css\" } (found ${rejection.valueType})"
+            ThemeRejectionReason.NULL -> "is null (remove the key to use the bundled theme)"
+            ThemeRejectionReason.NOT_A_STRING -> "is not a string (found ${rejection.valueType})"
+            ThemeRejectionReason.BLANK -> "is blank"
+            ThemeRejectionReason.NOT_A_LEAF ->
+                "is not a DATA_DIR theme name: optionally themes/, then 1 to 64 ASCII letters, digits, '_' or '-' " +
+                    "starting with a letter or digit, then .css, .yaml or .yml"
+            ThemeRejectionReason.OVERRIDE_NAME ->
+                "uses a name reserved for the fixed DATA_DIR/custom.css override and cannot be selected"
+        }
+        val fallback = when (rejection.key) {
+            "theme" -> "light and dark themes"
+            "theme.light" -> "light theme"
+            else -> "dark theme"
+        }
+        "${rejection.key} $reason; serving the bundled $fallback"
+    }
+
     /** Parses the already-validated direct-commit glob strings with their declaring root. */
     fun agentDirectCommitGlobs(config: PlainbaseConfig): List<CommitGlob> =
         config.auth.agentDirectCommitGlobs.map { CommitGlob.parse(it, RootName.PRIMARY) } +

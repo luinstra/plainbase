@@ -1,0 +1,29 @@
+/* Plainbase theme definition: {{scheme-system}} / {{scheme-slug}}.
+   public --pb-theme- inputs only.
+   --pb-theme-card, --pb-theme-card-foreground, --pb-theme-border,
+   --pb-theme-font-sans, --pb-theme-font-mono and --pb-theme-radius use generic defaults. */
+{{#scheme-is-light-variant}}
+:where(:root:not([data-theme="dark"])) {
+{{/scheme-is-light-variant}}
+{{#scheme-is-dark-variant}}
+:where(:root[data-theme="dark"]) {
+{{/scheme-is-dark-variant}}
+  --pb-theme-background: #{{base00-hex}};
+  --pb-theme-foreground: #{{base05-hex}};
+  --pb-theme-primary: #{{base0D-hex}};
+  --pb-theme-primary-foreground: #{{base00-hex}};
+  --pb-theme-muted: #{{base01-hex}};
+  --pb-theme-muted-foreground: #{{base04-hex}};
+  --pb-theme-ring: #{{#base16-hex}}{{base16-hex}}{{/base16-hex}}{{^base16-hex}}{{base0D-hex}}{{/base16-hex}};
+  --pb-theme-selection: #{{base02-hex}};
+  --pb-theme-selection-foreground: #{{base05-hex}};
+  --pb-theme-destructive: #{{#base12-hex}}{{base12-hex}}{{/base12-hex}}{{^base12-hex}}{{base08-hex}}{{/base12-hex}};
+  --pb-theme-warning: #{{#base13-hex}}{{base13-hex}}{{/base13-hex}}{{^base13-hex}}{{base0A-hex}}{{/base13-hex}};
+  --pb-theme-success: #{{#base14-hex}}{{base14-hex}}{{/base14-hex}}{{^base14-hex}}{{base0B-hex}}{{/base14-hex}};
+  --pb-theme-syntax-keyword: #{{#base17-hex}}{{base17-hex}}{{/base17-hex}}{{^base17-hex}}{{base0E-hex}}{{/base17-hex}};
+  --pb-theme-syntax-string: #{{#base14-hex}}{{base14-hex}}{{/base14-hex}}{{^base14-hex}}{{base0B-hex}}{{/base14-hex}};
+  --pb-theme-syntax-comment: #{{base04-hex}};
+  --pb-theme-syntax-literal: #{{base09-hex}};
+  --pb-theme-syntax-title: #{{#base16-hex}}{{base16-hex}}{{/base16-hex}}{{^base16-hex}}{{base0D-hex}}{{/base16-hex}};
+  --pb-theme-syntax-attribute: #{{#base12-hex}}{{base12-hex}}{{/base12-hex}}{{^base12-hex}}{{base08-hex}}{{/base12-hex}};
+}

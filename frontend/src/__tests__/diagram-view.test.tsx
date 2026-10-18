@@ -12,6 +12,7 @@ const mermaidMock = vi.hoisted(() => ({
 }));
 
 vi.mock("mermaid", () => ({ default: mermaidMock }));
+vi.mock("../lib/mermaidColor", () => ({ toMermaidColor: (color: string) => color }));
 
 const tree: TreeResponse = {
   roots: [

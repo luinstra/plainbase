@@ -472,6 +472,7 @@ private fun consumeConfigBootGate(config: PlainbaseConfig, output: CommandOutput
     refuseFirst(refusals, TOPOLOGY_REFUSAL_KINDS, output)
     ConfigValuePolicy.storageWarnings(config).forEach { logger.warn { it } }
     ConfigBootInspector.rootsWarnings(config).forEach { logger.warn { it } }
+    ConfigValuePolicy.themeWarnings(config).forEach { logger.warn { it } }
     refuseFirst(refusals, BIND_REFUSAL_KINDS, output)
     val transport = TransportSecurityPolicy.derive(config)
     when {

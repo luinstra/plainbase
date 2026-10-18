@@ -1,4 +1,10 @@
+import { subscribeDisplayMode } from "../theme";
+
 type MermaidInstance = typeof import("mermaid").default;
+type MermaidLibraries = {
+  mermaid: MermaidInstance;
+  toMermaidColor: (color: string) => string;
+};
 
 const MAX_SOURCE_LENGTH = 50000;
 const MAX_EDGES = 500;
@@ -20,13 +26,14 @@ const SECURE_CONFIG_KEYS = [
   "dompurifyConfig",
 ];
 
-let mermaidImport: Promise<MermaidInstance> | undefined;
+let mermaidImport: Promise<MermaidLibraries> | undefined;
 let renderSequence = 0;
 let renderQueue: Promise<void> = Promise.resolve();
 
-function loadMermaid(): Promise<MermaidInstance> {
+function loadMermaid(): Promise<MermaidLibraries> {
   if (mermaidImport) return mermaidImport;
-  const loading = import("mermaid").then(({ default: mermaid }) => mermaid);
+  const loading = Promise.all([import("mermaid"), import("./mermaidColor")])
+    .then(([{ default: mermaid }, { toMermaidColor }]) => ({ mermaid, toMermaidColor }));
   mermaidImport = loading;
   void loading.catch(() => {
     if (mermaidImport === loading) mermaidImport = undefined;
@@ -49,79 +56,75 @@ function findMermaidBlocks(container: HTMLElement): HTMLElement[] {
     .filter((pre): pre is HTMLElement => pre !== null);
 }
 
-function resolveColorToken(token: string): string {
-  const probe = document.createElement("span");
-  probe.style.position = "absolute";
-  probe.style.visibility = "hidden";
-  probe.style.backgroundColor = `var(${token})`;
-  document.body.appendChild(probe);
-  const color = getComputedStyle(probe).backgroundColor;
-  probe.remove();
-  return normalizeComputedColor(color);
-}
-
-function normalizeComputedColor(color: string): string {
-  const match = color.match(/^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s+\/\s+([\d.]+))?\)$/);
-  if (!match) return color;
-  const channels = match.slice(1, 4).map((channel) => Math.round(Number(channel) * 255));
-  const alpha = match[4];
-  return alpha === undefined ? `rgb(${channels.join(", ")})` : `rgba(${channels.join(", ")}, ${alpha})`;
-}
-
-function themeConfig(): Parameters<MermaidInstance["initialize"]>[0] {
+function themeConfig(convert: (color: string) => string): Parameters<MermaidInstance["initialize"]>[0] {
   const fontFamily =
     getComputedStyle(document.body).fontFamily || "IBM Plex Sans, ui-sans-serif, system-ui, sans-serif";
   const fontSize = Number.parseFloat(getComputedStyle(document.body).fontSize) || 16;
-  const background = resolveColorToken("--pb-surface");
-  const raised = resolveColorToken("--pb-surface-raised");
-  const border = resolveColorToken("--pb-border");
-  const strongBorder = resolveColorToken("--pb-border-strong");
-  const accent = resolveColorToken("--pb-accent");
-  const text = resolveColorToken("--pb-text");
-  const nodeBackground = resolveColorToken("--pb-diagram-node-bg");
-  const nodeBorder = resolveColorToken("--pb-diagram-node-border");
-  const shadow = resolveColorToken("--pb-diagram-shadow");
+  const probe = document.createElement("span");
+  probe.dataset.pbMermaidProbe = "true";
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  document.body.appendChild(probe);
+  try {
+    const [background, raised, border, strongBorder, link, text, nodeBackground, nodeBorder, shadow, nodeText] = [
+      "--pb-surface",
+      "--pb-surface-raised",
+      "--pb-border",
+      "--pb-border-strong",
+      "--pb-link",
+      "--pb-text",
+      "--pb-diagram-node-bg",
+      "--pb-diagram-node-border",
+      "--pb-diagram-shadow",
+      "--pb-diagram-node-text",
+    ].map((token) => {
+      probe.style.backgroundColor = `var(${token})`;
+      return convert(getComputedStyle(probe).backgroundColor);
+    });
 
-  return {
-    secure: SECURE_CONFIG_KEYS,
-    securityLevel: "strict",
-    startOnLoad: false,
-    maxTextSize: MAX_SOURCE_LENGTH,
-    suppressErrorRendering: true,
-    maxEdges: MAX_EDGES,
-    theme: "base",
-    themeCSS: "",
-    themeVariables: {
-      darkMode: document.documentElement.dataset.theme === "dark",
-      dropShadow: `drop-shadow(0 2px 3px ${shadow})`,
-      useGradient: false,
-      background,
-      primaryColor: nodeBackground,
-      primaryTextColor: text,
-      primaryBorderColor: nodeBorder,
-      lineColor: accent,
-      secondaryColor: background,
-      secondaryTextColor: text,
-      secondaryBorderColor: strongBorder,
-      tertiaryColor: raised,
-      tertiaryTextColor: text,
-      tertiaryBorderColor: border,
-      mainBkg: nodeBackground,
-      nodeBorder,
-      clusterBkg: background,
-      clusterBorder: strongBorder,
-      textColor: text,
-      titleColor: text,
-      edgeLabelBackground: background,
-      nodeTextColor: text,
+    return {
+      secure: SECURE_CONFIG_KEYS,
+      securityLevel: "strict",
+      startOnLoad: false,
+      maxTextSize: MAX_SOURCE_LENGTH,
+      suppressErrorRendering: true,
+      maxEdges: MAX_EDGES,
+      theme: "base",
+      themeCSS: "",
+      themeVariables: {
+        darkMode: document.documentElement.dataset.theme === "dark",
+        dropShadow: `drop-shadow(0 2px 3px ${shadow})`,
+        useGradient: false,
+        background,
+        primaryColor: nodeBackground,
+        primaryTextColor: nodeText,
+        primaryBorderColor: nodeBorder,
+        lineColor: link,
+        secondaryColor: background,
+        secondaryTextColor: text,
+        secondaryBorderColor: strongBorder,
+        tertiaryColor: raised,
+        tertiaryTextColor: nodeText,
+        tertiaryBorderColor: border,
+        mainBkg: nodeBackground,
+        nodeBorder,
+        clusterBkg: background,
+        clusterBorder: strongBorder,
+        textColor: text,
+        titleColor: text,
+        edgeLabelBackground: background,
+        nodeTextColor: nodeText,
+        fontFamily,
+        fontSize: `${fontSize}px`,
+      },
       fontFamily,
-      fontSize: `${fontSize}px`,
-    },
-    fontFamily,
-    altFontFamily: fontFamily,
-    fontSize,
-    htmlLabels: false,
-  };
+      altFontFamily: fontFamily,
+      fontSize,
+      htmlLabels: false,
+    };
+  } finally {
+    probe.remove();
+  }
 }
 
 function clearBlock(pre: HTMLElement, rendered: Map<HTMLElement, HTMLElement>, failures: Map<HTMLElement, HTMLElement>): void {
@@ -165,7 +168,7 @@ function renderBlock(
       return;
     }
     try {
-      const mermaid = await loadMermaid();
+      const { mermaid, toMermaidColor } = await loadMermaid();
       if (!isCurrent()) return;
 
       scratch = document.createElement("div");
@@ -178,7 +181,7 @@ function renderBlock(
       document.body.appendChild(scratch);
       scratches.add(scratch);
 
-      mermaid.initialize(themeConfig());
+      mermaid.initialize(themeConfig(toMermaidColor));
       if (!isCurrent()) return;
       const { svg } = await mermaid.render(`pb-mermaid-${++renderSequence}`, source, scratch);
       if (!isCurrent()) return;
@@ -217,16 +220,8 @@ export function renderMermaidBlocks(container: HTMLElement): () => void {
   const rendered = new Map<HTMLElement, HTMLElement>();
   const failures = new Map<HTMLElement, HTMLElement>();
   const scratches = new Set<HTMLElement>();
-  let currentTheme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
-  const observer =
-    typeof MutationObserver === "undefined"
-      ? undefined
-      : new MutationObserver(() => {
-          const nextTheme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
-          if (nextTheme === currentTheme) return;
-          currentTheme = nextTheme;
-          rerender();
-        });
+  let subscribed = false;
+  let unsubscribe: (() => void) | undefined;
 
   function current(generationAtSchedule: number, pre: HTMLElement): boolean {
     return !cancelled && generation === generationAtSchedule && container.isConnected && container.contains(pre);
@@ -247,10 +242,15 @@ export function renderMermaidBlocks(container: HTMLElement): () => void {
     failures.clear();
     blocks = findMermaidBlocks(container);
     if (blocks.length === 0) {
-      observer?.disconnect();
+      unsubscribe?.();
+      unsubscribe = undefined;
+      subscribed = false;
       return;
     }
-    observer?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    if (!subscribed) {
+      subscribed = true;
+      unsubscribe = subscribeDisplayMode(rerender);
+    }
     const generationAtSchedule = generation;
     blocks.forEach((pre) => {
       void enqueueRender(() =>
@@ -263,7 +263,7 @@ export function renderMermaidBlocks(container: HTMLElement): () => void {
   return () => {
     cancelled = true;
     generation += 1;
-    observer?.disconnect();
+    unsubscribe?.();
     clearAll();
   };
 }

@@ -1,0 +1,202 @@
+/*
+ * Plainbase theme contract, version 1: the generic layer, linked before the selected definitions.
+ * Public --pb-theme-* inputs are separate from the pb-theme localStorage display-mode key. See docs/theming.md.
+ */
+
+:where(:root:not([data-theme="dark"])) {
+  color-scheme: light;
+
+  /* optional public defaults */
+  --pb-theme-card: color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 3%);
+  --pb-theme-card-foreground: var(--pb-theme-foreground);
+  --pb-theme-muted: color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 6%);
+  --pb-theme-muted-foreground: color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 15%);
+  --pb-theme-border: color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 75%);
+  --pb-theme-ring: rgb(from var(--pb-theme-primary) r g b / 1);
+  --pb-theme-selection: color-mix(in srgb, var(--pb-theme-primary), var(--pb-theme-background) 88%);
+  --pb-theme-selection-foreground: var(--pb-theme-foreground);
+  --pb-theme-destructive: var(--pb-theme-foreground);
+  --pb-theme-warning: var(--pb-theme-foreground);
+  --pb-theme-success: var(--pb-theme-foreground);
+  --pb-theme-syntax-keyword: var(--pb-theme-foreground);
+  --pb-theme-syntax-string: var(--pb-theme-foreground);
+  --pb-theme-syntax-comment: var(--pb-theme-muted-foreground);
+  --pb-theme-syntax-literal: var(--pb-theme-foreground);
+  --pb-theme-syntax-title: var(--pb-theme-foreground);
+  --pb-theme-syntax-attribute: var(--pb-theme-foreground);
+  --pb-theme-font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --pb-theme-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --pb-theme-radius: 0.25rem;
+
+  /* private roles */
+  --pb-surface: var(--pb-theme-background);
+  --pb-surface-raised: var(--pb-theme-card);
+  --pb-search-scrim: color-mix(in srgb, var(--pb-theme-foreground) 48%, transparent);
+  --pb-surface-hover: color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 8%);
+  --pb-surface-active: color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 12%);
+  --pb-surface-chrome: var(--pb-theme-muted);
+  --pb-surface-field: var(--pb-theme-card);
+  --pb-nav-active-bg: var(--pb-theme-selection);
+  --pb-primary-bg: var(--pb-theme-primary);
+  --pb-primary-border: var(--pb-theme-primary);
+  --pb-primary-text: var(--pb-theme-primary-foreground);
+  --pb-discussion-highlight-bg: var(--pb-theme-selection);
+  --pb-discussion-highlight-edge: var(--pb-accent);
+  --pb-selection-text: var(--pb-theme-selection-foreground);
+  --pb-callout-note-bg: color-mix(in srgb, var(--pb-primary-opaque) 8%, var(--pb-theme-background));
+  --pb-callout-warning-bg: color-mix(in srgb, var(--pb-theme-warning) 10%, var(--pb-theme-background));
+  --pb-callout-danger-bg: color-mix(in srgb, var(--pb-theme-destructive) 10%, var(--pb-theme-background));
+  --pb-text: var(--pb-theme-foreground);
+  --pb-text-muted: var(--pb-theme-muted-foreground);
+  /* Faint ink shares the muted contrast floors. */
+  --pb-text-faint: var(--pb-theme-muted-foreground);
+  --pb-border: var(--pb-theme-border);
+  --pb-border-strong: color-mix(in srgb, var(--pb-border), var(--pb-theme-foreground) 20%);
+  --pb-diagram-node-bg: var(--pb-theme-card);
+  --pb-diagram-node-border: var(--pb-border-strong);
+  --pb-diagram-shadow: color-mix(in srgb, var(--pb-theme-foreground) 14%, transparent);
+  --pb-accent: var(--pb-primary-opaque);
+  --pb-accent-contrast: var(--pb-theme-primary-foreground);
+  --pb-accent-soft: color-mix(in srgb, var(--pb-primary-opaque) 10%, var(--pb-theme-background));
+  --pb-link: color-mix(in srgb, var(--pb-theme-foreground) 80%, var(--pb-theme-primary));
+  --pb-link-hover: color-mix(in srgb, var(--pb-link), var(--pb-theme-foreground) 25%);
+  --pb-link-broken: var(--pb-theme-warning);
+  --pb-focus-ring: var(--pb-theme-ring);
+  --pb-selection-bg: var(--pb-theme-selection);
+  --pb-deeplink-pulse: var(--pb-selection-bg);
+  --pb-code-bg: var(--pb-theme-card);
+  --pb-code-border: var(--pb-border);
+  --pb-code-text: var(--pb-card-foreground);
+  --pb-inline-code-bg: var(--pb-theme-muted);
+  --pb-syntax-keyword: var(--pb-theme-syntax-keyword);
+  --pb-syntax-string: var(--pb-theme-syntax-string);
+  --pb-syntax-comment: var(--pb-theme-syntax-comment);
+  --pb-syntax-literal: var(--pb-theme-syntax-literal);
+  --pb-syntax-title: var(--pb-theme-syntax-title);
+  --pb-syntax-attr: var(--pb-theme-syntax-attribute);
+  --pb-blockquote-border: var(--pb-border-strong);
+  --pb-table-header-bg: var(--pb-theme-muted);
+  --pb-status-active: var(--pb-theme-success);
+  --pb-status-draft: var(--pb-theme-warning);
+  --pb-status-review: var(--pb-link);
+  --pb-status-archived: var(--pb-text-faint);
+  --pb-status-deprecated: var(--pb-theme-destructive);
+  --pb-danger: var(--pb-theme-destructive);
+  --pb-danger-soft: color-mix(in srgb, var(--pb-theme-destructive) 10%, var(--pb-theme-background));
+  --pb-warning: var(--pb-theme-warning);
+  --pb-warning-soft: color-mix(in srgb, var(--pb-theme-warning) 10%, var(--pb-theme-background));
+  --pb-diff-add-bg: color-mix(in srgb, var(--pb-theme-success) 12%, transparent);
+  --pb-diff-del-bg: color-mix(in srgb, var(--pb-theme-destructive) 12%, transparent);
+  --pb-card-foreground: var(--pb-theme-card-foreground);
+  --pb-diagram-node-text: var(--pb-card-foreground);
+  --pb-primary-opaque: rgb(from var(--pb-theme-primary) r g b / 1);
+  --pb-font-sans: var(--pb-theme-font-sans);
+  --pb-font-mono: var(--pb-theme-font-mono);
+  --pb-radius: var(--pb-theme-radius);
+  --pb-radius-xs: calc(var(--pb-radius) * 0.8);
+  --pb-radius-sm: calc(var(--pb-radius) * 1.2);
+  --pb-radius-md: calc(var(--pb-radius) * 1.5);
+  --pb-radius-lg: calc(var(--pb-radius) * 2);
+  --pb-radius-xl: calc(var(--pb-radius) * 2.5);
+  --pb-radius-2xl: calc(var(--pb-radius) * 3);
+  --pb-radius-3xl: calc(var(--pb-radius) * 4);
+}
+
+:where(:root[data-theme="dark"]) {
+  color-scheme: dark;
+
+  /* optional public defaults */
+  --pb-theme-card: color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 3%);
+  --pb-theme-card-foreground: var(--pb-theme-foreground);
+  --pb-theme-muted: color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 6%);
+  --pb-theme-muted-foreground: color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 15%);
+  --pb-theme-border: color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 75%);
+  --pb-theme-ring: rgb(from var(--pb-theme-primary) r g b / 1);
+  --pb-theme-selection: color-mix(in srgb, var(--pb-theme-primary), var(--pb-theme-background) 88%);
+  --pb-theme-selection-foreground: var(--pb-theme-foreground);
+  --pb-theme-destructive: var(--pb-theme-foreground);
+  --pb-theme-warning: var(--pb-theme-foreground);
+  --pb-theme-success: var(--pb-theme-foreground);
+  --pb-theme-syntax-keyword: var(--pb-theme-foreground);
+  --pb-theme-syntax-string: var(--pb-theme-foreground);
+  --pb-theme-syntax-comment: var(--pb-theme-muted-foreground);
+  --pb-theme-syntax-literal: var(--pb-theme-foreground);
+  --pb-theme-syntax-title: var(--pb-theme-foreground);
+  --pb-theme-syntax-attribute: var(--pb-theme-foreground);
+  --pb-theme-font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --pb-theme-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --pb-theme-radius: 0.25rem;
+
+  /* private roles */
+  --pb-surface: var(--pb-theme-background);
+  --pb-surface-raised: var(--pb-theme-card);
+  --pb-search-scrim: color-mix(in srgb, var(--pb-theme-background) 72%, transparent);
+  --pb-surface-hover: color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 8%);
+  --pb-surface-active: color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 12%);
+  --pb-surface-chrome: var(--pb-theme-muted);
+  --pb-surface-field: var(--pb-theme-card);
+  --pb-nav-active-bg: var(--pb-theme-selection);
+  --pb-primary-bg: var(--pb-theme-primary);
+  --pb-primary-border: var(--pb-theme-primary);
+  --pb-primary-text: var(--pb-theme-primary-foreground);
+  --pb-discussion-highlight-bg: var(--pb-theme-selection);
+  --pb-discussion-highlight-edge: var(--pb-accent);
+  --pb-selection-text: var(--pb-theme-selection-foreground);
+  --pb-callout-note-bg: color-mix(in srgb, var(--pb-primary-opaque) 8%, var(--pb-theme-background));
+  --pb-callout-warning-bg: color-mix(in srgb, var(--pb-theme-warning) 10%, var(--pb-theme-background));
+  --pb-callout-danger-bg: color-mix(in srgb, var(--pb-theme-destructive) 10%, var(--pb-theme-background));
+  --pb-text: var(--pb-theme-foreground);
+  --pb-text-muted: var(--pb-theme-muted-foreground);
+  /* Faint ink shares the muted contrast floors. */
+  --pb-text-faint: var(--pb-theme-muted-foreground);
+  --pb-border: var(--pb-theme-border);
+  --pb-border-strong: color-mix(in srgb, var(--pb-border), var(--pb-theme-foreground) 20%);
+  --pb-diagram-node-bg: var(--pb-theme-card);
+  --pb-diagram-node-border: var(--pb-border-strong);
+  --pb-diagram-shadow: color-mix(in srgb, var(--pb-theme-background) 75%, transparent);
+  --pb-accent: var(--pb-primary-opaque);
+  --pb-accent-contrast: var(--pb-theme-primary-foreground);
+  --pb-accent-soft: color-mix(in srgb, var(--pb-primary-opaque) 10%, var(--pb-theme-background));
+  --pb-link: color-mix(in srgb, var(--pb-theme-foreground) 80%, var(--pb-theme-primary));
+  --pb-link-hover: color-mix(in srgb, var(--pb-link), var(--pb-theme-foreground) 25%);
+  --pb-link-broken: var(--pb-theme-warning);
+  --pb-focus-ring: var(--pb-theme-ring);
+  --pb-selection-bg: var(--pb-theme-selection);
+  --pb-deeplink-pulse: var(--pb-selection-bg);
+  --pb-code-bg: var(--pb-theme-card);
+  --pb-code-border: var(--pb-border);
+  --pb-code-text: var(--pb-card-foreground);
+  --pb-inline-code-bg: var(--pb-theme-muted);
+  --pb-syntax-keyword: var(--pb-theme-syntax-keyword);
+  --pb-syntax-string: var(--pb-theme-syntax-string);
+  --pb-syntax-comment: var(--pb-theme-syntax-comment);
+  --pb-syntax-literal: var(--pb-theme-syntax-literal);
+  --pb-syntax-title: var(--pb-theme-syntax-title);
+  --pb-syntax-attr: var(--pb-theme-syntax-attribute);
+  --pb-blockquote-border: var(--pb-border-strong);
+  --pb-table-header-bg: var(--pb-theme-muted);
+  --pb-status-active: var(--pb-theme-success);
+  --pb-status-draft: var(--pb-theme-warning);
+  --pb-status-review: var(--pb-link);
+  --pb-status-archived: var(--pb-text-faint);
+  --pb-status-deprecated: var(--pb-theme-destructive);
+  --pb-danger: var(--pb-theme-destructive);
+  --pb-danger-soft: color-mix(in srgb, var(--pb-theme-destructive) 10%, var(--pb-theme-background));
+  --pb-warning: var(--pb-theme-warning);
+  --pb-warning-soft: color-mix(in srgb, var(--pb-theme-warning) 10%, var(--pb-theme-background));
+  --pb-diff-add-bg: color-mix(in srgb, var(--pb-theme-success) 12%, transparent);
+  --pb-diff-del-bg: color-mix(in srgb, var(--pb-theme-destructive) 12%, transparent);
+  --pb-card-foreground: var(--pb-theme-card-foreground);
+  --pb-diagram-node-text: var(--pb-card-foreground);
+  --pb-primary-opaque: rgb(from var(--pb-theme-primary) r g b / 1);
+  --pb-font-sans: var(--pb-theme-font-sans);
+  --pb-font-mono: var(--pb-theme-font-mono);
+  --pb-radius: var(--pb-theme-radius);
+  --pb-radius-xs: calc(var(--pb-radius) * 0.8);
+  --pb-radius-sm: calc(var(--pb-radius) * 1.2);
+  --pb-radius-md: calc(var(--pb-radius) * 1.5);
+  --pb-radius-lg: calc(var(--pb-radius) * 2);
+  --pb-radius-xl: calc(var(--pb-radius) * 2.5);
+  --pb-radius-2xl: calc(var(--pb-radius) * 3);
+  --pb-radius-3xl: calc(var(--pb-radius) * 4);
+}

@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.theming.ThemeBuiltins
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
 import com.plainbase.frameworks.protocol.ErrorCodes
@@ -230,6 +231,7 @@ private suspend fun ApplicationCall.respondShell(status: HttpStatusCode) {
     if (shell == null) {
         respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "SPA shell is not bundled")
     } else {
+        response.header(HttpHeaders.CacheControl, CACHE_CONTROL_NO_CACHE)
         // The content type is load-bearing, not cosmetic: shellSecurityHeadersPlugin gates the shell
         // CSP on it alone, so bytes emitted without it render the shell with no CSP at all.
         respondBytes(shell, ContentType.Text.Html.withCharset(Charsets.UTF_8), status)
@@ -256,6 +258,14 @@ internal fun staticResourceBytes(relativePath: String): ByteArray? =
 internal fun bundleResourceBytes(relative: String): ByteArray? =
     SpaShell::class.java.classLoader.getResourceAsStream("static/$relative")?.use { it.readBytes() }
 
+internal fun embeddedThemeBuiltins(read: (String) -> ByteArray? = ::bundleResourceBytes): ThemeBuiltins {
+    fun required(relative: String): ByteArray = read(relative) ?: error("Missing embedded theme stylesheet: $relative")
+    return ThemeBuiltins(
+        required("_plainbase/plainbase-theme-light.css"),
+        required("_plainbase/plainbase-theme-dark.css"),
+    )
+}
+
 /** Serves a trusted top-level bundle file with its emitted content type and MIME-sniff defense. */
 internal suspend fun ApplicationCall.respondBundleFile(relative: String) {
     val bytes = bundleResourceBytes(relative)
@@ -276,6 +286,12 @@ internal const val CONTENT_SECURITY_POLICY = "Content-Security-Policy"
 
 /** The MIME-sniff defense header (not a named constant in this Ktor); shared by the asset + shell paths. */
 internal const val X_CONTENT_TYPE_OPTIONS = "X-Content-Type-Options"
+
+/** Revalidate shell HTML and the generic theme stylesheet on every request. */
+internal const val CACHE_CONTROL_NO_CACHE = "no-cache"
+
+/** Prevent storage of dynamic theme endpoint responses. */
+internal const val CACHE_CONTROL_NO_STORE = "no-store"
 
 /** The small extension → content-type map for served assets (§A4); unknown → octet-stream. */
 internal fun assetContentType(fileName: String): ContentType {

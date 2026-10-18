@@ -1,0 +1,100 @@
+{
+  "anchors": {
+    "hsl-primary": {
+      "source": "hsl(0deg 100% 50%)",
+      "srgb": [1, 0, 0],
+      "provenance": { "kind": "css-color-4", "section": "7", "url": "https://www.w3.org/TR/2026/CRD-css-color-4-20261009/#the-hsl-notation", "publishedEquivalent": "#f00" }
+    },
+    "hwb-amber": {
+      "source": "hwb(30 20% 32%)",
+      "srgb": [0.68, 0.44, 0.2],
+      "provenance": { "kind": "chromium", "reason": "No published chromatic numeric HWB-to-sRGB pair located.", "computed": "color(srgb 0.68 0.44 0.2)", "browserVersion": "153.0.8010.12", "capture": "One-off getComputedStyle read in Chromium, not a committed spec" }
+    },
+    "lab-violet": {
+      "source": "lab(44.36% 36.05 -58.99)",
+      "srgb": [0.4627, 0.3294, 0.8039],
+      "provenance": { "kind": "css-color-4", "section": "10.9", "url": "https://www.w3.org/TR/2026/CRD-css-color-4-20261009/#predefined-xyz", "publishedEquivalent": "rgb(46.27% 32.94% 80.39%)" }
+    },
+    "lch-ochre": {
+      "source": "lch(66.93% 68.79 85.94 / 0.4)",
+      "srgb": [0.76, 0.62, 0.03],
+      "provenance": { "kind": "css-color-4", "section": "13.4", "url": "https://www.w3.org/TR/2026/CRD-css-color-4-20261009/#interpolation-alpha", "publishedEquivalent": "rgb(76% 62% 03% / 0.4)" }
+    },
+    "oklab-coral": {
+      "source": "oklab(0.6 0.05 0.04)",
+      "srgb": [0.635926, 0.451915, 0.392426],
+      "provenance": { "kind": "chromium", "reason": "No published numeric OKLab-to-sRGB pair located.", "computed": "color(srgb 0.635926 0.451915 0.392426)", "browserVersion": "153.0.8010.12", "capture": "One-off getComputedStyle read in Chromium, not a committed spec" }
+    },
+    "oklch-blue": {
+      "source": "oklch(65% 0.15 270)",
+      "srgb": [0.4235294117647059, 0.5333333333333333, 0.9176470588235294],
+      "provenance": { "kind": "css-color-4", "section": "11.1", "url": "https://www.w3.org/TR/2026/CRD-css-color-4-20261009/#intro-color-conversion", "publishedEquivalent": "#6c88ea" }
+    },
+    "p3-blue": {
+      "source": "color(display-p3 0.445 0.529 0.891)",
+      "srgb": [0.4235294117647059, 0.5333333333333333, 0.9176470588235294],
+      "provenance": { "kind": "css-color-4", "section": "11.1", "url": "https://www.w3.org/TR/2026/CRD-css-color-4-20261009/#intro-color-conversion", "publishedEquivalent": "#6c88ea" }
+    },
+    "oklch-hue-zero": {
+      "source": "oklch(0.61 0.1 0)",
+      "srgb": [0.705097, 0.410429, 0.504423],
+      "provenance": { "kind": "chromium", "reason": "Opaque hue-zero twin for missing hue and independent alpha channel anchors.", "computed": "color(srgb 0.705097 0.410429 0.504423)", "browserVersion": "153.0.8010.12", "capture": "One-off getComputedStyle read in Chromium, not a committed spec" }
+    },
+    "extended-srgb": {
+      "source": "color(srgb 1.2 0 0)",
+      "srgb": [1, 0.41022544935414085, 0.33912107183883716],
+      "clip": [1, 0, 0],
+      "provenance": { "kind": "colorjs-css", "version": "0.7.1", "method": "css", "space": "srgb", "limit": "Regression anchor from the pinned library, not an independent correctness oracle." }
+    },
+    "p3-wide": {
+      "source": "color(display-p3 1 0 0)",
+      "srgb": [1, 0.04456951620419008, 0.04593161114017529],
+      "clip": [1, 0, 0],
+      "provenance": { "kind": "colorjs-css", "version": "0.7.1", "method": "css", "space": "srgb", "limit": "Regression anchor from the pinned library, not an independent correctness oracle." }
+    },
+    "oklch-wide": {
+      "source": "oklch(0.7 0.4 40)",
+      "srgb": [1, 0.3592847962867706, 0],
+      "clip": [1, 0, 0],
+      "provenance": { "kind": "colorjs-css", "version": "0.7.1", "method": "css", "space": "srgb", "limit": "Regression anchor from the pinned library, not an independent correctness oracle." }
+    }
+  },
+  "cases": [
+    { "name": "preserves legacy RGB", "group": "legacy", "source": "rgb(12, 34, 56)", "expected": "rgb(12, 34, 56)", "provenance": "Legacy serialization identity." },
+    { "name": "preserves legacy RGBA", "group": "legacy", "source": "rgba(12, 34, 56, 0.3)", "expected": "rgba(12, 34, 56, 0.3)", "provenance": "Legacy serialization identity." },
+    { "name": "rejects an overwide legacy channel", "group": "legacy-shape", "source": "rgb(1000, 0, 0)", "expected": null, "reject": true, "provenance": "Strict legacy channel shape." },
+    { "name": "rejects a signed legacy channel", "group": "legacy-shape", "source": "rgb(-1, 0, 0)", "expected": null, "reject": true, "provenance": "Strict legacy channel shape." },
+    { "name": "rejects a legacy channel above its range", "group": "legacy-range", "source": "rgb(256, 0, 0)", "expected": null, "reject": true, "provenance": "Legacy channels are bounded to 255." },
+    { "name": "rejects a legacy alpha above its range", "group": "legacy-range", "source": "rgba(0, 0, 0, 1.2)", "expected": null, "reject": true, "provenance": "Legacy alpha must be finite and at most one." },
+    { "name": "rejects a malformed legacy alpha", "group": "legacy-range", "source": "rgba(0, 0, 0, 1..2)", "expected": null, "reject": true, "provenance": "Malformed alpha is not a finite number." },
+    { "name": "converts in-range sRGB", "group": "srgb", "source": "color(srgb 0.2 0.4 0.6)", "expected": "rgb(51, 102, 153)", "provenance": "Exact normalized channel scaling." },
+    { "name": "preserves the sRGB alpha text at 0.14", "group": "srgb", "source": "color(srgb 0.2 0.4 0.6 / 0.14)", "expected": "rgba(51, 102, 153, 0.14)", "provenance": "Exact normalized channel scaling and captured alpha text." },
+    { "name": "preserves the sRGB alpha text at 0.75", "group": "srgb", "source": "color(srgb 0.2 0.4 0.6 / 0.75)", "expected": "rgba(51, 102, 153, 0.75)", "provenance": "Exact normalized channel scaling and captured alpha text." },
+    { "name": "maps extended sRGB into gamut", "group": "extended-srgb", "source": "color(srgb 1.2 0 0)", "expected": "rgb(255, 105, 86)", "anchor": "extended-srgb" },
+    { "name": "converts HSL", "group": "families", "family": "hsl", "source": "hsl(0deg 100% 50%)", "expected": "rgb(255, 0, 0)", "anchor": "hsl-primary", "computedPrefix": "rgb(", "paintedPrefix": "rgb(" },
+    { "name": "converts HWB", "group": "families", "family": "hwb", "source": "hwb(30 20% 32%)", "expected": "rgb(173, 112, 51)", "anchor": "hwb-amber", "computedPrefix": "rgb(", "paintedPrefix": "rgb(" },
+    { "name": "converts Lab", "group": "families", "family": "lab", "source": "lab(44.36% 36.05 -58.99)", "expected": "rgb(118, 84, 205)", "anchor": "lab-violet", "computedPrefix": "lab(", "paintedPrefix": "rgb(" },
+    { "name": "converts LCH", "group": "families", "family": "lch", "source": "lch(66.93% 68.79 85.94 / 0.4)", "expected": "rgba(194, 158, 8, 0.4)", "anchor": "lch-ochre", "alpha": 0.4, "computedPrefix": "lch(", "paintedPrefix": "rgba(" },
+    { "name": "converts OKLab", "group": "families", "family": "oklab", "source": "oklab(0.6 0.05 0.04)", "expected": "rgb(162, 115, 100)", "anchor": "oklab-coral", "computedPrefix": "oklab(", "paintedPrefix": "rgb(" },
+    { "name": "converts OKLCH", "group": "families", "family": "oklch", "source": "oklch(65% 0.15 270)", "expected": "rgb(108, 136, 234)", "anchor": "oklch-blue", "computedPrefix": "oklch(", "paintedPrefix": "rgb(" },
+    { "name": "converts display-P3", "group": "families", "family": "p3", "source": "color(display-p3 0.445 0.529 0.891)", "expected": "rgb(108, 136, 234)", "anchor": "p3-blue", "computedPrefix": "color(display-p3", "paintedPrefix": "rgb(" },
+    { "name": "maps display-P3 into gamut", "group": "gamut", "source": "color(display-p3 1 0 0)", "expected": "rgb(255, 11, 12)", "anchor": "p3-wide", "computedPrefix": "color(display-p3", "paintedPrefix": "rgb(" },
+    { "name": "maps high-chroma OKLCH into gamut", "group": "gamut", "source": "oklch(0.7 0.4 40)", "expected": "rgb(255, 92, 0)", "anchor": "oklch-wide" },
+    { "name": "preserves zero alpha without compositing", "group": "alpha", "source": "oklch(0.61 0.1 0 / 0)", "expected": "rgba(180, 105, 129, 0)", "anchor": "oklch-hue-zero", "alpha": 0, "computedPrefix": "oklch(", "paintedPrefix": "rgba(" },
+    { "name": "preserves fractional alpha", "group": "alpha", "source": "oklch(0.61 0.1 0 / 0.3)", "expected": "rgba(180, 105, 129, 0.3)", "anchor": "oklch-hue-zero", "alpha": 0.3, "computedPrefix": "oklch(", "paintedPrefix": "rgba(" },
+    { "name": "preserves alpha at 0.14", "group": "alpha", "source": "oklch(0.61 0.1 0 / 0.14)", "expected": "rgba(180, 105, 129, 0.14)", "anchor": "oklch-hue-zero", "alpha": 0.14 },
+    { "name": "preserves alpha at 0.75", "group": "alpha", "source": "oklch(0.61 0.1 0 / 0.75)", "expected": "rgba(180, 105, 129, 0.75)", "anchor": "oklch-hue-zero", "alpha": 0.75, "computedPrefix": "oklch(", "paintedPrefix": "rgba(" },
+    { "name": "emits RGB for opaque alpha", "group": "alpha", "source": "oklch(0.61 0.1 0 / 1)", "expected": "rgb(180, 105, 129)", "anchor": "oklch-hue-zero", "alpha": 1 },
+    { "name": "rounds alpha to four decimal places", "group": "alpha", "source": "oklch(0.61 0.1 0 / 0.123456)", "expected": "rgba(180, 105, 129, 0.1235)", "anchor": "oklch-hue-zero", "alpha": 0.123456 },
+    { "name": "uses zero for a missing hue", "group": "missing", "source": "oklch(0.61 0.1 none)", "expected": "rgb(180, 105, 129)", "anchor": "oklch-hue-zero", "provenance": "Same coordinates as the nonzero-chroma hue-zero twin." },
+    { "name": "uses zero for a missing alpha", "group": "missing", "source": "oklch(0.61 0.1 0 / none)", "expected": "rgba(180, 105, 129, 0)", "anchor": "oklch-hue-zero", "alpha": 0, "provenance": "Opaque twin channels with missing alpha mapped to zero." },
+    { "name": "uses zero for a missing sRGB channel", "group": "missing", "source": "color(srgb none 0.4 0.6)", "expected": "rgb(0, 102, 153)", "provenance": "Exact zero-component twin color(srgb 0 0.4 0.6)." },
+    { "name": "rejects XYZ D65", "group": "reject", "source": "color(xyz-d65 0.2 0.3 0.4)", "expected": null, "reject": true, "provenance": "Unsupported parsed space." },
+    { "name": "rejects linear sRGB", "group": "reject", "source": "color(srgb-linear 0.2 0.3 0.4)", "expected": null, "reject": true, "provenance": "Unsupported parsed space." },
+    { "name": "rejects Rec. 2020", "group": "reject", "source": "color(rec2020 0.2 0.3 0.4)", "expected": null, "reject": true, "provenance": "Unsupported parsed space." },
+    { "name": "rejects exponent overflow", "group": "reject", "source": "oklch(1e999 0.1 40)", "expected": null, "reject": true, "provenance": "Parsed coordinate is not finite." },
+    { "name": "clamps an overflowing alpha to one as CSS does", "group": "alpha-clamp", "source": "oklch(0.61 0.1 0 / 1e999)", "expected": "rgb(180, 105, 129)", "provenance": "Color.js parse clamps alpha into [0, 1] like the CSS alpha clamp, so a computed value never carries it." },
+    { "name": "clamps a negative overflowing alpha to zero as CSS does", "group": "alpha-clamp", "source": "oklch(0.61 0.1 0 / -1e999)", "expected": "rgba(180, 105, 129, 0)", "provenance": "Color.js parse clamps alpha into [0, 1] like the CSS alpha clamp, so a computed value never carries it." },
+    { "name": "rejects an unrecognized color", "group": "reject", "source": "not-a-color", "expected": null, "reject": true, "provenance": "Unrecognized input." }
+  ]
+}

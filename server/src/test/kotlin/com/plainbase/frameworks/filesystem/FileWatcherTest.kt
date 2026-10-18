@@ -10,6 +10,7 @@ import com.plainbase.domain.service.localRoot
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.lifecycle.Stage0cParentDeadline
+import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -52,7 +53,7 @@ class FileWatcherTest : FunSpec({
         withTempTree(seed = { root ->
             Files.createDirectories(root.resolve(".git/objects"))
             Files.writeString(root.resolve(".git/config"), "[core]\n")
-            Files.createDirectories(root.resolve("data"))
+            Files.createDirectories(root.resolve("data/themes"))
             writePage(root, "docs/page.md", "# Page\n")
         }) { root ->
             val warnings = captureWarnings {
@@ -73,14 +74,50 @@ class FileWatcherTest : FunSpec({
                     repeat(5) { n -> Files.writeString(root.resolve(".git/objects/blob-$n"), "git internals $n\n") }
                     Files.writeString(root.resolve(".git/config"), "[core]\n\tbare = false\n")
                     Files.writeString(root.resolve("data/search.db"), "app-owned state\n")
+                    Files.writeString(root.resolve("data/themes/x.yaml"), "private theme data\n")
                     writePage(root, "docs/sentinel.md", "# Sentinel\n")
 
                     sentinelArrived.await(90, TimeUnit.SECONDS).shouldBeTrue()
                 }
-                pathsSeen(seen, ".git").shouldBeEmpty()
-                pathsSeen(seen, "data").shouldBeEmpty()
+                assertSoftly {
+                    pathsSeen(seen, ".git").shouldBeEmpty()
+                    pathsSeen(seen, "data").shouldBeEmpty()
+                    pathsSeen(seen, "data/themes").shouldBeEmpty()
+                }
             }
             warnings.single { it.contains("data") } shouldContain "excluded from the watch"
+        }
+    }
+
+    test("watch registration skips a nested DATA_DIR subdirectory") {
+        withTempTree(seed = { root ->
+            Files.createDirectories(root.resolve("data/themes"))
+            writePage(root, "docs/page.md", "# Page\n")
+        }) { root ->
+            val watchedRoot = root.toAbsolutePath().normalize()
+            val registrations = ConcurrentLinkedQueue<String>()
+            FileWatcher(
+                root = watchedRoot,
+                ignoreRules = IgnoreRules(),
+                excluded = listOf(watchedRoot.resolve("data")),
+                onChange = {},
+                registerDirectory = { directory, service ->
+                    registrations += watchedRoot.relativize(directory).joinToString("/")
+                    directory.register(
+                        service,
+                        StandardWatchEventKinds.ENTRY_CREATE,
+                        StandardWatchEventKinds.ENTRY_DELETE,
+                        StandardWatchEventKinds.ENTRY_MODIFY,
+                    )
+                },
+            ).use {
+                assertSoftly {
+                    withClue("visible docs directory is registered") { ("docs" in registrations) shouldBe true }
+                    withClue("no registration for data or data/themes") {
+                        registrations.filter { it == "data" || it.startsWith("data/") }.shouldBeEmpty()
+                    }
+                }
+            }
         }
     }
 

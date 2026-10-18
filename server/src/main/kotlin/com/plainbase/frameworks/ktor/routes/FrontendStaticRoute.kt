@@ -3,7 +3,9 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.protocol.ErrorCodes
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.response.header
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 
@@ -11,7 +13,10 @@ fun Route.frontendStaticRoutes(ctx: RouteContext) {
     FrontendBundle.files.filter { it != FrontendBundle.SHELL }.forEach { name ->
         // The rest of the bundle stays PUBLIC pre-login: the login view cannot render without its
         // own logo and favicon, so gating these would lock the operator out of the way back in.
-        get("/$name") { call.respondBundleFile(name) }
+        get("/$name") {
+            if (name == FrontendBundle.THEME_GENERIC) call.response.header(HttpHeaders.CacheControl, CACHE_CONTROL_NO_CACHE)
+            call.respondBundleFile(name)
+        }
     }
     // `/index.html` is a SECOND app entry point serving the identical shell bytes, so it goes through
     // the SAME cached, guarded path `spaShellRoutes` uses rather than the bundle-file path:
@@ -54,6 +59,9 @@ internal object FrontendBundle {
     /** The route that owns a delegated bundle entry. */
     enum class Owner(val topLevelSegment: String) {
         ASSET_ROUTE(ServerTopLevel.ASSETS),
+
+        /** ThemeRoute owns the public endpoints and fail-closed namespace; fallback resources are never directory-served. */
+        THEME_ROUTE(ServerTopLevel.PLAINBASE),
     }
 
     /** Top-level bundle files served here. [SHELL] is the HTML shell. */
@@ -63,6 +71,7 @@ internal object FrontendBundle {
         "index.html",
         "plainbase-logo-dark.svg",
         "plainbase-logo.svg",
+        THEME_GENERIC,
     )
 
     /** Top-level bundle directories, each exposed through one flat file parameter. */
@@ -71,9 +80,11 @@ internal object FrontendBundle {
     /** Top-level entries owned by another route. */
     val ownedElsewhere = setOf(
         OwnedEntry(ServerTopLevel.ASSETS, Owner.ASSET_ROUTE),
+        OwnedEntry(ServerTopLevel.PLAINBASE, Owner.THEME_ROUTE),
     )
 
     const val SHELL = "index.html"
+    const val THEME_GENERIC = "plainbase-theme-generic.css"
 
     /** A single safe bundle path segment. */
     val FILE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]*")

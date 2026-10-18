@@ -187,6 +187,7 @@ class RestRoutingTest : FunSpec({
                 // only human URL, so it serves the SPA shell directly (documented chunk-6 reading).
                 val permalink = client.get("/p/${loser.id.value}")
                 permalink.status shouldBe HttpStatusCode.OK
+                assertShellCachePolicy(permalink)
                 permalink.bodyAsText() shouldContain "<div id=\"root\">"
 
                 // The API surface resolves the loser regardless, with the frozen present-null url.

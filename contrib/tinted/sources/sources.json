@@ -1,0 +1,176 @@
+{
+  "examples": [
+    {
+      "id": "base16-dracula",
+      "system": "base16",
+      "mode": "dark",
+      "upstream": {
+        "repository": "https://github.com/tinted-theming/schemes",
+        "commit": "3ac91137e879502c442ab89ba0f1a98077d0da9d",
+        "path": "base16/dracula.yaml",
+        "lastFileCommit": "3fa37f7b72d332b406fdc254008ed6d6b50efb4c",
+        "sha256": "f6f5a7f3a28a3c305a021328b32a8849ca76cfce3da340dc2c1e69f3cbd8bc17",
+        "author": "clach04 (https://github.com/clach04)",
+        "license": "MIT",
+        "copyright": "Copyright (c) 2022 Tinted Theming"
+      },
+      "pinned": "sources/upstream/base16-dracula.yaml",
+      "adapted": "sources/adapted/base16-dracula-adapted.yaml",
+      "generated": "generated/base16-dracula-adapted.css",
+      "adjustments": [
+        {
+          "slot": "base04",
+          "from": "#9ea8c7",
+          "to": "#a1abc9",
+          "rows": [
+            "syntax-comment on surface + diff-add-bg (4.5)",
+            "text-muted on surface + diff-add-bg (4.5)"
+          ]
+        },
+        {
+          "slot": "base08",
+          "from": "#ff5555",
+          "to": "#ff8888",
+          "rows": [
+            "danger on surface + danger-soft (4.5)",
+            "status-deprecated on surface-raised (4.5)",
+            "syntax-attr on code-bg (4.5)",
+            "syntax-attr on surface + diff-add-bg (4.5)",
+            "syntax-attr on surface + diff-del-bg (4.5)",
+            "syntax-attr on surface-raised (4.5)"
+          ]
+        },
+        {
+          "slot": "base0D",
+          "from": "#bd93f9",
+          "to": "#c199f9",
+          "rows": [
+            "syntax-title on surface + diff-add-bg (4.5)"
+          ]
+        },
+        {
+          "slot": "base0E",
+          "from": "#ff79c6",
+          "to": "#ff80c9",
+          "rows": [
+            "syntax-keyword on surface + diff-add-bg (4.5)"
+          ]
+        }
+      ],
+      "notes": [
+        "Upstream base04 (9ea8c7) is a Tinted adaptation, marked NOT a Dracula color! in the pinned source.",
+        "The original Dracula comment hue is base03 and is not mapped.",
+        "No contrast claim is made about the original comment hue."
+      ]
+    },
+    {
+      "id": "base24-dracula",
+      "system": "base24",
+      "mode": "dark",
+      "upstream": {
+        "repository": "https://github.com/tinted-theming/schemes",
+        "commit": "3ac91137e879502c442ab89ba0f1a98077d0da9d",
+        "path": "base24/dracula.yaml",
+        "lastFileCommit": "3fa37f7b72d332b406fdc254008ed6d6b50efb4c",
+        "sha256": "ba509a68187e1236f06ed660100881f8c6967257e6ddc3bc54ccd370a77a1621",
+        "author": "clach04 (https://github.com/clach04)",
+        "license": "MIT",
+        "copyright": "Copyright (c) 2022 Tinted Theming"
+      },
+      "pinned": "sources/upstream/base24-dracula.yaml",
+      "adapted": "sources/adapted/base24-dracula-adapted.yaml",
+      "generated": "generated/base24-dracula-adapted.css",
+      "adjustments": [
+        {
+          "slot": "base04",
+          "from": "#9ea8c7",
+          "to": "#a3acca",
+          "rows": [
+            "syntax-comment on surface + diff-add-bg (4.5)",
+            "text-muted on surface + diff-add-bg (4.5)"
+          ]
+        },
+        {
+          "slot": "base12",
+          "from": "#ff6e6e",
+          "to": "#ff8b8b",
+          "rows": [
+            "syntax-attr on surface + diff-add-bg (4.5)",
+            "syntax-attr on surface + diff-del-bg (4.5)"
+          ]
+        }
+      ],
+      "notes": [
+        "Upstream base04 (9ea8c7) is a Tinted adaptation, marked NOT a Dracula color! in the pinned source.",
+        "The original Dracula comment hue is base03 and is not mapped.",
+        "No contrast claim is made about the original comment hue."
+      ]
+    },
+    {
+      "id": "base16-gruvbox-light-hard",
+      "system": "base16",
+      "mode": "light",
+      "upstream": {
+        "repository": "https://github.com/tinted-theming/schemes",
+        "commit": "3ac91137e879502c442ab89ba0f1a98077d0da9d",
+        "path": "base16/gruvbox-light-hard.yaml",
+        "lastFileCommit": "61058a8d2e2bd4482b53d57a68feb56cdb991f0b",
+        "sha256": "9f9f1ac1a743b96c715fe9d80b3f28ff0401bf787872eb6280e71bf6953aea3e",
+        "author": "Dawid Kurek (dawikur@gmail.com), morhetz (https://github.com/morhetz/gruvbox)",
+        "license": "MIT",
+        "copyright": "Copyright (c) 2022 Tinted Theming"
+      },
+      "pinned": "sources/upstream/base16-gruvbox-light-hard.yaml",
+      "adapted": "sources/adapted/base16-gruvbox-light-hard-adapted.yaml",
+      "generated": "generated/base16-gruvbox-light-hard-adapted.css",
+      "adjustments": [
+        {
+          "slot": "base09",
+          "from": "#af3a03",
+          "to": "#aa3803",
+          "rows": [
+            "syntax-literal on surface + diff-del-bg (4.5)"
+          ]
+        },
+        {
+          "slot": "base0A",
+          "from": "#b57614",
+          "to": "#86570f",
+          "rows": [
+            "link-broken on surface (4.5)",
+            "link-broken on surface + callout-danger-bg (4.5)",
+            "link-broken on surface + callout-danger-bg + callout-danger-bg (4.5)",
+            "link-broken on surface + callout-note-bg (4.5)",
+            "link-broken on surface + callout-note-bg + callout-note-bg (4.5)",
+            "link-broken on surface + callout-warning-bg (4.5)",
+            "link-broken on surface + callout-warning-bg + callout-warning-bg (4.5)",
+            "link-broken on surface-raised (4.5)",
+            "link-broken on surface-raised + callout-danger-bg (4.5)",
+            "link-broken on surface-raised + callout-note-bg (4.5)",
+            "link-broken on surface-raised + callout-warning-bg (4.5)",
+            "status-draft on surface (4.5)",
+            "status-draft on surface-raised (4.5)",
+            "warning on surface + warning-soft (4.5)"
+          ]
+        },
+        {
+          "slot": "base0B",
+          "from": "#79740e",
+          "to": "#66610c",
+          "rows": [
+            "status-active on surface (4.5)",
+            "status-active on surface-raised (4.5)",
+            "syntax-string on code-bg (4.5)",
+            "syntax-string on surface (4.5)",
+            "syntax-string on surface + diff-add-bg (4.5)",
+            "syntax-string on surface + diff-del-bg (4.5)",
+            "syntax-string on surface-raised (4.5)"
+          ]
+        }
+      ],
+      "notes": [
+        "base05 keeps the upstream 504945: faint text follows muted-foreground (base04), so the scheme's body ink passes unchanged."
+      ]
+    }
+  ]
+}

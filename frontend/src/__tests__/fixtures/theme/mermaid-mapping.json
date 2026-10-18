@@ -1,0 +1,24 @@
+{
+  "variables": {
+    "background": "--pb-surface",
+    "primaryColor": "--pb-diagram-node-bg",
+    "primaryTextColor": "--pb-diagram-node-text",
+    "primaryBorderColor": "--pb-diagram-node-border",
+    "lineColor": "--pb-link",
+    "secondaryColor": "--pb-surface",
+    "secondaryTextColor": "--pb-text",
+    "secondaryBorderColor": "--pb-border-strong",
+    "tertiaryColor": "--pb-surface-raised",
+    "tertiaryTextColor": "--pb-diagram-node-text",
+    "tertiaryBorderColor": "--pb-border",
+    "mainBkg": "--pb-diagram-node-bg",
+    "nodeBorder": "--pb-diagram-node-border",
+    "clusterBkg": "--pb-surface",
+    "clusterBorder": "--pb-border-strong",
+    "textColor": "--pb-text",
+    "titleColor": "--pb-text",
+    "edgeLabelBackground": "--pb-surface",
+    "nodeTextColor": "--pb-diagram-node-text"
+  },
+  "shadow": "--pb-diagram-shadow"
+}

@@ -1,0 +1,498 @@
+{
+  "description": "Public --pb-theme-* CSS inputs, version 1, separate from the pb-theme localStorage display-mode key. Floors are minimum consumers; dependency closure may move more.",
+  "inputs": {
+    "--pb-theme-background": {
+      "required": true,
+      "kind": "colour",
+      "default": null,
+      "generic": [
+        "--pb-surface"
+      ],
+      "builtin-light": [
+        "--pb-surface"
+      ],
+      "builtin-dark": [
+        "--pb-surface"
+      ],
+      "adaptation": "Page background, and the base that default card, muted, border and selection colors mix from.",
+      "tinted-base16": "base00",
+      "tinted-base24": "base00"
+    },
+    "--pb-theme-foreground": {
+      "required": true,
+      "kind": "colour",
+      "default": null,
+      "generic": [
+        "--pb-text"
+      ],
+      "builtin-light": [
+        "--pb-text"
+      ],
+      "builtin-dark": [
+        "--pb-text"
+      ],
+      "adaptation": "Page text, and the base for default card text, muted text, borders, links, and feedback and syntax colors.",
+      "tinted-base16": "base05",
+      "tinted-base24": "base05"
+    },
+    "--pb-theme-primary": {
+      "required": true,
+      "kind": "colour",
+      "default": null,
+      "generic": [
+        "--pb-primary-bg",
+        "--pb-primary-border",
+        "--pb-primary-opaque",
+        "--pb-accent",
+        "--pb-discussion-highlight-edge"
+      ],
+      "builtin-light": [
+        "--pb-primary-bg",
+        "--pb-primary-border",
+        "--pb-accent",
+        "--pb-discussion-highlight-edge",
+        "--pb-primary-opaque"
+      ],
+      "builtin-dark": [
+        "--pb-primary-bg",
+        "--pb-accent",
+        "--pb-discussion-highlight-edge",
+        "--pb-primary-opaque"
+      ],
+      "adaptation": "Primary action fill, and the base for links, accents, the default selection and the default focus outline.",
+      "tinted-base16": "base0D",
+      "tinted-base24": "base0D"
+    },
+    "--pb-theme-primary-foreground": {
+      "required": true,
+      "kind": "colour",
+      "default": null,
+      "generic": [
+        "--pb-primary-text",
+        "--pb-accent-contrast"
+      ],
+      "builtin-light": [
+        "--pb-primary-text",
+        "--pb-accent-contrast"
+      ],
+      "builtin-dark": [
+        "--pb-primary-text"
+      ],
+      "adaptation": "Text on primary actions and accent fills.",
+      "tinted-base16": "base00",
+      "tinted-base24": "base00"
+    },
+    "--pb-theme-card": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 3%)",
+      "generic": [
+        "--pb-surface-raised",
+        "--pb-surface-field",
+        "--pb-code-bg",
+        "--pb-diagram-node-bg"
+      ],
+      "builtin-light": [
+        "--pb-surface-raised",
+        "--pb-surface-field",
+        "--pb-code-bg",
+        "--pb-diagram-node-bg"
+      ],
+      "builtin-dark": [
+        "--pb-surface-raised"
+      ],
+      "adaptation": "Raised surfaces such as cards, dialogs, form fields, code blocks and diagram nodes.",
+      "tinted-base16": null,
+      "tinted-base24": null
+    },
+    "--pb-theme-card-foreground": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-card-foreground",
+        "--pb-diagram-node-text",
+        "--pb-code-text"
+      ],
+      "builtin-light": [
+        "--pb-card-foreground",
+        "--pb-diagram-node-text"
+      ],
+      "builtin-dark": [
+        "--pb-card-foreground",
+        "--pb-diagram-node-text"
+      ],
+      "adaptation": "Text in discussion cards, list cards, evidence and notices, the new-page dialog, code text (code blocks, diffs and code in the editor) and diagram node labels.",
+      "tinted-base16": null,
+      "tinted-base24": null
+    },
+    "--pb-theme-muted": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-background), var(--pb-theme-foreground) 6%)",
+      "generic": [
+        "--pb-surface-chrome",
+        "--pb-inline-code-bg",
+        "--pb-table-header-bg"
+      ],
+      "builtin-light": [
+        "--pb-surface-chrome",
+        "--pb-table-header-bg"
+      ],
+      "builtin-dark": [
+        "--pb-surface-chrome"
+      ],
+      "adaptation": "Quiet surfaces such as the header, sidebar, table headers and inline code.",
+      "tinted-base16": "base01",
+      "tinted-base24": "base01"
+    },
+    "--pb-theme-muted-foreground": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 15%)",
+      "generic": [
+        "--pb-text-muted",
+        "--pb-text-faint"
+      ],
+      "builtin-light": [
+        "--pb-text-muted"
+      ],
+      "builtin-dark": [
+        "--pb-text-muted"
+      ],
+      "adaptation": "Secondary and faint text, archived status and the default comment color.",
+      "tinted-base16": "base04",
+      "tinted-base24": "base04"
+    },
+    "--pb-theme-border": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-foreground), var(--pb-theme-background) 75%)",
+      "generic": [
+        "--pb-border",
+        "--pb-code-border"
+      ],
+      "builtin-light": [
+        "--pb-border",
+        "--pb-code-border"
+      ],
+      "builtin-dark": [
+        "--pb-border",
+        "--pb-code-border"
+      ],
+      "adaptation": "Edges and dividers, and the base for stronger edges, blockquote rules and diagram node borders.",
+      "tinted-base16": null,
+      "tinted-base24": null
+    },
+    "--pb-theme-ring": {
+      "required": false,
+      "kind": "colour",
+      "default": "rgb(from var(--pb-theme-primary) r g b / 1)",
+      "generic": [
+        "--pb-focus-ring"
+      ],
+      "builtin-light": [
+        "--pb-focus-ring"
+      ],
+      "builtin-dark": [
+        "--pb-focus-ring"
+      ],
+      "adaptation": "Keyboard focus outline.",
+      "tinted-base16": "base0D",
+      "tinted-base24": "base16"
+    },
+    "--pb-theme-selection": {
+      "required": false,
+      "kind": "colour",
+      "default": "color-mix(in srgb, var(--pb-theme-primary), var(--pb-theme-background) 88%)",
+      "generic": [
+        "--pb-selection-bg",
+        "--pb-deeplink-pulse",
+        "--pb-nav-active-bg",
+        "--pb-discussion-highlight-bg"
+      ],
+      "builtin-light": [
+        "--pb-selection-bg",
+        "--pb-deeplink-pulse"
+      ],
+      "builtin-dark": [
+        "--pb-selection-bg",
+        "--pb-deeplink-pulse"
+      ],
+      "adaptation": "Text selection, the active navigation item, discussion highlights and the deep-link pulse.",
+      "tinted-base16": "base02",
+      "tinted-base24": "base02"
+    },
+    "--pb-theme-selection-foreground": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-selection-text"
+      ],
+      "builtin-light": [
+        "--pb-selection-text"
+      ],
+      "builtin-dark": [
+        "--pb-selection-text"
+      ],
+      "adaptation": "Text inside a selection, including the editor's.",
+      "tinted-base16": "base05",
+      "tinted-base24": "base05"
+    },
+    "--pb-theme-destructive": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-danger",
+        "--pb-status-deprecated"
+      ],
+      "builtin-light": [
+        "--pb-danger",
+        "--pb-status-deprecated"
+      ],
+      "builtin-dark": [
+        "--pb-danger"
+      ],
+      "adaptation": "Danger callouts, errors, deprecated status and diff deletions.",
+      "tinted-base16": "base08",
+      "tinted-base24": "base12"
+    },
+    "--pb-theme-warning": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-warning",
+        "--pb-link-broken",
+        "--pb-status-draft"
+      ],
+      "builtin-light": [
+        "--pb-warning",
+        "--pb-link-broken",
+        "--pb-status-draft"
+      ],
+      "builtin-dark": [
+        "--pb-warning",
+        "--pb-link-broken"
+      ],
+      "adaptation": "Warning callouts, broken links and draft status.",
+      "tinted-base16": "base0A",
+      "tinted-base24": "base13"
+    },
+    "--pb-theme-success": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-status-active"
+      ],
+      "builtin-light": [
+        "--pb-status-active"
+      ],
+      "builtin-dark": [
+        "--pb-status-active"
+      ],
+      "adaptation": "Active status and diff additions.",
+      "tinted-base16": "base0B",
+      "tinted-base24": "base14"
+    },
+    "--pb-theme-syntax-keyword": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-keyword"
+      ],
+      "builtin-light": [
+        "--pb-syntax-keyword"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-keyword"
+      ],
+      "adaptation": "Keywords in highlighted code.",
+      "tinted-base16": "base0E",
+      "tinted-base24": "base17"
+    },
+    "--pb-theme-syntax-string": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-string"
+      ],
+      "builtin-light": [
+        "--pb-syntax-string"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-string"
+      ],
+      "adaptation": "Strings in highlighted code.",
+      "tinted-base16": "base0B",
+      "tinted-base24": "base14"
+    },
+    "--pb-theme-syntax-comment": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-muted-foreground)",
+      "generic": [
+        "--pb-syntax-comment"
+      ],
+      "builtin-light": [
+        "--pb-syntax-comment"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-comment"
+      ],
+      "adaptation": "Comments in highlighted code.",
+      "tinted-base16": "base04",
+      "tinted-base24": "base04"
+    },
+    "--pb-theme-syntax-literal": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-literal"
+      ],
+      "builtin-light": [
+        "--pb-syntax-literal"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-literal"
+      ],
+      "adaptation": "Numbers and literals in highlighted code.",
+      "tinted-base16": "base09",
+      "tinted-base24": "base09"
+    },
+    "--pb-theme-syntax-title": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-title"
+      ],
+      "builtin-light": [
+        "--pb-syntax-title"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-title"
+      ],
+      "adaptation": "Titles such as function, class and tag names in highlighted code.",
+      "tinted-base16": "base0D",
+      "tinted-base24": "base16"
+    },
+    "--pb-theme-syntax-attribute": {
+      "required": false,
+      "kind": "colour",
+      "default": "var(--pb-theme-foreground)",
+      "generic": [
+        "--pb-syntax-attr"
+      ],
+      "builtin-light": [
+        "--pb-syntax-attr"
+      ],
+      "builtin-dark": [
+        "--pb-syntax-attr"
+      ],
+      "adaptation": "Attribute names in highlighted code.",
+      "tinted-base16": "base08",
+      "tinted-base24": "base12"
+    },
+    "--pb-theme-font-sans": {
+      "required": false,
+      "kind": "font",
+      "default": "\"IBM Plex Sans\", ui-sans-serif, system-ui, sans-serif",
+      "generic": [
+        "--pb-font-sans"
+      ],
+      "builtin-light": [
+        "--pb-font-sans"
+      ],
+      "builtin-dark": [
+        "--pb-font-sans"
+      ],
+      "adaptation": "Interface and prose font family.",
+      "tinted-base16": null,
+      "tinted-base24": null
+    },
+    "--pb-theme-font-mono": {
+      "required": false,
+      "kind": "font",
+      "default": "\"JetBrains Mono\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "generic": [
+        "--pb-font-mono"
+      ],
+      "builtin-light": [
+        "--pb-font-mono"
+      ],
+      "builtin-dark": [
+        "--pb-font-mono"
+      ],
+      "adaptation": "Code and editor font family.",
+      "tinted-base16": null,
+      "tinted-base24": null
+    },
+    "--pb-theme-radius": {
+      "required": false,
+      "kind": "length",
+      "default": "0.25rem",
+      "generic": [
+        "--pb-radius"
+      ],
+      "builtin-light": [
+        "--pb-radius"
+      ],
+      "builtin-dark": [
+        "--pb-radius"
+      ],
+      "adaptation": "Base corner radius; seven decorative steps scale from it.",
+      "tinted-base16": null,
+      "tinted-base24": null
+    }
+  },
+  "independentInk": [
+    "--pb-text",
+    "--pb-text-muted",
+    "--pb-link",
+    "--pb-syntax-keyword",
+    "--pb-syntax-string",
+    "--pb-syntax-comment",
+    "--pb-syntax-literal",
+    "--pb-syntax-title",
+    "--pb-syntax-attr",
+    "--pb-status-active",
+    "--pb-status-draft",
+    "--pb-status-review",
+    "--pb-status-archived",
+    "--pb-status-deprecated",
+    "--pb-danger",
+    "--pb-warning"
+  ],
+  "newPrivates": [
+    "--pb-card-foreground",
+    "--pb-diagram-node-text",
+    "--pb-primary-opaque",
+    "--pb-font-sans",
+    "--pb-font-mono",
+    "--pb-radius",
+    "--pb-radius-xs",
+    "--pb-radius-sm",
+    "--pb-radius-md",
+    "--pb-radius-lg",
+    "--pb-radius-xl",
+    "--pb-radius-2xl",
+    "--pb-radius-3xl"
+  ],
+  "tintedBase24Fallbacks": {
+    "base10": "base00",
+    "base11": "base00",
+    "base12": "base08",
+    "base13": "base0A",
+    "base14": "base0B",
+    "base15": "base0C",
+    "base16": "base0D",
+    "base17": "base0E"
+  }
+}

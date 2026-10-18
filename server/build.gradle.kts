@@ -198,7 +198,7 @@ sqldelight {
 
 // ---- Frontend embedding: :frontend builds the Vite SPA, we ship it as static resources ----
 val copyFrontend =
-    tasks.register<Copy>("copyFrontend") {
+    tasks.register<Sync>("copyFrontend") {
         dependsOn(":frontend:npmBuild")
         from(rootProject.layout.projectDirectory.dir("frontend/dist"))
         into(layout.buildDirectory.dir("generated/frontend/static"))
@@ -212,6 +212,18 @@ sourceSets {
 
 tasks.processResources {
     dependsOn(copyFrontend)
+}
+
+evaluationDependsOn(":frontend")
+val tintedCorpusSetup = project(":frontend").tasks.named("tintedCorpusSetup")
+val tintedCorpusRoot = project(":frontend").layout.buildDirectory.dir("tinted/corpus")
+tasks.named<Test>("test") {
+    inputs.files(tintedCorpusSetup)
+        .withPropertyName("tintedCorpus")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    doFirst {
+        systemProperty("plainbase.test.tintedCorpus", tintedCorpusRoot.get().asFile.absolutePath)
+    }
 }
 
 // ---- GraalVM native image ----

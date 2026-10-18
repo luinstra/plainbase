@@ -1,0 +1,24 @@
+/* Plainbase theme definition: base16 / gruvbox-light-hard-adapted.
+   public --pb-theme- inputs only.
+   --pb-theme-card, --pb-theme-card-foreground, --pb-theme-border,
+   --pb-theme-font-sans, --pb-theme-font-mono and --pb-theme-radius use generic defaults. */
+:where(:root:not([data-theme="dark"])) {
+  --pb-theme-background: #f9f5d7;
+  --pb-theme-foreground: #504945;
+  --pb-theme-primary: #076678;
+  --pb-theme-primary-foreground: #f9f5d7;
+  --pb-theme-muted: #ebdbb2;
+  --pb-theme-muted-foreground: #665c54;
+  --pb-theme-ring: #076678;
+  --pb-theme-selection: #d5c4a1;
+  --pb-theme-selection-foreground: #504945;
+  --pb-theme-destructive: #9d0006;
+  --pb-theme-warning: #86570f;
+  --pb-theme-success: #66610c;
+  --pb-theme-syntax-keyword: #8f3f71;
+  --pb-theme-syntax-string: #66610c;
+  --pb-theme-syntax-comment: #665c54;
+  --pb-theme-syntax-literal: #aa3803;
+  --pb-theme-syntax-title: #076678;
+  --pb-theme-syntax-attribute: #9d0006;
+}

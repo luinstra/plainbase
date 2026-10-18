@@ -1,8 +1,10 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.frameworks.filesystem.Fixtures
+import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.ints.shouldBeLessThan
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -22,6 +24,7 @@ import io.ktor.http.HttpStatusCode
 class ShellSecurityHeadersTest : FunSpec({
 
     val expectedHash = inlineScriptHash(bundledShellHtml().shouldNotBeNull())
+    val stylesheetTag = Regex("""<link\b[^>]*\srel\s*=\s*["']stylesheet["'][^>]*>""", RegexOption.IGNORE_CASE)
 
     fun assertFullShellCsp(csp: String?) {
         csp.shouldNotBeNull()
@@ -34,6 +37,36 @@ class ShellSecurityHeadersTest : FunSpec({
         csp shouldContain "object-src 'none'"
         csp shouldContain "base-uri 'self'"
         csp shouldContain "frame-ancestors 'self'"
+    }
+
+    test("the inline bootstrap ends before the first stylesheet in the bundled shell") {
+        val shell = bundledShellHtml().shouldNotBeNull()
+        val inlineScripts = Regex(
+            """<script\b(?![^>]*\ssrc\s*=)[^>]*>.*?</script>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).findAll(shell).toList()
+        inlineScripts.size shouldBe 1
+        val firstStylesheet = stylesheetTag.find(shell).shouldNotBeNull()
+        inlineScripts.single().range.last shouldBeLessThan firstStylesheet.range.first
+    }
+
+    test("the bundled shell links the app stylesheet, then generic, the selected definitions and the custom override") {
+        val shell = bundledShellHtml().shouldNotBeNull()
+        val hrefAttribute = Regex("""\shref\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+        val hrefs = stylesheetTag.findAll(shell)
+            .map { hrefAttribute.find(it.value).shouldNotBeNull().groupValues[1] }
+            .toList()
+        val appSheets = hrefs.filter { Regex("""/assets/[^/]+\.css""").matches(it) }
+        appSheets.size shouldBe 1
+        assertSoftly {
+            hrefs shouldBe listOf(
+                appSheets.single(),
+                "/plainbase-theme-generic.css",
+                "/_plainbase/theme-light.css",
+                "/_plainbase/theme-dark.css",
+                "/_plainbase/custom.css",
+            )
+        }
     }
 
     test("the shell CSP is stamped on BOTH shell-serving paths with the full directive set + companion headers") {

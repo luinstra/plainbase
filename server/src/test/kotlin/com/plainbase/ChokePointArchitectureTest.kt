@@ -37,6 +37,7 @@ private val EXPECTED_FILES_BY_ROOT = mapOf(
         "SessionRoutes.kt",
         "SetupRoutes.kt",
         "SpaShellRoute.kt",
+        "ThemeRoute.kt",
         "TreeRoute.kt",
     ),
     "frameworks/mcp" to setOf(

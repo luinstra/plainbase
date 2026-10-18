@@ -1,30 +1,17 @@
-import { useEffect, useState } from "react";
-import { applyTheme, resolveTheme, toggleTheme, type Theme } from "../theme";
+import { useSyncExternalStore } from "react";
+import { getDisplayMode, subscribeDisplayMode, toggleDisplayMode } from "../theme";
 
 /**
- * Light/dark toggle: a pure `data-theme` swap (theme.ts) — zero color logic here. Follows
- * the system preference until the user picks explicitly; the choice persists.
+ * Display-mode controls share the owner's snapshot and system subscription.
  */
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>(() => resolveTheme());
-
-  useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
-
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const followSystem = () => setTheme(resolveTheme());
-    media.addEventListener("change", followSystem);
-    return () => media.removeEventListener("change", followSystem);
-  }, []);
-
-  const dark = theme === "dark";
+  const mode = useSyncExternalStore(subscribeDisplayMode, getDisplayMode);
+  const dark = mode === "dark";
   return (
     <button
       type="button"
       data-pb-theme-toggle
-      onClick={() => setTheme(toggleTheme())}
+      onClick={() => toggleDisplayMode()}
       aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
       title={dark ? "Switch to light mode" : "Switch to dark mode"}
       className="rounded border border-edge p-1.5 text-muted hover:bg-hovered hover:text-ink"

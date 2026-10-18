@@ -39,6 +39,7 @@ data class PlainbaseConfig(
      * at construction; `copy(contentDir = ...)` or `copy(storage = ...)` retains the prior topology.
      */
     val roots: RootsConfig = RootsConfig.synthesized(contentDir, storage),
+    val theme: ThemeConfig = ThemeConfig(),
 ) {
     /** Path of the app-owned SQLite database. */
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")

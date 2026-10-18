@@ -13,11 +13,13 @@ import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SessionService
 import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.domain.theming.BundledThemeStylesheets
 import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
 import com.plainbase.frameworks.runtime.HistoryProviders
 import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.RootStores
@@ -137,6 +139,7 @@ class AuthRouteHarness(
                 mcpAllowedOrigins = listOf("http://127.0.0.1", "http://localhost"),
                 secureCookie = false,
             ),
+            themes = BundledThemeStylesheets(embeddedThemeBuiltins()),
         )
         extract?.let(actual::withExtract) ?: actual
     }
