@@ -198,7 +198,7 @@ sqldelight {
 
 // ---- Frontend embedding: :frontend builds the Vite SPA, we ship it as static resources ----
 val copyFrontend =
-    tasks.register<Copy>("copyFrontend") {
+    tasks.register<Sync>("copyFrontend") {
         dependsOn(":frontend:npmBuild")
         from(rootProject.layout.projectDirectory.dir("frontend/dist"))
         into(layout.buildDirectory.dir("generated/frontend/static"))
