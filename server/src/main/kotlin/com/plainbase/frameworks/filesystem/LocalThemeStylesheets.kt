@@ -1,9 +1,14 @@
 package com.plainbase.frameworks.filesystem
 
+import com.plainbase.domain.theming.THEMES_DIRECTORY
 import com.plainbase.domain.theming.ThemeBuiltins
+import com.plainbase.domain.theming.ThemeFormat
+import com.plainbase.domain.theming.ThemeLeaf
 import com.plainbase.domain.theming.ThemeMode
 import com.plainbase.domain.theming.ThemeSelection
 import com.plainbase.domain.theming.ThemeStylesheets
+import com.plainbase.domain.theming.TintedConversion
+import com.plainbase.domain.theming.TintedSchemes
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -48,20 +53,32 @@ internal class LocalThemeStylesheets(
 
     override fun definition(mode: ThemeMode): ByteArray {
         val leaf = selection.leaf(mode) ?: return builtins.definition(mode)
-        return when (val result = read(dataDir.resolve(leaf.value))) {
-            is ThemeRead.Bytes -> result.bytes
+        val subject = "theme.${mode.name.lowercase()} ${leaf.value}"
+        return when (val result = readSelected(leaf)) {
+            is ThemeRead.Bytes ->
+                if (leaf.format == ThemeFormat.CSS) result.bytes else schemeDefinition(result.bytes, mode, subject)
             is ThemeRead.Failure -> {
-                warn("theme.${mode.name.lowercase()} ${leaf.value}", result, "the bundled definition")
+                warn(subject, result.reason.name, "the bundled definition")
                 builtins.definition(mode)
             }
         }
     }
 
+    private fun schemeDefinition(bytes: ByteArray, mode: ThemeMode, subject: String): ByteArray =
+        when (val result = TintedSchemes.convert(bytes.decodeToString(), mode)) {
+            is TintedConversion.Definition -> result.css.encodeToByteArray()
+            is TintedConversion.Rejected -> {
+                val location = result.failure.line?.let { " at line $it" }.orEmpty()
+                warn(subject, "${result.failure.kind}$location", "the bundled definition")
+                builtins.definition(mode)
+            }
+        }
+
     override fun override(): ByteArray = when (val result = read(dataDir.resolve("custom.css"))) {
         is ThemeRead.Bytes -> result.bytes
         is ThemeRead.Failure -> {
             if (result.reason != ThemeReadFailure.MISSING && result.reason != ThemeReadFailure.EMPTY) {
-                warn("custom.css", result, "no override")
+                warn("custom.css", result.reason.name, "no override")
             }
             ByteArray(0)
         }
@@ -74,16 +91,30 @@ internal class LocalThemeStylesheets(
         return nextWarningAt.compareAndSet(next, now + WARNING_WINDOW_NANOS)
     }
 
-    private fun warn(subject: String, failure: ThemeRead.Failure, serving: String) {
+    private fun warn(subject: String, label: String, serving: String) {
         if (tryWarn()) {
             val hidden = suppressed.getAndSet(0)
             logger.warn {
-                val message = "Theme stylesheet $subject ${failure.reason}; serving $serving"
+                val message = "Theme stylesheet $subject $label; serving $serving"
                 if (hidden > 0) "$message ($hidden more theme stylesheet failures suppressed since the last warning)" else message
             }
         } else {
             suppressed.incrementAndGet()
         }
+    }
+
+    internal fun readSelected(leaf: ThemeLeaf): ThemeRead {
+        if (leaf.value.startsWith("$THEMES_DIRECTORY/")) {
+            val attributes = try {
+                Files.readAttributes(dataDir.resolve(THEMES_DIRECTORY), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+            } catch (_: NoSuchFileException) {
+                null
+            } catch (_: IOException) {
+                return ThemeRead.Failure(ThemeReadFailure.UNREADABLE)
+            }
+            if (attributes != null && !attributes.isDirectory) return ThemeRead.Failure(ThemeReadFailure.NOT_REGULAR)
+        }
+        return read(dataDir.resolve(leaf.value))
     }
 
     internal fun read(leafPath: Path): ThemeRead {

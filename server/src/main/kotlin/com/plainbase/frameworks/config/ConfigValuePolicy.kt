@@ -21,9 +21,10 @@ internal object ConfigValuePolicy {
             ThemeRejectionReason.NOT_A_STRING -> "is not a string (found ${rejection.valueType})"
             ThemeRejectionReason.BLANK -> "is blank"
             ThemeRejectionReason.NOT_A_LEAF ->
-                "is not a DATA_DIR stylesheet name: 1 to 64 ASCII letters, digits, '_' or '-' " +
-                    "starting with a letter or digit, then .css"
-            ThemeRejectionReason.OVERRIDE_NAME -> "names custom.css, the fixed override, which cannot be selected"
+                "is not a DATA_DIR theme name: optionally themes/, then 1 to 64 ASCII letters, digits, '_' or '-' " +
+                    "starting with a letter or digit, then .css, .yaml or .yml"
+            ThemeRejectionReason.OVERRIDE_NAME ->
+                "uses a name reserved for the fixed DATA_DIR/custom.css override and cannot be selected"
         }
         val fallback = when (rejection.key) {
             "theme" -> "light and dark themes"

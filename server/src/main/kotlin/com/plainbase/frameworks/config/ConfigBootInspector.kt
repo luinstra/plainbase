@@ -3,6 +3,7 @@ package com.plainbase.frameworks.config
 import com.plainbase.domain.discussion.isReservedTopSegment
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.theming.THEMES_DIRECTORY
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -81,12 +82,16 @@ internal object ConfigBootInspector {
             add(BootRefusal(BootRefusal.Kind.PRIMARY_UNUSABLE, setOf(RootName.PRIMARY), message))
         }
         val declared = config.contentDir.toAbsolutePath().normalize()
-        dataDirFault(config, declared, comparableRootPath(declared))?.let { fault ->
+        val comparable = comparableRootPath(declared)
+        dataDirFault(config, declared, comparable)?.let { fault ->
             val message = when (fault) {
                 DataDirFault.SAME_DIRECTORY ->
                     "DATA_DIR and CONTENT_DIR must be different directories (both are ${config.contentDir}): " +
                         "app-owned state (plainbase.db, search.db) inside the user-owned content root would " +
                         "re-trigger the watcher after every rebuild - a self-sustaining rebuild loop (§4 separation)"
+                DataDirFault.THEMES_DIRECTORY ->
+                    "CONTENT_DIR is DATA_DIR/$THEMES_DIRECTORY ($comparable): theme files there are served before login, " +
+                        "so it cannot be a content root"
                 DataDirFault.RESERVED_COLLECTION ->
                     "DATA_DIR (${dataDirDeclared(config)}) is inside CONTENT_DIR's reserved .plainbase directory, " +
                         "which holds Discussions: place DATA_DIR outside .plainbase"
@@ -158,6 +163,9 @@ internal object ConfigBootInspector {
                         "roots.${name.value} and DATA_DIR must be different directories (both are $comparable): " +
                             "app-owned state (plainbase.db, search.db) inside a docs root would re-trigger the " +
                             "watcher after every rebuild (§4 separation)"
+                    DataDirFault.THEMES_DIRECTORY ->
+                        "roots.${name.value} is DATA_DIR/$THEMES_DIRECTORY ($comparable): " +
+                            "theme files there are served before login, so it cannot be a content root"
                     DataDirFault.RESERVED_COLLECTION ->
                         "DATA_DIR (${dataDirDeclared(config)}) is inside roots.${name.value}'s reserved .plainbase " +
                             "directory, which holds Discussions: place DATA_DIR outside .plainbase"
@@ -173,7 +181,7 @@ internal object ConfigBootInspector {
 
     private enum class PrimaryFault { NOT_A_DIRECTORY, NOT_TRAVERSABLE }
 
-    private enum class DataDirFault { SAME_DIRECTORY, RESERVED_COLLECTION, ALIASED_NESTING }
+    private enum class DataDirFault { SAME_DIRECTORY, THEMES_DIRECTORY, RESERVED_COLLECTION, ALIASED_NESTING }
 
     private fun primaryFault(path: Path): PrimaryFault? = when {
         !Files.isDirectory(path) -> PrimaryFault.NOT_A_DIRECTORY
@@ -181,7 +189,10 @@ internal object ConfigBootInspector {
         else -> null
     }
 
-    /** Equality and hidden canonical DATA_DIR-inside-root nesting are fatal; root-inside-DATA_DIR stays warning-only. */
+    /**
+     * Equality and hidden canonical DATA_DIR-inside-root nesting are fatal; root-inside-DATA_DIR stays warning-only
+     * except DATA_DIR/themes, whose files are served before login.
+     */
     private fun dataDirFault(config: PlainbaseConfig, declared: Path, comparable: Path): DataDirFault? {
         val dataDirComparable = dataDirComparable(config)
         val reservedSegment = if (dataDirComparable.startsWith(comparable)) {
@@ -191,12 +202,16 @@ internal object ConfigBootInspector {
         }
         return when {
             comparable == dataDirComparable -> DataDirFault.SAME_DIRECTORY
+            isThemesDirectory(comparable, dataDirComparable) -> DataDirFault.THEMES_DIRECTORY
             reservedSegment?.let(::isReservedTopSegment) == true -> DataDirFault.RESERVED_COLLECTION
             dataDirComparable.startsWith(comparable) && !dataDirDeclared(config).startsWith(declared) ->
                 DataDirFault.ALIASED_NESTING
             else -> null
         }
     }
+
+    private fun isThemesDirectory(path: Path, dataDir: Path): Boolean =
+        path.parent == dataDir && path.fileName.toString().equals(THEMES_DIRECTORY, ignoreCase = true)
 
     private fun dataDirComparable(config: PlainbaseConfig): Path = try {
         config.dataDir.toRealPath()
@@ -227,13 +242,17 @@ internal object ConfigBootInspector {
         }
     }
 
-    /** A root inside DATA_DIR remains warning-only: single-volume installs serve, but disposable state may be wiped. */
+    /**
+     * A root inside DATA_DIR, except DATA_DIR/themes, remains warning-only: single-volume installs serve,
+     * but disposable state may be wiped.
+     */
     private fun dataDirContainmentWarnings(config: PlainbaseConfig): List<String> = buildList {
         if (config.storage.backend == StorageBackend.OBJECT) return@buildList
         val dataDirComparable = dataDirComparable(config)
         config.roots.list.forEach { root ->
             val declared = root.localPath ?: return@forEach
             val comparable = comparableRootPath(declared)
+            if (isThemesDirectory(comparable, dataDirComparable)) return@forEach
             if (comparable != dataDirComparable && comparable.startsWith(dataDirComparable)) {
                 add(
                     "roots.${root.name.value} ($comparable) is INSIDE DATA_DIR ($dataDirComparable). This serves correctly, " +

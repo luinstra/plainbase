@@ -70,6 +70,84 @@ class ThemeWarningThrottleTest : FunSpec({
         }
     }
 
+    val scheme = buildString {
+        append("system: \"base16\"\nname: \"PRIVATE_NAME\"\nauthor: \"PRIVATE_AUTHOR\"\npalette:\n")
+        "0123456789ABCDEF".forEach { slot -> append("  base0$slot: \"#a1b2c3\"\n") }
+    }
+    val paletteFailure = scheme.replaceFirst("base00", "PRIVATE_PALETTE_KEY").replaceFirst("#a1b2c3", "PRIVATE_PALETTE_VALUE")
+    val schemeLeaf = requireNotNull(ThemeLeaf.of("themes/paper.yaml"))
+    val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+    listOf(
+        Triple("an invalid palette", paletteFailure.encodeToByteArray(), "SCHEME_PALETTE at line 5"),
+        Triple("a BOM-prefixed invalid palette", bom + paletteFailure.encodeToByteArray(), "SCHEME_PALETTE at line 5"),
+        Triple("a missing system", scheme.substringAfter('\n').encodeToByteArray(), "SCHEME_SYSTEM"),
+        Triple("an invalid value", "PRIVATE_KEY: 'PRIVATE_VALUE'\n$scheme".encodeToByteArray(), "SCHEME_SYNTAX at line 1"),
+        Triple("an unsupported variant", "variant: PRIVATE_VARIANT\n$scheme".encodeToByteArray(), "SCHEME_VARIANT at line 1"),
+        Triple("a mismatched variant", "variant: dark\n$scheme".encodeToByteArray(), "VARIANT_MISMATCH at line 1"),
+    ).forEach { (label, bytes, reason) ->
+        test("$label logs its exact sanitized scheme reason and serves the builtin") {
+            withDataDir { data ->
+                Files.createDirectory(data.resolve("themes"))
+                Files.write(data.resolve(schemeLeaf.value), bytes)
+                val themes = LocalThemeStylesheets(data, ThemeSelection(schemeLeaf, null), builtins)
+                var served = ByteArray(0)
+                val events = captureThemeWarnings { served = themes.definition(ThemeMode.LIGHT) }
+                assertSoftly {
+                    served shouldBe builtins.light
+                    events.map { it.level } shouldBe listOf(Level.WARN)
+                    events.map { it.formattedMessage } shouldBe listOf(
+                        "Theme stylesheet theme.light themes/paper.yaml $reason; serving the bundled definition",
+                    )
+                    events.forEach { event ->
+                        event.throwableProxy shouldBe null
+                        listOf(
+                            "PRIVATE_NAME", "PRIVATE_AUTHOR", "PRIVATE_PALETTE_KEY", "PRIVATE_PALETTE_VALUE",
+                            "PRIVATE_KEY", "PRIVATE_VALUE", "PRIVATE_VARIANT", "#a1b2c3",
+                            data.toString(), data.toRealPath().toString(),
+                        ).forEach { marker -> event.formattedMessage shouldNotContain marker }
+                    }
+                }
+            }
+        }
+    }
+    listOf(true, false).forEach { schemeFirst ->
+        test("scheme and CSS failures share the warning window with scheme first $schemeFirst") {
+            withDataDir { data ->
+                Files.createDirectory(data.resolve("themes"))
+                Files.writeString(data.resolve(schemeLeaf.value), paletteFailure)
+                val clock = AtomicLong()
+                val themes = LocalThemeStylesheets(data, ThemeSelection(schemeLeaf, night), builtins, nanoTime = clock::get)
+                val first = if (schemeFirst) ThemeMode.LIGHT else ThemeMode.DARK
+                val other = if (schemeFirst) ThemeMode.DARK else ThemeMode.LIGHT
+                val warning = if (schemeFirst) {
+                    "Theme stylesheet theme.light themes/paper.yaml SCHEME_PALETTE at line 5; serving the bundled definition"
+                } else {
+                    "Theme stylesheet theme.dark night.css MISSING; serving the bundled definition"
+                }
+                val counts = mutableListOf<Int>()
+                val served = mutableListOf<ByteArray>()
+                val events = captureThemeWarnings { captured ->
+                    served += themes.definition(first)
+                    counts += captured.size
+                    clock.set(second)
+                    served += themes.definition(other)
+                    counts += captured.size
+                    clock.set(60 * second)
+                    served += themes.definition(first)
+                    counts += captured.size
+                }
+                assertSoftly {
+                    counts shouldBe listOf(1, 1, 2)
+                    served shouldBe listOf(builtins.definition(first), builtins.definition(other), builtins.definition(first))
+                    events.map { it.formattedMessage } shouldBe listOf(
+                        warning,
+                        "$warning (1 more theme stylesheet failures suppressed since the last warning)",
+                    )
+                }
+            }
+        }
+    }
+
     test("the shared warning boundary is inclusive at sixty seconds") {
         withDataDir { data ->
             val clock = AtomicLong()

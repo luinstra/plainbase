@@ -159,7 +159,10 @@ export async function startSmokeServer(
     }
 
     for (const [name, contents] of Object.entries(options.files ?? {})) {
-      writeFileSync(path.join(dataDir, name), contents);
+      if (path.isAbsolute(name) || name.includes("..")) throw new Error(`Invalid smoke data file path: ${name}`);
+      const target = path.join(dataDir, name);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, contents);
     }
     if (options.theme) {
       appendFileSync(path.join(dataDir, "plainbase.conf"), [

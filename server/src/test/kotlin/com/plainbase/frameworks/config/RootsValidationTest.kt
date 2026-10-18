@@ -61,6 +61,13 @@ class RootsValidationTest : FunSpec({
         port = PlainbaseConfig.DEFAULT_PORT,
     )
 
+    fun assertDataDirRefusal(cfg: PlainbaseConfig, name: RootName, message: String) {
+        shouldThrow<IllegalArgumentException> { ConfigBootInspector.requireContentDir(cfg) }.message shouldBe message
+        val refusal = ConfigBootInspector.bootRefusals(cfg).single()
+        refusal.key shouldBe (BootRefusal.Kind.ROOT_VS_DATA_DIR to setOf(name))
+        refusal.message shouldBe message
+    }
+
     // --- D9 regression pins: a synthesized config runs today's guard verbatim ------------------------
 
     test("synthesized: a missing CONTENT_DIR keeps today's exact message") {
@@ -141,6 +148,87 @@ class RootsValidationTest : FunSpec({
                 "DATA_DIR ($data) is inside roots.${docs.value}'s reserved .plainbase directory, which holds " +
                     "Discussions: place DATA_DIR outside .plainbase"
                 )
+        }
+    }
+
+    listOf("themes", "Themes", "THEMES", "tHeMeS").forEach { directory ->
+        test("explicit: DATA_DIR/$directory cannot be a content root") {
+            withBase { base ->
+                val main = Files.createDirectories(base.resolve("docs"))
+                val data = Files.createDirectories(base.resolve("data"))
+                val themes = Files.createDirectories(data.resolve(directory)).toRealPath()
+                val cfg = config(data, base.resolve("legacy"), explicitRoots("docs" to main, "extra" to themes))
+                assertDataDirRefusal(
+                    cfg,
+                    RootName.require("extra"),
+                    "roots.extra is DATA_DIR/themes ($themes): theme files there are served before login, " +
+                        "so it cannot be a content root",
+                )
+            }
+        }
+
+        test("legacy: CONTENT_DIR at DATA_DIR/$directory is refused") {
+            withBase { base ->
+                val data = Files.createDirectories(base.resolve("data"))
+                val themes = Files.createDirectories(data.resolve(directory)).toRealPath()
+                assertDataDirRefusal(
+                    legacyConfig(dataDir = data, contentDir = themes),
+                    RootName.PRIMARY,
+                    "CONTENT_DIR is DATA_DIR/themes ($themes): theme files there are served before login, " +
+                        "so it cannot be a content root",
+                )
+            }
+        }
+    }
+
+    test("explicit: a content root symlink to DATA_DIR/themes is refused with its real path") {
+        withBase { base ->
+            val main = Files.createDirectories(base.resolve("docs"))
+            val data = Files.createDirectories(base.resolve("data"))
+            val themes = Files.createDirectories(data.resolve("themes")).toRealPath()
+            val link = Files.createSymbolicLink(base.resolve("themes-link"), themes)
+            val cfg = config(data, base.resolve("legacy"), explicitRoots("docs" to main, "extra" to link))
+            assertDataDirRefusal(
+                cfg,
+                RootName.require("extra"),
+                "roots.extra is DATA_DIR/themes ($themes): theme files there are served before login, " +
+                    "so it cannot be a content root",
+            )
+        }
+    }
+
+    listOf("themes/x", "other").forEach { relative ->
+        test("explicit: a content root at DATA_DIR/$relative stays warning-only") {
+            withBase { base ->
+                val main = Files.createDirectories(base.resolve("docs"))
+                val data = Files.createDirectories(base.resolve("data"))
+                val inside = Files.createDirectories(data.resolve(relative))
+                val cfg = config(data, base.resolve("legacy"), explicitRoots("docs" to main, "extra" to inside))
+                ConfigBootInspector.requireContentDir(cfg) shouldBe main
+                ConfigBootInspector.bootRefusals(cfg) shouldBe emptyList()
+                ConfigBootInspector.rootsWarnings(cfg) shouldBe listOf(
+                    "roots.extra ($inside) is INSIDE DATA_DIR ($data). This serves correctly, " +
+                        "but DATA_DIR is app-owned state whose contents are routinely wiped and rebuilt (`search.db` and the " +
+                        "object mirror are explicitly disposable) - a wipe here takes this root's content with it. Move the " +
+                        "root outside DATA_DIR.",
+                )
+            }
+        }
+
+        test("legacy: CONTENT_DIR at DATA_DIR/$relative stays warning-only") {
+            withBase { base ->
+                val data = Files.createDirectories(base.resolve("data"))
+                val inside = Files.createDirectories(data.resolve(relative))
+                val cfg = legacyConfig(dataDir = data, contentDir = inside)
+                ConfigBootInspector.requireContentDir(cfg) shouldBe inside
+                ConfigBootInspector.bootRefusals(cfg) shouldBe emptyList()
+                ConfigBootInspector.rootsWarnings(cfg) shouldBe listOf(
+                    "roots.docs ($inside) is INSIDE DATA_DIR ($data). This serves correctly, " +
+                        "but DATA_DIR is app-owned state whose contents are routinely wiped and rebuilt (`search.db` and the " +
+                        "object mirror are explicitly disposable) - a wipe here takes this root's content with it. Move the " +
+                        "root outside DATA_DIR.",
+                )
+            }
         }
     }
 
@@ -241,8 +329,8 @@ class RootsValidationTest : FunSpec({
     // permitted, that boots fine, and that a single `root add` turned into a config the server refused to start: the
     // baseline saw no fault, the explicit candidate saw one, so the CLI read it as a fault IT had introduced).
     //
-    // It is now a WARN, in BOTH arms and for EVERY root. Nothing the app writes lands under such a root - app state
-    // sits directly in DATA_DIR, a sibling of it - so there is no rebuild loop and nothing is mis-served. What IS true
+    // It is now a WARN, in BOTH arms and for EVERY root except DATA_DIR/themes. App state sits directly in DATA_DIR,
+    // a sibling of the other roots, so there is no rebuild loop and nothing is mis-served. What IS true
     // is that ADR-0004 tells operators DATA_DIR holds derived state they may delete to rebuild, and here that would
     // take the corpus: an operator trap, which is what ConfigBootInspector.rootsWarnings() is for.
     test("explicit: a root strictly inside DATA_DIR boots with a WARN, symmetrically with the legacy arm") {

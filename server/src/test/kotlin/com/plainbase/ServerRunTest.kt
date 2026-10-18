@@ -261,8 +261,8 @@ class ServerRunTest : FunSpec({
                 )
                 runServerBounded { runServer(config, output) } shouldBe 1
                 val expectedWarning =
-                    "warn:theme.light is not a DATA_DIR stylesheet name: 1 to 64 ASCII letters, digits, '_' or '-' " +
-                        "starting with a letter or digit, then .css; serving the bundled light theme"
+                    "warn:theme.light is not a DATA_DIR theme name: optionally themes/, then 1 to 64 ASCII letters, " +
+                        "digits, '_' or '-' starting with a letter or digit, then .css, .yaml or .yml; serving the bundled light theme"
                 val bindError = timeline.indexOfFirst { it.startsWith("error:serve: binds 0.0.0.0") }
                 assertSoftly {
                     timeline.count { it == expectedWarning } shouldBe 1

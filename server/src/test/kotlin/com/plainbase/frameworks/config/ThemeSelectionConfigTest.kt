@@ -2,7 +2,10 @@ package com.plainbase.frameworks.config
 
 import com.plainbase.domain.theming.ThemeLeaf
 import com.plainbase.domain.theming.ThemeSelection
+import com.plainbase.frameworks.filesystem.DataDirLock
+import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import io.kotest.assertions.assertSoftly
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -49,7 +52,8 @@ class ThemeSelectionConfigTest : FunSpec({
     val night = requireNotNull(ThemeLeaf.of("night.css"))
     val selected = ThemeSelection(paper, night)
     val invalidLeafReason =
-        "is not a DATA_DIR stylesheet name: 1 to 64 ASCII letters, digits, '_' or '-' starting with a letter or digit, then .css"
+        "is not a DATA_DIR theme name: optionally themes/, then 1 to 64 ASCII letters, digits, '_' or '-' " +
+            "starting with a letter or digit, then .css, .yaml or .yml"
 
     test("block form selects both definitions") {
         assertTheme(loadTheme("""theme { light = "paper.css", dark = "night.css" }"""), selected)
@@ -157,14 +161,42 @@ class ThemeSelectionConfigTest : FunSpec({
         )
     }
 
-    listOf("custom.css", "Custom.css", "CUSTOM.css", "cUsToM.css", "CUSTOM.CSS").forEach { raw ->
+    listOf(
+        "custom.css", "Custom.css", "CUSTOM.css", "cUsToM.css", "CUSTOM.CSS",
+        "themes/custom.css", "themes/Custom.css", "THEMES/CUSTOM.CSS",
+    ).forEach { raw ->
         test("override alias $raw is rejected before the grammar check") {
             assertTheme(
                 loadTheme("theme.light = ${hoconString(raw)}"),
                 ThemeSelection.BUNDLED,
                 listOf(ThemeKeyRejection("theme.light", ThemeRejectionReason.OVERRIDE_NAME)),
-                listOf("theme.light names custom.css, the fixed override, which cannot be selected; serving the bundled light theme"),
+                listOf(
+                    "theme.light uses a name reserved for the fixed DATA_DIR/custom.css override and cannot be selected; " +
+                        "serving the bundled light theme",
+                ),
             )
+        }
+    }
+
+    test("DATA_DIR-owned names cannot select a theme at either allowed location") {
+        val config = loadTheme()
+        val ownedNames = listOf(
+            PlainbaseConfig.MANAGED_ROOTS_FILE,
+            DataDirLock.LOCK_FILE_NAME,
+            DataDirLock.ROOTS_LOCK_FILE_NAME,
+            FOLDER_META_NAME,
+            config.appDatabasePath.fileName.toString(),
+            config.searchDatabasePath.fileName.toString(),
+            config.discussionDatabasePath.fileName.toString(),
+            "plainbase.conf", "mirror", "mirror-state", "git-home", "tmp", "restore-pending",
+        )
+        assertSoftly {
+            ownedNames.forEach { name ->
+                withClue(name) {
+                    ThemeLeaf.of(name) shouldBe null
+                    ThemeLeaf.of("themes/$name") shouldBe null
+                }
+            }
         }
     }
 

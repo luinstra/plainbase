@@ -150,9 +150,9 @@ private suspend fun withThemeDataDir(
     }
 }
 
-private suspend fun verifyThemeDataCreate(layout: ThemeDataLayout) {
-    withThemeDataDir(layout) { fixture ->
-        val before = fixture.childNames("create $layout before")
+private suspend fun verifyThemeDataCreate(layout: ThemeDataLayout, folder: String = "data") {
+    withThemeDataDir(layout, plant = { fixture -> Files.createDirectories(fixture.root.resolve(folder)) }) { fixture ->
+        val before = fixture.childNames("create $layout $folder before")
         val client = restClient()
         val control = client.post("/api/v1/pages") {
             contentType(ContentType.Application.Json)
@@ -160,23 +160,23 @@ private suspend fun verifyThemeDataCreate(layout: ThemeDataLayout) {
         }
         val attempt = client.post("/api/v1/pages") {
             contentType(ContentType.Application.Json)
-            setBody("""{"root":"docs","title":"Probe","folder":"data"}""")
+            setBody("""{"root":"docs","title":"Probe","folder":"$folder"}""")
         }
         val errorCode = Json.parseToJsonElement(attempt.bodyAsText()).jsonObject["error"]
             ?.jsonObject?.get("code")?.jsonPrimitive?.content
         val controlExists = Files.exists(fixture.root.resolve("visible/probe.md"), NOFOLLOW_LINKS)
-        val attemptAbsent = Files.notExists(fixture.dataDir.resolve("probe.md"), NOFOLLOW_LINKS)
-        val after = fixture.childNames("create $layout after")
+        val attemptAbsent = Files.notExists(fixture.root.resolve("$folder/probe.md"), NOFOLLOW_LINKS)
+        val after = fixture.childNames("create $layout $folder after")
         themeDataLogger.info {
-            "Theme data create layout=$layout: controlStatus=${control.status.value}, controlExists=$controlExists, " +
+            "Theme data create layout=$layout folder=$folder: controlStatus=${control.status.value}, controlExists=$controlExists, " +
                 "attemptStatus=${attempt.status.value}, errorCode=$errorCode, attemptAbsent=$attemptAbsent"
         }
         assertSoftly {
             withClue("visible create status") { control.status shouldBe HttpStatusCode.Created }
             withClue("visible create destination") { controlExists shouldBe true }
-            withClue("data create status") { attempt.status shouldBe HttpStatusCode.BadRequest }
-            withClue("data create error code") { errorCode shouldBe "invalid_create_request" }
-            withClue("data create destination absent") { attemptAbsent shouldBe true }
+            withClue("$folder create status") { attempt.status shouldBe HttpStatusCode.BadRequest }
+            withClue("$folder create error code") { errorCode shouldBe "invalid_create_request" }
+            withClue("$folder create destination absent") { attemptAbsent shouldBe true }
             withClue("data children unchanged") { after shouldBe before }
         }
     }
@@ -241,11 +241,18 @@ class ThemeDataDirExclusionTest : FunSpec({
     }
 
     test("data directory stylesheets are unavailable as content assets") {
-        withThemeDataDir { fixture ->
+        val nested = "/* nested-theme-sentinel */".toByteArray()
+        withThemeDataDir(
+            plant = { fixture ->
+                Files.createDirectory(fixture.dataDir.resolve("themes"))
+                Files.write(fixture.dataDir.resolve("themes/paper.css"), nested)
+            },
+        ) { fixture ->
             val before = fixture.childNames("read before")
             val client = restClient()
             val controls = listOf("custom.css", "paper.css").associateWith { name -> client.get("/assets/docs/visible/$name") }
             val attempts = listOf("custom.css", "paper.css").associateWith { name -> client.get("/assets/docs/data/$name") }
+            val nestedAttempt = client.get("/assets/docs/data/themes/paper.css")
             val after = fixture.childNames("read after")
             assertSoftly {
                 for ((name, expected) in listOf("custom.css" to fixture.custom, "paper.css" to fixture.paper)) {
@@ -259,6 +266,13 @@ class ThemeDataDirExclusionTest : FunSpec({
                     withClue("data $name not served as CSS") { attempt.contentType()?.withoutParameters() shouldNotBe ContentType.Text.CSS }
                     withClue("data $name has no sentinel bytes") { attempt.bodyAsBytes().containsThemeBytes(expected) shouldBe false }
                 }
+                withClue("data/themes/paper.css status") { nestedAttempt.status shouldBe HttpStatusCode.NotFound }
+                withClue("data/themes/paper.css not served as CSS") {
+                    nestedAttempt.contentType()?.withoutParameters() shouldNotBe ContentType.Text.CSS
+                }
+                withClue("data/themes/paper.css has no sentinel bytes") {
+                    nestedAttempt.bodyAsBytes().containsThemeBytes(nested) shouldBe false
+                }
                 withClue("data children unchanged") { after shouldBe before }
             }
         }
@@ -270,6 +284,10 @@ class ThemeDataDirExclusionTest : FunSpec({
 
     test("page creation refuses the data directory through a symlinked content root") {
         verifyThemeDataCreate(ThemeDataLayout.SYMLINKED_ROOT)
+    }
+
+    test("page creation refuses a nested data directory subfolder") {
+        verifyThemeDataCreate(ThemeDataLayout.PLAIN, "data/themes")
     }
 
     test("asset upload refuses a page planted in the data directory") {

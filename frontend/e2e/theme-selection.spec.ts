@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { APIRequestContext, TestInfo } from "@playwright/test";
+import { parse as parseYaml } from "yaml";
 import { parse, type Color } from "../src/__tests__/contrastResolver";
 import {
   assemble, builtinCss, builtinSlots, fixtureDefinitions, fourInputDefinition, genericCss, primitiveNames,
@@ -24,6 +25,8 @@ const { probes } = fixtureDefinitions();
 const modes: Mode[] = ["light", "dark"];
 const lightFile = { "opaque-light.css": fourInputDefinition("opaque-light") };
 const darkFile = { "opaque-dark.css": fourInputDefinition("opaque-dark") };
+const tintedScheme = readFileSync("../contrib/tinted/sources/upstream/base16-dracula.yaml");
+const schemePalette = (parseYaml(tintedScheme.toString("utf8")) as { palette: Record<string, string> }).palette;
 
 function distance(left: Color, right: Color): number {
   return Math.max(...left.map((value, index) => Math.abs(value - right[index])));
@@ -35,9 +38,13 @@ async function retain(testInfo: TestInfo, readings: Readings) {
   await testInfo.attach("selection-readings", { path: output, contentType: "application/json" });
 }
 
-async function openDocument(page: Page, request: APIRequestContext, server: SmokeServer, mode: Mode) {
+async function openDocument(page: Page, request: APIRequestContext, server: SmokeServer, mode: Mode, readings?: Readings) {
   writeFileSync(path.join(server.contentDir, "theme-baseline.md"), themeMarkdown);
-  await expect.poll(async () => (await request.get("/api/v1/pages/by-path/docs/theme-baseline")).status()).toBe(200);
+  await expect.poll(async () => {
+    const response = await request.get("/api/v1/pages/by-path/docs/theme-baseline");
+    readings?.push({ url: response.url(), status: response.status() });
+    return response.status();
+  }).toBe(200);
   await page.emulateMedia({ colorScheme: mode });
   await gotoAndWaitForSearchReady(page, "/docs/theme-baseline");
   if (mode === "dark") await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -289,6 +296,36 @@ test.describe("a selected dark definition", () => {
   });
 });
 
+test.describe("a selected Tinted scheme", () => {
+  test.use({ smokeData: { files: { "themes/dracula.yaml": tintedScheme }, theme: { dark: "themes/dracula.yaml" } } });
+
+  test("dark uses the converted scheme for the page and primary action", async ({ page, request, smokeServer }, testInfo) => {
+    const readings: Readings = [];
+    page.on("response", (response) => readings.push({ url: response.url(), status: response.status() }));
+    const response = await request.get("/_plainbase/theme-dark.css");
+    const css = await response.text();
+    readings.push({ url: response.url(), status: response.status(), containsName: css.includes("Dracula") });
+    expect.soft(response.status(), "converted stylesheet status").toBe(200);
+    expect.soft(css, "scheme metadata is absent from CSS").not.toContain("Dracula");
+    await openDocument(page, request, smokeServer, "dark", readings);
+    await customColor(page, "dark", "body", "background-color", parse(schemePalette.base00), "--pb-surface", readings);
+    await gotoExpectStatus(page, "/new");
+    await page.locator("[data-pb-new-title]").fill("Scheme theme page");
+    await expect(page.locator("[data-pb-new-create]")).toBeEnabled();
+    await customColor(page, "dark", "[data-pb-new-create]", "background-color",
+      parse(schemePalette.base0D), "--pb-primary-bg", readings);
+    await retain(testInfo, readings);
+  });
+
+  test("light retains the built-in appearance", async ({ page, request, smokeServer }, testInfo) => {
+    const readings: Readings = [];
+    page.on("response", (response) => readings.push({ url: response.url(), status: response.status() }));
+    await openDocument(page, request, smokeServer, "light", readings);
+    await baselineBody(page, "light", readings);
+    await retain(testInfo, readings);
+  });
+});
+
 test.describe("two selected definitions", () => {
   test.use({ smokeData: {
     files: { ...lightFile, "translucent-dark.css": fourInputDefinition("translucent-dark") },
@@ -359,7 +396,9 @@ test.describe("unreadable selected definitions", () => {
     const warnings = log.split("\n").filter((line) => line.includes("Theme stylesheet"));
     // LocalThemeStylesheets rate-limits to one warn per window, so either read failure can be the observed warning.
     const readFailure = warnings.find((line) => /Theme stylesheet (?:theme\.light missing-light\.css MISSING|theme\.dark bad-dark\.css INVALID_UTF8)\b/.test(line));
-    const synthetic = "00:00:00.000 WARN  c.p.Application - theme.light is not a DATA_DIR stylesheet name; serving the bundled light theme";
+    const synthetic = "00:00:00.000 WARN  c.p.Application - theme.light is not a DATA_DIR theme name: optionally themes/, " +
+      "then 1 to 64 ASCII letters, digits, '_' or '-' starting with a letter or digit, then .css, .yaml or .yml; " +
+      "serving the bundled light theme";
     const shape = { synthetic, syntheticMatches: rejection.test(synthetic), readFailure, readFailureMatches: rejection.test(readFailure ?? "") };
     expect.soft(log, "known boot line").toContain("Application started in");
     expect.soft(rejections, "theme keys are accepted").toEqual([]);

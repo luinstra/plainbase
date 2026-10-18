@@ -23,6 +23,77 @@ class LocalThemeStylesheetsNativeTest {
     private val paper = requireNotNull(ThemeLeaf.of("paper.css"))
     private val css = "body { color: purple; }".encodeToByteArray()
     private val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+    private val scheme = buildString {
+        append("system: \"base24\"\r\nname: \"Paper\"\r\nauthor: \"Jos\u00e9 \u65e5\u672c\"\r\npalette:\r\n")
+        "0123456789ABCDEF".forEach { slot -> append("  base0$slot: \"#AABBCC\"\r\n") }
+        ('0'..'7').forEach { slot -> append("  base1$slot: \"#DDEEFF\"\r\n") }
+    }
+    private val expectedSchemeCss = """
+        :where(:root:not([data-theme="dark"])) {
+          --pb-theme-background: #aabbcc;
+          --pb-theme-foreground: #aabbcc;
+          --pb-theme-primary: #aabbcc;
+          --pb-theme-primary-foreground: #aabbcc;
+          --pb-theme-muted: #aabbcc;
+          --pb-theme-muted-foreground: #aabbcc;
+          --pb-theme-ring: #ddeeff;
+          --pb-theme-selection: #aabbcc;
+          --pb-theme-selection-foreground: #aabbcc;
+          --pb-theme-destructive: #ddeeff;
+          --pb-theme-warning: #ddeeff;
+          --pb-theme-success: #ddeeff;
+          --pb-theme-syntax-keyword: #ddeeff;
+          --pb-theme-syntax-string: #ddeeff;
+          --pb-theme-syntax-comment: #aabbcc;
+          --pb-theme-syntax-literal: #aabbcc;
+          --pb-theme-syntax-title: #ddeeff;
+          --pb-theme-syntax-attribute: #ddeeff;
+        }
+    """.trimIndent() + "\n"
+
+    @Test
+    fun themesDirectorySchemeWithNonAsciiAuthorConverts() {
+        withDataDir { data ->
+            Files.createDirectory(data.resolve("themes"))
+            val leaf = requireNotNull(ThemeLeaf.of("themes/paper.yaml"))
+            Files.write(data.resolve(leaf.value), bom + scheme.encodeToByteArray())
+            val adapter = LocalThemeStylesheets(data, ThemeSelection(leaf, null), builtins)
+
+            val read = adapter.readSelected(leaf)
+            assertTrue(read is ThemeRead.Bytes)
+            assertEquals(scheme, read.bytes.decodeToString())
+            assertEquals(expectedSchemeCss, adapter.definition(ThemeMode.LIGHT).decodeToString())
+        }
+    }
+
+    @Test
+    fun lineSeparatorInSchemeFallsBack() {
+        withDataDir { data ->
+            val leaf = requireNotNull(ThemeLeaf.of("paper.yaml"))
+            val path = Files.writeString(data.resolve(leaf.value), scheme)
+            val adapter = LocalThemeStylesheets(data, ThemeSelection(leaf, null), builtins)
+
+            assertEquals(expectedSchemeCss, adapter.definition(ThemeMode.LIGHT).decodeToString())
+            Files.writeString(path, "# before\u2028after\r\n$scheme")
+            assertContentEquals(builtins.light, adapter.definition(ThemeMode.LIGHT))
+        }
+    }
+
+    @Test
+    fun symlinkedThemesDirectoryIsNotRegular() {
+        withDataDir { outside ->
+            Files.write(outside.resolve("paper.css"), css)
+            withDataDir { data ->
+                Files.createSymbolicLink(data.resolve("themes"), outside)
+                val leaf = requireNotNull(ThemeLeaf.of("themes/paper.css"))
+                val adapter = LocalThemeStylesheets(data, ThemeSelection(leaf, null), builtins)
+
+                assertTrue(Files.isRegularFile(data.resolve(leaf.value)))
+                assertEquals(ThemeRead.Failure(ThemeReadFailure.NOT_REGULAR), adapter.readSelected(leaf))
+                assertContentEquals(builtins.light, adapter.definition(ThemeMode.LIGHT))
+            }
+        }
+    }
 
     @Test
     fun selectedSymlinkToFileIsNotRegular() {

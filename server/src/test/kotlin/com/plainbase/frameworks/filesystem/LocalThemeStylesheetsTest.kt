@@ -5,6 +5,8 @@ import com.plainbase.domain.theming.ThemeBuiltins
 import com.plainbase.domain.theming.ThemeLeaf
 import com.plainbase.domain.theming.ThemeMode
 import com.plainbase.domain.theming.ThemeSelection
+import com.plainbase.domain.theming.TintedConversion
+import com.plainbase.domain.theming.TintedSchemes
 import com.plainbase.frameworks.ktor.routes.bundleResourceBytes
 import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
 import io.kotest.assertions.assertSoftly
@@ -13,9 +15,13 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.SeekableByteChannel
@@ -24,6 +30,7 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.FileTime
+import kotlin.io.path.readText
 
 class LocalThemeStylesheetsTest : FunSpec({
     val builtins = ThemeBuiltins("light builtin".encodeToByteArray(), "dark builtin".encodeToByteArray())
@@ -59,10 +66,10 @@ class LocalThemeStylesheetsTest : FunSpec({
         }
     }
 
-    fun selected(data: Path, mode: ThemeMode = ThemeMode.LIGHT): LocalThemeStylesheets {
+    fun selected(data: Path, mode: ThemeMode = ThemeMode.LIGHT, leaf: ThemeLeaf = paper): LocalThemeStylesheets {
         val selection = when (mode) {
-            ThemeMode.LIGHT -> ThemeSelection(paper, null)
-            ThemeMode.DARK -> ThemeSelection(null, paper)
+            ThemeMode.LIGHT -> ThemeSelection(leaf, null)
+            ThemeMode.DARK -> ThemeSelection(null, leaf)
         }
         return LocalThemeStylesheets(data, selection, builtins)
     }
@@ -90,6 +97,191 @@ class LocalThemeStylesheetsTest : FunSpec({
             val themes = Files.createDirectory(data.resolve("themes"))
             Files.write(themes.resolve("paper.css"), css)
             assertFailure(selected(data), data.resolve("paper.css"), ThemeReadFailure.MISSING)
+        }
+    }
+
+    val corpusCommit by lazy {
+        requireNotNull(LocalThemeStylesheetsTest::class.java.getResourceAsStream("/tinted/scheme-oracle.json"))
+            .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonObject.getValue("corpusCommit").jsonPrimitive.content }
+    }
+    val corpus by lazy {
+        Path.of(
+            requireNotNull(System.getProperty("plainbase.test.tintedCorpus")) {
+                "plainbase.test.tintedCorpus is required; run through ./gradlew :server:test"
+            },
+        ).resolve(corpusCommit)
+    }
+    val dracula by lazy { corpus.resolve("base16/dracula.yaml").readText() }
+    val cyber by lazy { corpus.resolve("base16/cyberpunk.yml").readText() }
+    val noVariant by lazy { dracula.replaceFirst("variant: \"dark\"\n", "") }
+    fun converted(text: String, mode: ThemeMode) =
+        TintedSchemes.convert(text, mode).shouldBeInstanceOf<TintedConversion.Definition>().css.encodeToByteArray()
+
+    ThemeMode.entries.forEach { mode ->
+        test("a selected themes CSS leaf is served exactly in $mode") {
+            withDataDir { data ->
+                Files.writeString(data.resolve("paper.css"), "wrong directory")
+                Files.createDirectory(data.resolve("themes"))
+                Files.write(data.resolve("themes/paper.css"), css)
+                selected(data, mode, requireNotNull(ThemeLeaf.of("themes/paper.css"))).definition(mode) shouldBe css
+            }
+        }
+        test("a scheme without a variant is served in $mode") {
+            withDataDir { data ->
+                noVariant shouldNotContain "variant:"
+                Files.writeString(data.resolve("dracula.yaml"), noVariant)
+                val adapter = selected(data, mode, requireNotNull(ThemeLeaf.of("dracula.yaml")))
+                adapter.definition(mode) shouldBe converted(noVariant, mode)
+            }
+        }
+    }
+    listOf("themes/dracula.yaml" to { dracula }, "dracula.yaml" to { dracula }, "cyber.yml" to { cyber }).forEach { (name, source) ->
+        test("a selected $name is converted through the domain parser") {
+            val text = source()
+            withDataDir { data ->
+                val path = data.resolve(name)
+                Files.createDirectories(path.parent)
+                Files.writeString(path, text)
+                selected(data, ThemeMode.DARK, requireNotNull(ThemeLeaf.of(name))).definition(ThemeMode.DARK) shouldBe
+                    converted(text, ThemeMode.DARK)
+            }
+        }
+    }
+    test("a missing themes directory reports missing for its selected leaf") {
+        withDataDir { data ->
+            val leaf = requireNotNull(ThemeLeaf.of("themes/paper.css"))
+            val adapter = selected(data, leaf = leaf)
+            assertSoftly {
+                adapter.definition(ThemeMode.LIGHT) shouldBe builtins.light
+                adapter.readSelected(leaf) shouldBe ThemeRead.Failure(ThemeReadFailure.MISSING)
+            }
+        }
+    }
+    test("a symlinked themes directory is not regular and serves the builtin") {
+        withDataDir { outside ->
+            Files.write(outside.resolve("paper.css"), css)
+            withDataDir { data ->
+                Files.createSymbolicLink(data.resolve("themes"), outside)
+                val leaf = requireNotNull(ThemeLeaf.of("themes/paper.css"))
+                val adapter = selected(data, leaf = leaf)
+                assertSoftly {
+                    adapter.definition(ThemeMode.LIGHT) shouldBe builtins.light
+                    adapter.readSelected(leaf) shouldBe ThemeRead.Failure(ThemeReadFailure.NOT_REGULAR)
+                }
+            }
+        }
+    }
+    test("a regular file named themes is not regular for a selected nested leaf") {
+        withDataDir { data ->
+            Files.writeString(data.resolve("themes"), "not a directory")
+            val leaf = requireNotNull(ThemeLeaf.of("themes/paper.css"))
+            val adapter = selected(data, leaf = leaf)
+            assertSoftly {
+                adapter.definition(ThemeMode.LIGHT) shouldBe builtins.light
+                adapter.readSelected(leaf) shouldBe ThemeRead.Failure(ThemeReadFailure.NOT_REGULAR)
+            }
+        }
+    }
+    test("a selected directory leaf under real themes is not regular") {
+        withDataDir { data ->
+            Files.createDirectories(data.resolve("themes/x.css"))
+            val leaf = requireNotNull(ThemeLeaf.of("themes/x.css"))
+            val adapter = selected(data, leaf = leaf)
+            assertSoftly {
+                adapter.definition(ThemeMode.LIGHT) shouldBe builtins.light
+                adapter.readSelected(leaf) shouldBe ThemeRead.Failure(ThemeReadFailure.NOT_REGULAR)
+            }
+        }
+    }
+    test("a symlinked DATA_DIR with a real themes directory is accepted") {
+        withDataDir { temporary ->
+            val base = temporary.toRealPath()
+            val real = Files.createDirectories(base.resolve("real/themes")).parent
+            Files.write(real.resolve("themes/paper.css"), css)
+            val linked = Files.createSymbolicLink(base.resolve("linked-data"), real)
+            val adapter = selected(linked, leaf = requireNotNull(ThemeLeaf.of("themes/paper.css")))
+            adapter.definition(ThemeMode.LIGHT) shouldBe css
+        }
+    }
+    test("a selected symlinked scheme leaf under real themes is not regular") {
+        withDataDir { data ->
+            val target = Files.writeString(data.resolve("target.yaml"), dracula)
+            Files.createDirectory(data.resolve("themes"))
+            Files.createSymbolicLink(data.resolve("themes/dracula.yaml"), target)
+            val leaf = requireNotNull(ThemeLeaf.of("themes/dracula.yaml"))
+            val adapter = selected(data, ThemeMode.DARK, leaf)
+            assertSoftly {
+                adapter.definition(ThemeMode.DARK) shouldBe builtins.dark
+                adapter.readSelected(leaf) shouldBe ThemeRead.Failure(ThemeReadFailure.NOT_REGULAR)
+            }
+        }
+    }
+    test("a missing scheme falls back before conversion") {
+        withDataDir { data ->
+            val leaf = requireNotNull(ThemeLeaf.of("dracula.yaml"))
+            val adapter = selected(data, ThemeMode.DARK, leaf)
+            assertSoftly {
+                adapter.definition(ThemeMode.DARK) shouldBe builtins.dark
+                adapter.readSelected(leaf) shouldBe ThemeRead.Failure(ThemeReadFailure.MISSING)
+            }
+        }
+    }
+    listOf(
+        ThemeReadFailure.OVERSIZE to ByteArray(262145) { 'x'.code.toByte() },
+        ThemeReadFailure.INVALID_UTF8 to byteArrayOf(0xFF.toByte()),
+        ThemeReadFailure.EMPTY to "\t\n\u000c\r ".encodeToByteArray(),
+    ).forEach { (reason, bytes) ->
+        test("a scheme with $reason falls back before conversion in either mode") {
+            withDataDir { data ->
+                Files.write(data.resolve("dracula.yaml"), bytes)
+                val leaf = requireNotNull(ThemeLeaf.of("dracula.yaml"))
+                assertSoftly {
+                    ThemeMode.entries.forEach { mode ->
+                        val adapter = selected(data, mode, leaf)
+                        adapter.definition(mode) shouldBe builtins.definition(mode)
+                        adapter.readSelected(leaf) shouldBe ThemeRead.Failure(reason)
+                    }
+                }
+            }
+        }
+    }
+    listOf(
+        "one leading BOM" to { bom + dracula.encodeToByteArray() },
+        "CRLF endings" to { dracula.replace("\n", "\r\n").encodeToByteArray() },
+    ).forEach { (label, bytes) ->
+        test("a corpus scheme with $label converts to the original output") {
+            withDataDir { data ->
+                Files.write(data.resolve("dracula.yaml"), bytes())
+                selected(data, ThemeMode.DARK, requireNotNull(ThemeLeaf.of("dracula.yaml"))).definition(ThemeMode.DARK) shouldBe
+                    converted(dracula, ThemeMode.DARK)
+            }
+        }
+    }
+    test("a same-size same-mtime scheme edit is converted on the next read") {
+        withDataDir { data ->
+            val path = Files.writeString(data.resolve("dracula.yaml"), dracula)
+            val timestamp = Files.getLastModifiedTime(path)
+            val size = Files.size(path)
+            val adapter = selected(data, ThemeMode.DARK, requireNotNull(ThemeLeaf.of("dracula.yaml")))
+            val first = adapter.definition(ThemeMode.DARK)
+            val changed = dracula.replaceFirst("#282a36", "#282a37")
+            Files.writeString(path, changed)
+            Files.setLastModifiedTime(path, timestamp)
+            val next = adapter.definition(ThemeMode.DARK)
+            assertSoftly {
+                Files.size(path) shouldBe size
+                Files.getLastModifiedTime(path) shouldBe timestamp
+                first shouldBe converted(dracula, ThemeMode.DARK)
+                next shouldBe converted(changed, ThemeMode.DARK)
+                first.contentEquals(next) shouldBe false
+            }
+        }
+    }
+    test("a dark scheme selected for light serves the light builtin") {
+        withDataDir { data ->
+            Files.writeString(data.resolve("dracula.yaml"), dracula)
+            val adapter = selected(data, leaf = requireNotNull(ThemeLeaf.of("dracula.yaml")))
+            adapter.definition(ThemeMode.LIGHT) shouldBe builtins.light
         }
     }
 

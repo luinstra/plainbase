@@ -214,6 +214,18 @@ tasks.processResources {
     dependsOn(copyFrontend)
 }
 
+evaluationDependsOn(":frontend")
+val tintedCorpusSetup = project(":frontend").tasks.named("tintedCorpusSetup")
+val tintedCorpusRoot = project(":frontend").layout.buildDirectory.dir("tinted/corpus")
+tasks.named<Test>("test") {
+    inputs.files(tintedCorpusSetup)
+        .withPropertyName("tintedCorpus")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    doFirst {
+        systemProperty("plainbase.test.tintedCorpus", tintedCorpusRoot.get().asFile.absolutePath)
+    }
+}
+
 // ---- GraalVM native image ----
 // Locally this targets the host platform; CI covers linux-x64 (see .github/workflows/ci.yml).
 // The universal JAR remains the release floor: a native failure blocks the native artifact only.

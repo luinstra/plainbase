@@ -320,6 +320,50 @@ class RootCommandTest : FunSpec({
         }
     }
 
+    test("root add refuses DATA_DIR/themes without changing managed roots") {
+        world { w ->
+            val notes = Files.createDirectory(w.tmp("notes"))
+            captureStdout { w.root("add", "notes", notes.toString()) shouldBe 0 }
+            val themes = Files.createDirectory(w.data.resolve("themes"))
+            val before = Files.readAllBytes(w.rootsConf)
+
+            val err = captureStderr { w.root("add", "shelf", themes.toString()) shouldBe 1 }
+            err shouldBe
+                "root add: roots.shelf is DATA_DIR/themes (${themes.toRealPath()}): theme files there are served before login, " +
+                "so it cannot be a content root${System.lineSeparator()}"
+
+            withClue("roots.conf is byte-identical after the refusal") {
+                Files.readAllBytes(w.rootsConf) shouldBe before
+            }
+        }
+    }
+
+    test("root add reports only the refusal for a pre-existing DATA_DIR/themes root") {
+        world { w ->
+            val themes = Files.createDirectory(w.data.resolve("themes"))
+            Files.writeString(
+                w.data.resolve("plainbase.conf"),
+                """
+                roots {
+                  docs { path = "${w.content}" }
+                  shelf { path = "$themes" }
+                }
+                """.trimIndent(),
+            )
+            val notes = Files.createDirectory(w.tmp("notes"))
+
+            val err = captureStderr { captureStdout { w.root("add", "notes", notes.toString()) shouldBe 0 } }
+
+            err shouldBe
+                "root add: WARNING: this config already refuses to boot, and this command did not cause it: " +
+                "roots.shelf is DATA_DIR/themes (${themes.toRealPath()}): theme files there are served before login, " +
+                "so it cannot be a content root${System.lineSeparator()}" +
+                "root add: WARNING: roots {} is configured: the explicitly set CONTENT_DIR/contentDir (via env) is " +
+                "ignored - primary's path comes from roots.docs.path${System.lineSeparator()}"
+            w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "shelf", "notes")
+        }
+    }
+
     // --- the server's WARNINGS, not just its refusals ----------------------------------------------------
 
     test("a typo'd path is added (it may be an unmounted volume) but the boot WARNING is surfaced, not swallowed") {

@@ -12,7 +12,9 @@ import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.writePage
+import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
@@ -103,6 +105,31 @@ class LocalContentStoreTest : FunSpec({
             result.folders shouldHaveSize 0
         } finally {
             tmp.toFile().deleteRecursively()
+        }
+    }
+
+    test("a nested DATA_DIR subdirectory is excluded from the scan") {
+        val root = Files.createTempDirectory("pb-nested-theme-data")
+        try {
+            Files.writeString(root.resolve("page.md"), "# Page\n")
+            val data = Files.createDirectory(root.resolve("data"))
+            val themes = Files.createDirectory(data.resolve("themes"))
+            listOf("x.yaml", "x.css", "x.md").forEach { name -> Files.writeString(themes.resolve(name), "private theme data") }
+
+            val result = LocalContentStore(root, exclusions = listOf(data)).scan()
+
+            assertSoftly {
+                result.files.map { it.path.value } shouldContainExactly listOf("page.md")
+                result.folders.shouldBeEmpty()
+                withClue("no indexed files under data/themes") {
+                    result.files.filter { it.path.value.startsWith("data/themes") }.shouldBeEmpty()
+                }
+                withClue("no indexed folders under data/themes") {
+                    result.folders.filter { it.path.value.startsWith("data/themes") }.shouldBeEmpty()
+                }
+            }
+        } finally {
+            root.toFile().deleteRecursively()
         }
     }
 
