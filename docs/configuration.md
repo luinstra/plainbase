@@ -73,8 +73,8 @@ is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUS
 | `PLAINBASE_S3_PREFIX` | `storage.object.prefix` | `""` | ConfigDecoder.kt (validated through the `TreePath` funnel when non-empty) |
 | `PLAINBASE_S3_PATH_STYLE` | `storage.object.pathStyle` | `true` (R2 account-endpoint) | ConfigDecoder.kt |
 | `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | ConfigDecoder.kt |
-| - (file only) | `theme.light` | bundled light definition | ConfigDecoder.kt |
-| - (file only) | `theme.dark` | bundled dark definition | ConfigDecoder.kt |
+| - (file only) | `theme.light` (CSS or scheme file) | bundled light definition | ConfigDecoder.kt |
+| - (file only) | `theme.dark` (CSS or scheme file) | bundled dark definition | ConfigDecoder.kt |
 
 Any `storage.object.*` key set while `storage.backend=local` is ignored with a single startup warning
 that names the keys (a shared `plainbase.conf` across a local and an object deploy stays legal). In
@@ -188,8 +188,10 @@ Reservation is NFC-normalized and case-insensitive. Includes whose first literal
 `.plainbase` are refused at config load; wildcard patterns are not all refused, but runtime hiding independently
 prevents any include from exposing the collection.
 Startup refuses `DATA_DIR` equal to a root, or inside it with reserved `.plainbase` as the first relative segment
-after canonical path comparison. Hidden aliased `DATA_DIR`-inside-root nesting is also fatal. A root inside
-`DATA_DIR` is warning-only; keep roots outside disposable app state.
+after canonical path comparison. Hidden aliased `DATA_DIR`-inside-root nesting is also fatal.
+A content root or `CONTENT_DIR` at `DATA_DIR/themes`, in any letter case, also refuses to start.
+Other root locations inside `DATA_DIR` remain warning-only.
+Advice: Keep roots outside disposable app state.
 Traversal is bounded for non-recursive includes: `*.md` and `docs/*.md` prune directories deeper than the matching
 file depth from scans, watches, listings and the sidebar, while any pattern containing `**` retains conservative
 traversal. Brace alternatives mixing `**` with bounded patterns may traverse more broadly; prefer separate includes
@@ -318,7 +320,8 @@ Validation and startup behavior (config faults are actionable `serve:` refusals;
 - `history = auto` on an extra root is refused (see above);
 - no two roots may resolve to the same directory (symlinks are resolved for this check), no root may
   nest inside another; `DATA_DIR` equality, reserved collection placement and hidden aliased nesting are refused
-  as described above, while a root inside `DATA_DIR` is warning-only;
+  as described above; a root at `DATA_DIR/themes`, in any letter case, is also refused, while other root
+  locations inside `DATA_DIR` remain warning-only;
 - `roots {}` cannot be combined with `storage.backend=object` in this release - object deployments
   keep the plain `CONTENT_DIR`-less config shape.
 
@@ -381,8 +384,10 @@ not mounted yet (the server marks it unavailable and serves 503 for it until it 
 server restarted). The CLI prints the same warning `serve` prints, and exits 0 - so a typo'd path is
 visible, not silent.
 
-A root inside `DATA_DIR` is also warning-only: the CLI prints the same warning as `serve` and permits
-the addition. Move the root outside disposable app state; a `DATA_DIR` wipe would take its content too.
+`plainbase root add` refuses a root at `DATA_DIR/themes`, in any letter case.
+Other root locations inside `DATA_DIR` remain warning-only: the CLI prints the same warning as `serve`
+and permits the addition.
+Advice: Move the root outside disposable app state; a `DATA_DIR` wipe would take its content too.
 
 `--editable` defaults to `false` for an extra root; `--history` defaults to `off`.
 
@@ -577,42 +582,51 @@ and [operator recovery](operating-plainbase.md#discussions).
 
 ## Themes
 
-`theme.light` and `theme.dark` select complete CSS definitions; the optional `custom.css` adds partial
-overrides. Put the selections in `DATA_DIR/plainbase.conf`:
+`theme.light` and `theme.dark` select a CSS definition or a Tinted Base16 or Base24 scheme (`.yaml` or `.yml`).
+Files may sit directly in `DATA_DIR` or directly in `DATA_DIR/themes`.
+The optional `custom.css` adds partial overrides.
+Put the selections in `DATA_DIR/plainbase.conf`:
 
 ```hocon
 theme {
   light = "paper.css"
-  dark = "dracula.css"
+  dark = "themes/dracula.yaml"
 }
 ```
 
-These names select `DATA_DIR/paper.css` and `DATA_DIR/dracula.css` directly, without a theme
-subdirectory. A name must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.css`; `custom.css` is reserved,
-case-insensitively. The dotted form, such as `theme.light = "paper.css"`, is equivalent. You can set
-only one mode, leaving the other bundled, or select the same file for both modes. An absent or empty
-`theme` block uses both bundled definitions silently; unknown keys in that block are ignored.
+These names select `DATA_DIR/paper.css` and `DATA_DIR/themes/dracula.yaml`.
+A name must match `(themes/)?[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.(css|yaml|yml)`: the optional `themes/`
+prefix and suffix must be lowercase, and no other directory or path form is accepted.
+`custom.css` and `themes/custom.css` are reserved, case-insensitively.
+The dotted form, such as `theme.light = "paper.css"`, is equivalent.
+You can set only one mode, leaving the other bundled, or select the same CSS file for both modes.
+A scheme with a declared variant works only in its matching mode; a scheme without a variant works in either.
+An absent or empty `theme` block uses both bundled definitions silently; unknown keys in that block are ignored.
 
 The selections come from the operator file, not managed `roots.conf`, and have no dedicated
 environment settings. The fixed `DATA_DIR/custom.css` needs no setting and applies in both modes.
 
-Each definition must scope its rules with its mode's selector: `:where(:root:not([data-theme="dark"]))`
+Advice: Scope each CSS definition with its mode's selector: `:where(:root:not([data-theme="dark"]))`
 for light and `:where(:root[data-theme="dark"])` for dark. All four theme stylesheets load in both
 modes, so an unscoped `:root` rule in a light definition also applies in dark mode.
+Converted schemes are scoped to the selected mode automatically.
 
 An invalid selection value logs one startup warning naming the key and uses the bundled definition
 for that mode; a valid selection for the other mode is retained. Submitted paths and URLs are not
 echoed in the warning. Malformed HOCON and unresolved substitutions refuse `serve` configuration
 loading.
 
-Restart Plainbase after changing a selection. Selected files and `custom.css` are read again for each
-GET request to their stylesheet endpoints, so reload the page after editing their contents.
+Restart Plainbase after changing a selection.
+Selected files and `custom.css` are read again for each GET request to their stylesheet endpoints;
+schemes are converted again, so reload the page after editing file contents.
 
-If Plainbase cannot read a selected file, that mode serves the bundled definition. If it cannot read
-`custom.css`, the override is an empty sheet. A `custom.css` that is missing, empty or only whitespace
+If Plainbase cannot read or convert a selected file, that mode serves the bundled definition.
+For a `themes/` selection, a symbolic link or non-directory at `DATA_DIR/themes` causes fallback as `NOT_REGULAR`.
+If it cannot read `custom.css`, the override is an empty sheet. A `custom.css` that is missing, empty or only whitespace
 (space, tab, line feed, form feed or carriage return), with or without a leading byte order mark, is
-silent. Other read failures log a warning, at most one read-failure warning per 60 seconds. See the
-[theming guide](theming.md) for the input contract, examples and what makes a file unreadable.
+silent. Read and conversion failures share a limit of at most one warning per 60 seconds.
+Scheme warnings name the setting, file name and reason, with a line number when known; they never include a value or file content.
+See the [theming guide](theming.md) for the input contract, scheme failure reasons, rejected forms and examples.
 
 ## Heap size (native binary) - not an env var
 

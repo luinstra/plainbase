@@ -17,9 +17,12 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md). The 
 
 Requirements: JDK 25+ (the build auto-provisions the 25 toolchain for
 bytecode). Node is downloaded by the Gradle build - no local install needed.
-The build also downloads a SHA-pinned Tinted theme builder on first run, which
-exists only for macOS arm64, Linux x64 and Linux arm64; other hosts (including
-Intel macOS) cannot run `./gradlew build`. See [contrib/tinted](../contrib/tinted/README.md).
+`:server:test` downloads a pinned archive of tinted-theming/schemes on first run and
+checks its contents against a SHA-256 pin; this archive contains scheme data, not the builder.
+The GPL Tinted builder remains separate offline tooling, downloaded and SHA-pinned by the frontend
+template checks; it is not a dependency of `:server:test` or part of the application distribution.
+Architecture policy: Full builds require one of the pinned builder hosts: macOS arm64, Linux x64
+or Linux arm64. See [contrib/tinted](../contrib/tinted/README.md).
 
 The platform-neutral runner self-test and Linux-only PID1 regression gates are separate from ordinary test discovery:
 

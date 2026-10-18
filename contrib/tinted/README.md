@@ -1,7 +1,7 @@
 # Tinted examples for Plainbase
 
-These offline examples demonstrate the Plainbase theme contract
-(see [the theming guide](../../docs/theming.md)).
+These offline examples demonstrate the Plainbase theme contract through adapted CSS
+(see [the theming guide](../../docs/theming.md) for runtime scheme selection too).
 They are tooling and documentation data outside the application bundle. They
 are not a runtime theme catalog.
 
@@ -14,11 +14,17 @@ mapping and Base24 fallback table are in
 Base24 enriches eight roles with five bright slots; its unused extra slots
 are intentionally not emitted.
 
-Every installable adaptation must declare `variant: light` or `variant: dark`.
-The pinned builder defaults an absent variant to dark, so the independent YAML
-preflight proves source presence. It also rejects noncanonical declared slugs,
-Base16 extended slots, numeric palette values and shorthand hex. The builder
-remains the palette-completeness and malformed-hex witness.
+The offline example gate requires every installable adaptation to declare `variant: light` or `variant: dark`.
+Runtime conversion accepts an omitted variant in either mode; a declared variant must match the selection.
+The pinned builder defaults an absent variant to dark, so the independent YAML preflight enforces
+variant presence for these offline examples.
+The offline preflight also rejects noncanonical declared slugs, Base16 extended slots, numeric palette values and shorthand hex
+in those examples; the builder remains their palette-completeness and malformed-hex witness.
+
+The template is the reference mapping and the oracle for Plainbase's own runtime converter.
+For every scheme at [the pinned corpus commit](https://github.com/tinted-theming/schemes/tree/3ac91137e879502c442ab89ba0f1a98077d0da9d),
+selected for the mode its variant declares, the converted declarations equal the template's declarations.
+Architecture policy: The GPL builder stays in offline tooling outside the application distribution.
 
 ## Reproduction
 
@@ -73,7 +79,7 @@ including alpha composition on layered surfaces. Adaptation changes palette
 values and the required adapted name and slug, while preserving the remaining
 scheme metadata.
 
-Policy: Raw upstream mapping has no contrast guarantee.
+Policy: Raw upstream schemes carry no contrast guarantee.
 
 In both Dracula sources, upstream `base04` (`9ea8c7`) is a Tinted adaptation,
 marked "NOT a Dracula color!" upstream. The original Dracula comment hue is

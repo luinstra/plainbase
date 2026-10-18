@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-16
+- **Amended:** 2026-10-17
 - **Deciders:** luinstra (theme foundation rulings, 2026-10-11 to 2026-10-16)
 - **Context:** Give operators a theme contract that separates deployed definitions from application
   implementation details and keeps theme selection beside the rest of their configuration.
@@ -14,17 +15,21 @@ failure behavior clear. [The theming guide](../theming.md) is the operator refer
 
 ## Decision
 
-**Format and contract.** Architecture policy: deploy semantic CSS definitions. Convert Base16 and
-Base24 schemes offline through one Tinted template; theme YAML is not a runtime format. This follows
-the configuration format choice in [ADR-0009](0009-hocon-config-file-not-yaml.md).
+**Format and contract.** Architecture policy: deploy semantic CSS definitions, authored as CSS or
+converted from Tinted Base16 or Base24 schemes. Plainbase converts selected `.yaml` and `.yml` schemes
+with its own code; the Tinted template remains the reference mapping and the oracle for that output.
+Operator configuration remains HOCON, as chosen in [ADR-0009](0009-hocon-config-file-not-yaml.md).
 The version 1 contract has 24 public `--pb-theme-*` inputs, four required. The generic layer supplies
 defaults for the other inputs and derives private roles. Architecture policy: components consume
 those private roles rather than embedding a palette.
 
 **Selection and overrides.** `theme.light` and `theme.dark` in the operator's `DATA_DIR/plainbase.conf`
-select complete definitions for their respective modes. Each selected file replaces the bundled
-definition for that mode. The keys have no dedicated environment settings and read files directly
-under `DATA_DIR`, using validated leaf names. Light and dark definitions have exclusive root scopes.
+select CSS definitions or scheme sources for their respective modes. A selected CSS file, or CSS
+converted from a selected scheme, replaces the bundled definition for that mode.
+The keys have no dedicated environment settings.
+Selections name files directly in `DATA_DIR` or directly in `DATA_DIR/themes`, using the validated
+name grammar. `custom.css` and `themes/custom.css` are reserved, case-insensitively.
+Light and dark definitions have exclusive root scopes.
 The optional, fixed `DATA_DIR/custom.css` supplies partial overrides in both modes.
 
 The page links the app stylesheet, generic layer, light definition, dark definition and `custom.css`,
@@ -67,11 +72,23 @@ classes are unversioned.
   delay the interface's first appearance. Browser tests directly verify that delay for the dark
   definition and `custom.css`; the generic layer and light definition are not held in those tests.
 - Restart after changing a selection. Selected files and `custom.css` are read again for each GET
-  request to their stylesheet endpoints, so reload the page after editing their contents.
+  request to their stylesheet endpoints; schemes are converted again, so reload the page after editing their contents.
 - A symbolic link or directory at a selected stylesheet path serves the bundled definition. A
   symbolic link or directory at `DATA_DIR/custom.css` is rejected as `NOT_REGULAR` and serves an
   empty sheet, with a warning subject to the read-failure warning limit. A regular selected file
-  reached through a symlinked `DATA_DIR` base is accepted. Mounted-volume deployment advice lives in the guide.
+  reached through a symlinked `DATA_DIR` base is accepted. For a `themes/` selection, `DATA_DIR/themes`
+  must itself be a real directory; a symbolic link or non-directory there falls back as `NOT_REGULAR`.
+  Mounted-volume deployment advice lives in the guide.
+- Scheme files follow the CSS read limits, including removal of one leading byte order mark before
+  conversion. A conversion failure serves the bundled definition for that mode. Warnings name the
+  setting, file name and one of the five scheme reasons, with a line number when known; they never
+  include a value or file content and share the read-failure warning limit.
+- A declared variant must match the selected mode; otherwise `VARIANT_MISMATCH` causes fallback to
+  that mode's bundled definition. A scheme without a variant works in either mode.
+- A content root or `CONTENT_DIR` at `DATA_DIR/themes`, in any letter case, refuses to start, and
+  `plainbase root add` refuses it. Other root locations inside `DATA_DIR` remain warning-only.
+  When `DATA_DIR` is inside a content root, its whole subtree, including `DATA_DIR/themes`, is excluded
+  from that root's index, content assets, file watching and page creation.
 - Advice: Review contrast for arbitrary palettes, including card foreground against both page and
   card backgrounds. Generic faint and muted text share a color rather than providing a third tier.
 - The radius scale has a default `0.25rem` base and seven fixed multipliers. The default base is 4px
@@ -80,4 +97,4 @@ classes are unversioned.
   interface uses native colors. Unsupported computed spaces show diagram source and a status
   message instead of a rendered diagram.
 - Architecture policy: the GPL Tinted builder belongs in offline build tooling, outside the
-  application distribution. Deploy its resulting CSS definitions.
+  application distribution. Runtime conversion uses Plainbase's own code, checked against the template's builder output.

@@ -8,6 +8,7 @@ type Table = { columns: string[]; rows: string[][] };
 type Difference = { name: string; expected: unknown; actual: unknown };
 type Mapping = { variables: Record<string, string>; shadow: string };
 type Inputs = Record<string, Input>;
+type RejectedForm = { id: string; docs: string; witnesses: Record<string, string> };
 
 const modes = ["light", "dark"] as const;
 const displaySpaces: Record<string, string> = {
@@ -173,6 +174,53 @@ function configurationDifferences(configuration: string, markdown: string): Diff
   return differences;
 }
 
+function schemeReasons(source: string): string[] {
+  const body = source.match(/\benum class TintedFailureKind\s*\{([^}]*)\}/)?.[1];
+  if (body === undefined) throw new Error("Missing scheme failure enum");
+  return [...body.matchAll(/\b[A-Z][A-Z_]+\b/g)].map((match) => match[0]);
+}
+
+function documentedSchemeReasons(markdown: string): string[] {
+  return readTable(markdown, "### Scheme failure reasons").rows.map(([name]) => name).sort();
+}
+
+function rejectedFormDifferences(markdown: string, classes: RejectedForm[]): Difference[] {
+  const rows = readTable(markdown, "### Rejected forms").rows;
+  const expected = classes.map((entry) => entry.docs);
+  const actual = rows.map(([form]) => form);
+  const differences: Difference[] = JSON.stringify(actual) === JSON.stringify(expected) ? [] :
+    [{ name: "rejected forms", expected, actual }];
+  classes.forEach((entry, index) => {
+    const row = (rows[index] ?? []).join(" ");
+    for (const [witness, phrase] of Object.entries(entry.witnesses)) {
+      if (!row.includes(phrase)) differences.push({ name: entry.id + " witness " + witness, expected: phrase, actual: row });
+    }
+  });
+  return differences;
+}
+
+function leafPattern(source: string): string {
+  const directory = source.match(/\bconst val THEMES_DIRECTORY = "([^"]+)"/)?.[1];
+  const expression = source.match(/\bLEAF = Regex\("([^"]+)"\)/)?.[1];
+  if (directory === undefined || expression === undefined) throw new Error("Missing theme leaf grammar");
+  return expression.replaceAll("$THEMES_DIRECTORY", directory).replaceAll("\\\\", "\\");
+}
+
+function configurationLeafDifferences(configuration: string, source: string): Difference[] {
+  const expected = code(leafPattern(source));
+  return configuration.includes(expected) ? [] : [{ name: "theme leaf pattern", expected, actual: false }];
+}
+
+function corpusCommit(source: string): string {
+  const commit = source.match(/\bval tintedSchemesCommit = "([a-f0-9]{40})"/)?.[1];
+  if (commit === undefined) throw new Error("Missing scheme corpus commit");
+  return commit;
+}
+
+function documentedCorpusCommits(markdown: string): string[] {
+  return [...new Set(markdown.match(/\b[a-f0-9]{40}\b/g) ?? [])].sort();
+}
+
 describe("the theming guide matches its sources", () => {
   it("the input table matches the roster", () => {
     checkTable("Inputs", "## Inputs", inputTable(roster.inputs));
@@ -233,6 +281,29 @@ describe("the theming guide matches its sources", () => {
     const index = readFileSync("../docs/decisions/README.md", "utf8");
     const links = [...index.matchAll(/\]\((0014-[^)]+\.md)\)/g)].map((match) => match[1]).sort();
     expect.soft(links, "registered theme decision link").toEqual(files);
+  });
+
+  it("the scheme failure reasons match the parser", () => {
+    const source = readFileSync("../server/src/main/kotlin/com/plainbase/domain/theming/TintedScheme.kt", "utf8");
+    expect(documentedSchemeReasons(guide())).toEqual(schemeReasons(source).map(code).sort());
+  });
+
+  it("the rejected forms cover their classes and witness phrases", () => {
+    const cases = JSON.parse(readFileSync("../server/src/test/resources/tinted/scheme-oracle-cases.json", "utf8")) as
+      { rules: { classes: RejectedForm[] } };
+    expect(rejectedFormDifferences(guide(), cases.rules.classes)).toEqual([]);
+  });
+
+  it("the configuration names the current theme leaf grammar", () => {
+    const source = readFileSync("../server/src/main/kotlin/com/plainbase/domain/theming/ThemeSelection.kt", "utf8");
+    expect(configurationLeafDifferences(readFileSync("../docs/configuration.md", "utf8"), source)).toEqual([]);
+  });
+
+  it("the guide cites the pinned scheme corpus commit", () => {
+    const expected = corpusCommit(readFileSync("build.gradle.kts", "utf8"));
+    for (const file of ["../docs/theming.md", "../contrib/tinted/README.md"]) {
+      expect.soft(documentedCorpusCommits(readFileSync(file, "utf8")), file).toEqual([expected]);
+    }
   });
 });
 
@@ -305,5 +376,57 @@ describe("documentation comparison controls", () => {
     expect(radiusDefault(0.25, 1.2)).toBe("0.3rem");
     const table = radiusTable(genericCss());
     expect(tableDifferences(readTable("### Radius\n" + renderTable(table), "### Radius"), table)).toEqual([]);
+  });
+
+  it("the scheme reason comparison detects omissions and additions", () => {
+    const reasons = [["SCHEME", "PROBE"].join("_"), ["VARIANT", "PROBE"].join("_")];
+    const source = "enum class TintedFailureKind { " + reasons.join(", ") + " }";
+    const expected = schemeReasons(source).map(code).sort();
+    const markdown = (names: string[]) => "### Scheme failure reasons\n" +
+      renderTable({ columns: ["Reason"], rows: names.map((name) => [code(name)]) });
+    expect(documentedSchemeReasons(markdown(reasons))).toEqual(expected);
+    expect(documentedSchemeReasons(markdown(reasons.slice(1)))).not.toEqual(expected);
+    expect(documentedSchemeReasons(markdown([...reasons, ["SCHEME", "EXTRA"].join("_")]))).not.toEqual(expected);
+  });
+
+  it("rejected form comparisons unescape pipes and detect missing witnesses", () => {
+    const phrase = code("|");
+    const classes: RejectedForm[] = [{ id: "probe", docs: "Literal " + phrase + " content", witnesses: { pipe: phrase } }];
+    const markdown = "### Rejected forms\n" + renderTable({ columns: ["Form"], rows: classes.map((entry) => [entry.docs]) });
+    expect(markdown).toContain("\\|");
+    expect(rejectedFormDifferences(markdown, classes)).toEqual([]);
+    expect(rejectedFormDifferences(markdown.replace("content", "changed"), classes).map((difference) => difference.name))
+      .toEqual(["rejected forms"]);
+    const changed = [{ ...classes[0], witnesses: { pipe: ["absent", "phrase"].join(" ") } }];
+    expect(rejectedFormDifferences(markdown, changed).map((difference) => difference.name)).toEqual(["probe witness pipe"]);
+  });
+
+  it("the leaf comparison substitutes its directory and decodes the Kotlin regex", () => {
+    const directory = ["sample", "themes"].join("-");
+    const expression = "($THEMES_DIRECTORY/)?[A-Z]" + "\\\\." + "(css|yaml)";
+    const source = 'const val THEMES_DIRECTORY = "' + directory + '"\nprivate val LEAF = Regex("' + expression + '")';
+    const expected = "(" + directory + "/)?[A-Z]" + "\\." + "(css|yaml)";
+    expect(leafPattern(source)).toBe(expected);
+    expect(configurationLeafDifferences(code(expected), source)).toEqual([]);
+    expect(configurationLeafDifferences(code(expected.replace(directory, ["other", "themes"].join("-"))), source)
+      .map((difference) => difference.name)).toEqual(["theme leaf pattern"]);
+  });
+
+  it("the corpus comparison detects a different cited commit", () => {
+    const expected = "1".repeat(40);
+    const changed = "2".repeat(40);
+    const source = 'val tintedSchemesCommit = "' + expected + '"';
+    const mentions = (commit: string) => [
+      "[Corpus](https://github.com/tinted-theming/schemes/tree/" + commit + ")",
+      "[Scheme](https://github.com/tinted-theming/schemes/blob/" + commit + "/base16/example.yaml)",
+      "At commit " + code(commit),
+    ];
+    expect(corpusCommit(source)).toBe(expected);
+    expect(documentedCorpusCommits(mentions(expected).join("\n"))).toEqual([expected]);
+    mentions(changed).forEach((mention, index) => {
+      const markdown = mentions(expected);
+      markdown[index] = mention;
+      expect.soft(documentedCorpusCommits(markdown.join("\n")), `mention ${index}`).toEqual([expected, changed]);
+    });
   });
 });
