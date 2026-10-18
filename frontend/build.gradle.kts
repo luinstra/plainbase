@@ -1,5 +1,6 @@
 import com.github.gradle.node.npm.task.NpmTask
 import java.security.MessageDigest
+import java.util.Arrays
 import java.util.HexFormat
 
 plugins {
@@ -54,6 +55,8 @@ tasks.register<NpmTask>("vitestFile") {
 
 // Tinted gate: GPL-3.0 tool executed at build time, never bundled.
 val tintedBuilderVersion = "0.21.0"
+val tintedSchemesCommit = "3ac91137e879502c442ab89ba0f1a98077d0da9d"
+val tintedCorpusContentSha256 = "7560e34476b715f801ebb8f1e23db03045a6d77ae05d3ecd1dcd7ebb01975ca8"
 val tintedBuilderPins = mapOf(
     "macos-arm64" to ("aarch64-apple-darwin" to "b8fee54cea95ff7631bfb9e7175a733d99c6131348146ff3932cbc67479eadf0"),
     "linux-x64" to ("x86_64-unknown-linux-musl" to "89fd095b63a7be8190e1d3e2b3162340f8f09da9851909683cf412ad3164f66b"),
@@ -84,6 +87,17 @@ repositories {
         }
         filter { includeModule("tinted-theming", "tinted-builder-rust") }
     }
+    exclusiveContent {
+        forRepository {
+            ivy {
+                name = "tintedSchemeCorpus"
+                url = uri("https://codeload.github.com/tinted-theming/schemes/tar.gz")
+                patternLayout { artifact("[revision]") }
+                metadataSources { artifact() }
+            }
+        }
+        filter { includeModule("tinted-theming", "schemes") }
+    }
 }
 val tintedBuilder = configurations.create("tintedBuilder") {
     isTransitive = false
@@ -93,6 +107,42 @@ val tintedBuilder = configurations.create("tintedBuilder") {
 tintedBuilder.dependencies.addLater(tintedBuilderPin.map { (target, _) ->
     dependencies.create("tinted-theming:tinted-builder-rust:$tintedBuilderVersion:$target@tar.gz")
 })
+val tintedCorpus = configurations.create("tintedCorpus") {
+    isTransitive = false
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+dependencies.add(tintedCorpus.name, "tinted-theming:schemes:$tintedSchemesCommit@tar.gz")
+val tintedCorpusDir = layout.buildDirectory.dir("tinted/corpus/$tintedSchemesCommit")
+val tintedCorpusSetup = tasks.register<Sync>("tintedCorpusSetup") {
+    from(providers.provider { tarTree(resources.gzip(tintedCorpus.singleFile)) }) {
+        include("*/base16/**", "*/base24/**", "*/LICENSE")
+        eachFile {
+            relativePath = RelativePath(!isDirectory, *relativePath.segments.drop(1).toTypedArray())
+        }
+        includeEmptyDirs = false
+    }
+    into(tintedCorpusDir)
+    inputs.files(tintedCorpus)
+    inputs.property("commit", tintedSchemesCommit)
+    inputs.property("contentSha256", tintedCorpusContentSha256)
+    doLast {
+        val manifest = destinationDir.walkTopDown().filter { it.isFile }
+            .map { it.relativeTo(destinationDir).invariantSeparatorsPath to it }
+            .sortedWith { left, right ->
+                Arrays.compareUnsigned(left.first.toByteArray(Charsets.UTF_8), right.first.toByteArray(Charsets.UTF_8))
+            }
+            .joinToString("") { (path, file) ->
+                val hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(file.readBytes()))
+                "$path\t$hash\n"
+            }
+        val actual = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(manifest.toByteArray(Charsets.UTF_8)))
+        if (actual != tintedCorpusContentSha256) {
+            delete(destinationDir)
+            throw GradleException("Tinted corpus content SHA-256 mismatch: expected $tintedCorpusContentSha256, actual $actual")
+        }
+    }
+}
 fun locateTintedBinary(dir: File): File {
     val found = dir.walkTopDown().filter { it.isFile && it.name == "tinted-builder-rust" }.toList()
     if (found.size != 1) {
@@ -130,7 +180,7 @@ val tintedBuilderSetup = tasks.register<Sync>("tintedBuilderSetup") {
 val tintedTemplateCheck = tasks.register<NpmTask>("tintedTemplateCheck") {
     group = "verification"
     description = "Checks the offline Tinted template using the pinned builder."
-    dependsOn(tasks.npmInstall, tintedBuilderSetup)
+    dependsOn(tasks.npmInstall, tintedBuilderSetup, tintedCorpusSetup)
     args.set(listOf(
         "run", "test", "--", "--config", "src/__tests__/tinted/vitest.tinted.config.ts",
         "--reporter=default", "--reporter=json", "--outputFile.json=build/tinted/results/vitest-report.json",
@@ -139,6 +189,7 @@ val tintedTemplateCheck = tasks.register<NpmTask>("tintedTemplateCheck") {
         locateTintedBinary(tintedBuilderSetup.get().destinationDir).absolutePath
     })
     environment.put("PB_TINTED_BUILDER_VERSION", tintedBuilderVersion)
+    environment.put("PB_TINTED_CORPUS", tintedCorpusDir.map { it.asFile.absolutePath })
     environment.put("PB_TINTED_WORK", layout.buildDirectory.dir("tinted/work").map { it.asFile.absolutePath })
     environment.put("PB_TINTED_RESULTS", layout.buildDirectory.dir("tinted/results").map { it.asFile.absolutePath })
     inputs.dir(rootProject.layout.projectDirectory.dir("contrib/tinted"))
@@ -146,6 +197,8 @@ val tintedTemplateCheck = tasks.register<NpmTask>("tintedTemplateCheck") {
     inputs.dir("src/styles")
     inputs.files("package.json", "package-lock.json")
     inputs.files(tintedBuilderSetup)
+    inputs.files(tintedCorpusSetup)
+    inputs.dir(rootProject.layout.projectDirectory.dir("server/src/test/resources/tinted"))
     inputs.property("version", tintedBuilderVersion)
     inputs.property("target", tintedBuilderPin.map { it.first })
     inputs.property("sha256", tintedBuilderPin.map { it.second })

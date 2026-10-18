@@ -121,7 +121,8 @@ export function runBuilder(templateDir: string, schemeFile: string) {
     .filter((file) => !file.startsWith("templates/"))
     .sort();
   const rendered = Object.fromEntries(files.map((file) => [file, fs.readFileSync(path.join(stagedTemplateDir, file), "utf8")]));
-  return { exit: result.status, stderrClass: classifyStderr(result.status, result.stderr), files, rendered, stagedTemplateDir };
+  return { exit: result.status, stderr: result.stderr, stderrClass: classifyStderr(result.status, result.stderr), files, rendered,
+    stagedTemplateDir, schemesDir: schemes };
 }
 
 export function stringValues(value: unknown): string[] {

@@ -1,0 +1,2211 @@
+{
+  "rules": {
+    "builderRejects": [
+      "CONTROL_CHARACTER",
+      "DUPLICATE_KEY",
+      "REQUIRED_KEY_MISSING",
+      "SYSTEM_MISSING",
+      "PALETTE_MISSING",
+      "SYSTEM_UNSUPPORTED",
+      "VARIANT_UNSUPPORTED",
+      "SLOT_MISSING",
+      "HEX_INVALID"
+    ],
+    "classes": [
+      {
+        "id": "C1",
+        "docs": "A carriage return that is not part of a CRLF line ending",
+        "rules": [
+          "CARRIAGE_RETURN"
+        ],
+        "witnesses": {
+          "lone-cr": "A carriage return that is not part of a CRLF line ending",
+          "cr-only-all": "A carriage return that is not part of a CRLF line ending",
+          "cr-in-dq": "A carriage return that is not part of a CRLF line ending"
+        }
+      },
+      {
+        "id": "C2",
+        "docs": "The characters U+0085, U+2028 and U+2029, anywhere in the file",
+        "rules": [
+          "YAML_LINE_BREAK"
+        ],
+        "witnesses": {
+          "ls-in-dq": "The characters U+0085, U+2028 and U+2029, anywhere in the file",
+          "nel-in-dq": "The characters U+0085, U+2028 and U+2029, anywhere in the file",
+          "ls-smuggles-variant": "The characters U+0085, U+2028 and U+2029, anywhere in the file"
+        }
+      },
+      {
+        "id": "C3",
+        "docs": "document markers other than `---` alone on the first line; keys that are quoted, longer than 1024 characters, do not start with an ASCII letter, are words such as `yes` or `no`, or have a space before the colon; a tab instead of a space after a colon; a line starting with U+FEFF; palette entries indented by anything but two spaces; an indented line after a blank line inside a `|` block; and a plain value continued on an indented line",
+        "rules": [
+          "DOCUMENT_MARKER",
+          "TAB_INDENT",
+          "KEY_FORM",
+          "INDENTATION"
+        ],
+        "witnesses": {
+          "doc-end": "document markers other than `---` alone on the first line",
+          "line1-marker-comment": "document markers other than `---` alone on the first line",
+          "quoted-key": "keys that are quoted",
+          "space-before-colon": "a space before the colon",
+          "tab-after-top-colon": "a tab instead of a space after a colon",
+          "key-yes": "are words such as `yes` or `no`",
+          "key-dash-first": "do not start with an ASCII letter",
+          "bom-col0-comment": "a line starting with U+FEFF",
+          "indent-4-palette": "palette entries indented by anything but two spaces",
+          "tab-after-palette-colon": "a tab instead of a space after a colon",
+          "block-empty-line-then-content": "an indented line after a blank line inside a `|` block",
+          "plain-continued-indented": "a plain value continued on an indented line"
+        }
+      },
+      {
+        "id": "C4",
+        "docs": "Values other than a double-quoted value on one line without backslashes, an unquoted value starting with an ASCII letter, or a `|` block: for example single quotes, escapes, `[ ]` or `{ }` values, anchors, aliases, tags, `>` blocks, `|` blocks with `-` or `+`, empty `|` blocks, a `|` block as the value of `system`, `variant` or `slug`, unquoted values containing `#` or a tab, unquoted words such as `null`, `yes`, `no`, `on`, `inf` or `nan`, and a `#` comment with no space before it",
+        "rules": [
+          "VALUE_FORM"
+        ],
+        "witnesses": {
+          "single-quoted-name": "single quotes",
+          "dq-escape": "escapes",
+          "crlf-in-dq": "a double-quoted value on one line without backslashes",
+          "anchor-name": "anchors",
+          "tag-str": "tags",
+          "plain-name-hash-inside": "unquoted values containing `#` or a tab",
+          "name-yes": "unquoted words such as `null`, `yes`, `no`, `on`, `inf` or `nan`",
+          "name-eclair-plain": "an unquoted value starting with an ASCII letter",
+          "tab-in-plain": "unquoted values containing `#` or a tab",
+          "inline-comment-no-space": "a `#` comment with no space before it",
+          "bom-after-key": "an unquoted value starting with an ASCII letter",
+          "unknown-key-flow": "`[ ]` or `{ }` values",
+          "block-folded-desc": "`>` blocks",
+          "block-empty": "empty `|` blocks",
+          "system-literal-eof": "a `|` block as the value of `system`, `variant` or `slug`",
+          "variant-literal-eof": "a `|` block as the value of `system`, `variant` or `slug`",
+          "slug-literal": "a `|` block as the value of `system`, `variant` or `slug`",
+          "variant-null": "unquoted words such as `null`, `yes`, `no`, `on`, `inf` or `nan`"
+        }
+      },
+      {
+        "id": "C5",
+        "docs": "A key other than `palette` with nothing after its colon, including one followed by indented entries",
+        "rules": [
+          "EMPTY_VALUE"
+        ],
+        "witnesses": {
+          "null-description": "A key other than `palette` with nothing after its colon",
+          "null-variant": "A key other than `palette` with nothing after its colon",
+          "unknown-key-nested": "A key other than `palette` with nothing after its colon"
+        }
+      },
+      {
+        "id": "C6",
+        "docs": "Palette entries other than the system's slots, such as `base10` to `base17` in a Base16 scheme",
+        "rules": [
+          "SLOT_UNEXPECTED"
+        ],
+        "witnesses": {
+          "base16-with-base12": "Palette entries other than the system's slots",
+          "lowercase-key-extra": "Palette entries other than the system's slots",
+          "palette-extra-valid": "Palette entries other than the system's slots",
+          "palette-key-named-name": "Palette entries other than the system's slots"
+        }
+      },
+      {
+        "id": "C7",
+        "docs": "Palette values other than a double-quoted `#` followed by six hex digits, such as a missing `#`, three-digit shorthand, an unquoted or single-quoted value, an anchor or alias, a comment with no space before its `#`, or a palette written as `{ }`",
+        "rules": [
+          "HEX_SPELLING",
+          "PALETTE_VALUE_FORM"
+        ],
+        "witnesses": {
+          "no-hash": "Palette values other than a double-quoted `#` followed by six hex digits",
+          "shorthand": "Palette values other than a double-quoted `#` followed by six hex digits",
+          "plain-hex-letters": "Palette values other than a double-quoted `#` followed by six hex digits",
+          "single-quoted-hex": "Palette values other than a double-quoted `#` followed by six hex digits",
+          "anchor-alias": "Palette values other than a double-quoted `#` followed by six hex digits",
+          "palette-inline-flow": "Palette values other than a double-quoted `#` followed by six hex digits",
+          "palette-hash-nospace": "Palette values other than a double-quoted `#` followed by six hex digits"
+        }
+      },
+      {
+        "id": "C8",
+        "docs": "A `slug` other than lowercase ASCII letters and digits in hyphen-separated groups, such as `My_Theme`, `a/b`, `a b` or an empty slug",
+        "rules": [
+          "SLUG_FORM"
+        ],
+        "witnesses": {
+          "slug-slash": "A `slug` other than lowercase ASCII letters and digits in hyphen-separated groups",
+          "slug-dotdot": "A `slug` other than lowercase ASCII letters and digits in hyphen-separated groups",
+          "slug-underscore-upper": "A `slug` other than lowercase ASCII letters and digits in hyphen-separated groups",
+          "slug-space": "A `slug` other than lowercase ASCII letters and digits in hyphen-separated groups",
+          "slug-dot": "A `slug` other than lowercase ASCII letters and digits in hyphen-separated groups",
+          "slug-unicode": "A `slug` other than lowercase ASCII letters and digits in hyphen-separated groups",
+          "slug-empty": "A `slug` other than lowercase ASCII letters and digits in hyphen-separated groups"
+        }
+      }
+    ],
+    "mode": [
+      "VARIANT_MISMATCH"
+    ]
+  },
+  "hand": [
+    {
+      "id": "nul-in-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "# control \u0000\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "CONTROL_CHARACTER"
+    },
+    {
+      "id": "c0-0001-in-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\u0001cula\""
+        ]
+      ],
+      "expect": "CONTROL_CHARACTER"
+    },
+    {
+      "id": "c0-001f-in-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "# control \u001f\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "CONTROL_CHARACTER"
+    },
+    {
+      "id": "del-in-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "# control \u007f\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "CONTROL_CHARACTER"
+    },
+    {
+      "id": "c1-in-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "# control \u0080\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "CONTROL_CHARACTER"
+    },
+    {
+      "id": "c1-009f-in-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\u009fcula\""
+        ]
+      ],
+      "expect": "CONTROL_CHARACTER"
+    },
+    {
+      "id": "u-fffe",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "# control \ufffe\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "CONTROL_CHARACTER"
+    },
+    {
+      "id": "u-ffff-in-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\uffffcula\""
+        ]
+      ],
+      "expect": "CONTROL_CHARACTER"
+    },
+    {
+      "id": "lone-cr",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "# first\u000d# second\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "CARRIAGE_RETURN"
+    },
+    {
+      "id": "cr-only-all",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000dname: \"Dracula\"\u000dauthor: \"clach04 (https://github.com/clach04)\"\u000ddescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000dvariant: \"dark\"\u000d# Subset of base24 Dracula\u000d# https://github.com/tinted-theming/base24/blob/main/styling.md\u000d# https://github.com/tinted-theming/home/blob/main/styling.md\u000d# https://github.com/chriskempson/base16/blob/main/styling.md\u000d# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000d# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000dpalette:\u000d  base00: \"#282a36\"  # Default Background  # Dracula Background\u000d  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000d  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000d  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000d  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000d  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000d  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000d  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000d  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000d  base08: \"#ff5555\"  # Red\u000d  base09: \"#FFB86C\"  # Orange\u000d  base0A: \"#f1fa8c\"  # Yellow\u000d  base0B: \"#50fa7b\"  # Green\u000d  base0C: \"#8be9fd\"  # Aqua / Cyan\u000d  base0D: \"#bd93f9\"  # Blue\u000d  base0E: \"#ff79c6\"  # Purple / Magenta\u000d  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000d",
+      "expect": "CARRIAGE_RETURN"
+    },
+    {
+      "id": "cr-in-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\u000dcula\""
+        ]
+      ],
+      "expect": "CARRIAGE_RETURN"
+    },
+    {
+      "id": "ls-in-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "# first\u2028second\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "YAML_LINE_BREAK"
+    },
+    {
+      "id": "ls-in-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\u2028cula\""
+        ]
+      ],
+      "expect": "YAML_LINE_BREAK"
+    },
+    {
+      "id": "nel-in-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\u0085cula\""
+        ]
+      ],
+      "expect": "YAML_LINE_BREAK"
+    },
+    {
+      "id": "ps-in-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "# first\u2029second\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "YAML_LINE_BREAK"
+    },
+    {
+      "id": "nel-smuggles-dup",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "# hidden\u0085variant: \"light\"\u000avariant: \"dark\""
+        ]
+      ],
+      "expect": "YAML_LINE_BREAK"
+    },
+    {
+      "id": "ls-smuggles-dup",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "# hidden\u2028variant: \"light\"\u000avariant: \"dark\""
+        ]
+      ],
+      "expect": "YAML_LINE_BREAK"
+    },
+    {
+      "id": "ls-smuggles-variant",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "# hidden\u2028variant: \"light\""
+        ]
+      ],
+      "expect": "YAML_LINE_BREAK"
+    },
+    {
+      "id": "doc-end",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a...\u000a",
+      "expect": "DOCUMENT_MARKER"
+    },
+    {
+      "id": "two-docs",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a---\u000asystem: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "DOCUMENT_MARKER"
+    },
+    {
+      "id": "line1-marker-comment",
+      "base": "base16/dracula.yaml",
+      "text": "--- # comment\u000asystem: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "DOCUMENT_MARKER"
+    },
+    {
+      "id": "tab-indent",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "\u0009unknown: x\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "TAB_INDENT"
+    },
+    {
+      "id": "tab-only-line",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "\u0009\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "TAB_INDENT"
+    },
+    {
+      "id": "space-tab-line",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          " \u0009\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "TAB_INDENT"
+    },
+    {
+      "id": "space-tab-comment-line",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          " \u0009# c\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "TAB_INDENT"
+    },
+    {
+      "id": "quoted-key",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "\"name\": \"Dracula\""
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "space-before-colon",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name : \"Dracula\""
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "no-space-after-colon",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name:\"Dracula\""
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "tab-after-top-colon",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name:\u0009\"Dracula\""
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "bom-col0-key",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "\ufeffvariant: \"dark\""
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "key-null",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "null: \"x\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "key-yes",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "yes: \"x\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "key-dash-first",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "-foo: \"x\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "key-1025",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk: \"x\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "root-scalar",
+      "base": null,
+      "text": "\"scalar\"\u000a",
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "double-bom",
+      "base": "base16/dracula.yaml",
+      "text": "\ufeff\ufeffsystem: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "bom-col0-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "# https://github.com/tinted-theming/base24",
+          "\ufeff# https://github.com/tinted-theming/base24"
+        ]
+      ],
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "bom-col0-line1",
+      "base": "base16/dracula.yaml",
+      "text": "\ufeffsystem: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "KEY_FORM"
+    },
+    {
+      "id": "indent-4-palette",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a    base00: \"#282a36\"  # Default Background  # Dracula Background\u000a    base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a    base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a    base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a    base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a    base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a    base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a    base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a    # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a    base08: \"#ff5555\"  # Red\u000a    base09: \"#FFB86C\"  # Orange\u000a    base0A: \"#f1fa8c\"  # Yellow\u000a    base0B: \"#50fa7b\"  # Green\u000a    base0C: \"#8be9fd\"  # Aqua / Cyan\u000a    base0D: \"#bd93f9\"  # Blue\u000a    base0E: \"#ff79c6\"  # Purple / Magenta\u000a    base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "INDENTATION"
+    },
+    {
+      "id": "tab-after-palette-colon",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00:\u0009\"#282a36\""
+        ]
+      ],
+      "expect": "INDENTATION"
+    },
+    {
+      "id": "block-empty-line-then-content",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "description: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"",
+          "description: |\u000a  line one\u000a\u000a  line two"
+        ]
+      ],
+      "expect": "INDENTATION"
+    },
+    {
+      "id": "comment-in-block-less-indented",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "description: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"",
+          "description: |\u000a    line one\u000a  # c\u000a    line two"
+        ]
+      ],
+      "expect": "INDENTATION"
+    },
+    {
+      "id": "plain-continued-indented",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: Dracula\u000a  Theme"
+        ]
+      ],
+      "expect": "INDENTATION"
+    },
+    {
+      "id": "single-quoted-name",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: 'Dracula'"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "dq-escape",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\\u0063ula\""
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "crlf-in-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\u000d\u000acula\""
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "unterminated-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dracula"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "dq-trailing-garbage",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dracula\"x"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "anchor-name",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: &a \"Dracula\""
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "tag-str",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: !!str \"Dracula\""
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "plain-name-hash-inside",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: C#theme"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "name-yes",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: yes"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "name-true",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: true"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "name-int",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: 123"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "name-eclair-plain",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \u00c9clair"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "tab-in-plain",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: Dra\u0009cula"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "inline-comment-no-space",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dracula\"# c"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "plain-name-colon-space",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: Dracula: theme"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "bom-after-key",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \ufeff\"Dracula\""
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "unknown-key-flow",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "extra: [x]\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "block-folded-desc",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "description: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"",
+          "description: >\u000a  line one\u000a  line two"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "block-empty",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "description: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"",
+          "description: |"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "system-literal",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: |\u000a  base16"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "variant-literal",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: |\u000a  dark"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "system-literal-eof",
+      "base": "base16/dracula.yaml",
+      "text": "name: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000asystem: |\u000a  base16",
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "variant-literal-eof",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000avariant: |\u000a  dark",
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "variant-literal-eof-nl",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000avariant: |\u000a  dark\u000a",
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "slug-literal",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: |\u000a  my-slug\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "variant-null",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: null"
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "variant-echoes-create-error",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: \"Error: Unable to create file: /redacted/generated/file.css\\n\\nCaused by:\\n    File name too long (os error 63)\""
+        ]
+      ],
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "null-description",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "description: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"",
+          "description:"
+        ]
+      ],
+      "expect": "EMPTY_VALUE"
+    },
+    {
+      "id": "null-variant",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant:"
+        ]
+      ],
+      "expect": "EMPTY_VALUE"
+    },
+    {
+      "id": "unknown-key-nested",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "extra:\u000a  nested: x\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "EMPTY_VALUE"
+    },
+    {
+      "id": "dup-top-key",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dracula\"\u000aname: \"Dracula\""
+        ]
+      ],
+      "expect": "DUPLICATE_KEY"
+    },
+    {
+      "id": "dup-unknown-key",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "extra: x\u000aextra: y\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "DUPLICATE_KEY"
+    },
+    {
+      "id": "dup-palette-key",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#282a36\"\u000a  base00: \"#282a36\""
+        ]
+      ],
+      "expect": "DUPLICATE_KEY"
+    },
+    {
+      "id": "dup-palette-block",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000apalette:\u000a  extra: \"#abcdef\"\u000a",
+      "expect": "DUPLICATE_KEY"
+    },
+    {
+      "id": "missing-name",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"\u000a",
+          ""
+        ]
+      ],
+      "expect": "REQUIRED_KEY_MISSING"
+    },
+    {
+      "id": "missing-author",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "author: \"clach04 (https://github.com/clach04)\"\u000a",
+          ""
+        ]
+      ],
+      "expect": "REQUIRED_KEY_MISSING"
+    },
+    {
+      "id": "missing-system",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"\u000a",
+          ""
+        ]
+      ],
+      "expect": "SYSTEM_MISSING"
+    },
+    {
+      "id": "missing-palette",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000a",
+      "expect": "PALETTE_MISSING"
+    },
+    {
+      "id": "system-Base16",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: \"Base16\""
+        ]
+      ],
+      "expect": "SYSTEM_UNSUPPORTED"
+    },
+    {
+      "id": "system-BASE16",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: \"BASE16\""
+        ]
+      ],
+      "expect": "SYSTEM_UNSUPPORTED"
+    },
+    {
+      "id": "system-tinted8",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: \"tinted8\""
+        ]
+      ],
+      "expect": "SYSTEM_UNSUPPORTED"
+    },
+    {
+      "id": "system-empty-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: \"\""
+        ]
+      ],
+      "expect": "SYSTEM_UNSUPPORTED"
+    },
+    {
+      "id": "system-trailing-space-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: \"base16 \""
+        ]
+      ],
+      "expect": "SYSTEM_UNSUPPORTED"
+    },
+    {
+      "id": "system-leading-space-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: \" base16\""
+        ]
+      ],
+      "expect": "SYSTEM_UNSUPPORTED"
+    },
+    {
+      "id": "system-word",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: word"
+        ]
+      ],
+      "expect": "SYSTEM_UNSUPPORTED"
+    },
+    {
+      "id": "system-echoes-os-error",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: \"File name too long (os error 63)\""
+        ]
+      ],
+      "expect": "SYSTEM_UNSUPPORTED"
+    },
+    {
+      "id": "variant-Dark",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: \"Dark\""
+        ]
+      ],
+      "expect": "VARIANT_UNSUPPORTED"
+    },
+    {
+      "id": "variant-LIGHT",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: \"LIGHT\""
+        ]
+      ],
+      "expect": "VARIANT_UNSUPPORTED"
+    },
+    {
+      "id": "variant-empty-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: \"\""
+        ]
+      ],
+      "expect": "VARIANT_UNSUPPORTED"
+    },
+    {
+      "id": "variant-trailing-space-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: \"dark \""
+        ]
+      ],
+      "expect": "VARIANT_UNSUPPORTED"
+    },
+    {
+      "id": "variant-leading-space-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: \" dark\""
+        ]
+      ],
+      "expect": "VARIANT_UNSUPPORTED"
+    },
+    {
+      "id": "variant-word",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: word"
+        ]
+      ],
+      "expect": "VARIANT_UNSUPPORTED"
+    },
+    {
+      "id": "variant-echoes-os-error",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: \"File name too long (os error 63)\""
+        ]
+      ],
+      "expect": "VARIANT_UNSUPPORTED"
+    },
+    {
+      "id": "slot-removed",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+          ""
+        ]
+      ],
+      "expect": "SLOT_MISSING"
+    },
+    {
+      "id": "palette-only-comments",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  # no slots\u000a",
+      "expect": "SLOT_MISSING"
+    },
+    {
+      "id": "b24-missing-base17",
+      "base": "base24/dracula.yaml",
+      "replace": [
+        [
+          "  base17: \"#ff92df\"  # Bright Magenta / Bright Purple\u000a",
+          ""
+        ]
+      ],
+      "expect": "SLOT_MISSING"
+    },
+    {
+      "id": "system-base24-on-base16-palette",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: \"base24\""
+        ]
+      ],
+      "expect": "SLOT_MISSING"
+    },
+    {
+      "id": "eight-digit",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#282a36ff\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "double-hash",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"##282a36\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "nonascii-hexlike",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#\uff12\uff18\uff12a36\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-empty",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-hash-only",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-1",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#1\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-2",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#12\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-4",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#1234\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-5",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#12345\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-7",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#1234567\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-4-nohash",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"1234\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-5-nohash",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"12345\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-7-nohash",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"1234567\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-pad-lead",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \" #282a36\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-pad-trail",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#282a36 \""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-space-after-hash",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"# 282a36\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-0x",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"0x282a36\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-nonhex",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#g82a36\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "hex-tab-inside",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#282a36\u0009\""
+        ]
+      ],
+      "expect": "HEX_INVALID"
+    },
+    {
+      "id": "slug-slash",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: \"a/b\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "SLUG_FORM"
+    },
+    {
+      "id": "slug-dotdot",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: \"../x\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "SLUG_FORM"
+    },
+    {
+      "id": "slug-underscore-upper",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: \"My_Theme\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "SLUG_FORM"
+    },
+    {
+      "id": "slug-space",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: \"a b\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "SLUG_FORM"
+    },
+    {
+      "id": "slug-dot",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: \"a.b\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "SLUG_FORM"
+    },
+    {
+      "id": "slug-unicode",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: \"caf\u00e9\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "SLUG_FORM"
+    },
+    {
+      "id": "slug-empty",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: \"\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "SLUG_FORM"
+    },
+    {
+      "id": "base16-with-base12",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a  base12: \"#abcdef\"\u000a",
+      "expect": "SLOT_UNEXPECTED"
+    },
+    {
+      "id": "lowercase-key-extra",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a  base0d: \"#abcdef\"\u000a",
+      "expect": "SLOT_UNEXPECTED"
+    },
+    {
+      "id": "palette-extra-valid",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a  extra: \"#abcdef\"\u000a",
+      "expect": "SLOT_UNEXPECTED"
+    },
+    {
+      "id": "palette-key-named-name",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a  name: \"#abcdef\"\u000a",
+      "expect": "SLOT_UNEXPECTED"
+    },
+    {
+      "id": "no-hash",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"282a36\""
+        ]
+      ],
+      "expect": "HEX_SPELLING"
+    },
+    {
+      "id": "shorthand",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#abc\""
+        ]
+      ],
+      "expect": "HEX_SPELLING"
+    },
+    {
+      "id": "plain-hex-letters",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: abcdef"
+        ]
+      ],
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "plain-hex-digits",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: 282836"
+        ]
+      ],
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "plain-hex-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: #282a36"
+        ]
+      ],
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "single-quoted-hex",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: '#282a36'"
+        ]
+      ],
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "palette-dq-trailing-garbage",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#282a36\"x"
+        ]
+      ],
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "palette-dq-unterminated",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: \"#282a36"
+        ]
+      ],
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "palette-empty-value",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00: "
+        ]
+      ],
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "anchor-alias",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  alias: &a \"#282a36\"\u000a  base00: *a"
+        ]
+      ],
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "palette-inline-flow",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette: { base00: \"#282a36\", base01: \"#21222c\", base02: \"#44475A\", base03: \"#6272a4\", base04: \"#9ea8c7\", base05: \"#f8f8f2\", base06: \"#f8f8f2\", base07: \"#ffffff\", base08: \"#ff5555\", base09: \"#FFB86C\", base0A: \"#f1fa8c\", base0B: \"#50fa7b\", base0C: \"#8be9fd\", base0D: \"#bd93f9\", base0E: \"#ff79c6\", base0F: \"#993333\" }\u000a",
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "palette-hash-nospace",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"  #",
+          "  base00: \"#282a36\"#"
+        ]
+      ],
+      "expect": "PALETTE_VALUE_FORM"
+    },
+    {
+      "id": "name-long-300",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+        ]
+      ],
+      "expect": "filesystem"
+    },
+    {
+      "id": "slug-long-300",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "filesystem"
+    },
+    {
+      "id": "baseline",
+      "base": "base16/dracula.yaml",
+      "replace": [],
+      "expect": "accepted"
+    },
+    {
+      "id": "crlf",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000d\u000aname: \"Dracula\"\u000d\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000d\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000d\u000avariant: \"dark\"\u000d\u000a# Subset of base24 Dracula\u000d\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000d\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000d\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000d\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000d\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000d\u000apalette:\u000d\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000d\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000d\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000d\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000d\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000d\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000d\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000d\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000d\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000d\u000a  base08: \"#ff5555\"  # Red\u000d\u000a  base09: \"#FFB86C\"  # Orange\u000d\u000a  base0A: \"#f1fa8c\"  # Yellow\u000d\u000a  base0B: \"#50fa7b\"  # Green\u000d\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000d\u000a  base0D: \"#bd93f9\"  # Blue\u000d\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000d\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000d\u000a",
+      "expect": "accepted"
+    },
+    {
+      "id": "crlf-mixed",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000d\u000aname: \"Dracula\"\u000d\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000d\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "accepted"
+    },
+    {
+      "id": "crlf-block",
+      "base": "base16/ascendancy.yaml",
+      "text": "system: \"base16\"\u000d\u000aname: \"Ascendancy\"\u000d\u000aauthor: \"EmergentMind (https://github.com/emergentmind/ascendancy-scheme)\"\u000d\u000adescription: |\u000d\u000a  The Ascendancy colour scheme aims to provide a comfortable spectrum of\u000d\u000a  background and foreground shades complimented by soft but regal colours. The\u000d\u000a  palette has a small bias towards golden colours without creating a sense of\u000d\u000a  washed out overexposure.\u000d\u000avariant: \"dark\"\u000d\u000apalette:\u000d\u000a  base00: \"#282828\"\u000d\u000a  base01: \"#212F3D\"\u000d\u000a  base02: \"#504945\"\u000d\u000a  base03: \"#928374\"\u000d\u000a  base04: \"#BDAE93\"\u000d\u000a  base05: \"#D5C7A1\"\u000d\u000a  base06: \"#EBDBB2\"\u000d\u000a  base07: \"#fbf1c7\"\u000d\u000a  base08: \"#D05000\"\u000d\u000a  base09: \"#FE8019\"\u000d\u000a  base0A: \"#FFCC1B\"\u000d\u000a  base0B: \"#B8BB26\"\u000d\u000a  base0C: \"#8F3F71\"\u000d\u000a  base0D: \"#458588\"\u000d\u000a  base0E: \"#FABD2F\"\u000d\u000a  base0F: \"#B59B4D\"\u000d\u000a",
+      "expect": "accepted"
+    },
+    {
+      "id": "missing-variant",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"\u000a",
+          ""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "variant-plain-light",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: light"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "variant-plain-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: dark # c"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "doc-start",
+      "base": "base16/dracula.yaml",
+      "text": "---\u000asystem: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "accepted"
+    },
+    {
+      "id": "block-literal-desc",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "description: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"",
+          "description: |\u000a  line one\u000a  line two"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "block-hash-content",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "description: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"",
+          "description: |\u000a  # content\u000a  line two"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "comment-in-block-less-indented-trailing",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "description: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"",
+          "description: |\u000a    line one\u000a  # c"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "unknown-literal",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "extra: |\u000a  line one\u000a  line two\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "inline-comment-top-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dracula\" # c"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "tab-before-comment-top",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dracula\"\u0009# c"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "trailing-space-after-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dracula\"  "
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "trailing-tab-after-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dracula\"\u0009"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "plain-name-space-hash",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: Dracula # c"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "astral-in-name",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dracula \ud83d\ude00\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "bom-in-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\ufeffcula\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "tab-in-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"Dra\u0009cula\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "name-empty",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "hostile-name",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"x </style><script>alert(1)</script> ' # : ;\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "palette-comment-after-key",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "palette:",
+          "palette: # c"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "palette-gap-two",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "  base00:  \"#282a36\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "tab-before-comment",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"  #",
+          "  base00: \"#282a36\"\u0009#"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "comment-col0-in-palette",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "# c\u000a  base00: \"#282a36\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "blank-line-in-palette",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "  base00: \"#282a36\"",
+          "\u000a  base00: \"#282a36\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "midfile-bom",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "# Subset of",
+          "# Sub\ufeffset of"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "unknown-key-scalar",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "extra: \"value\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "key-1024",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk: \"x\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "name-long-300-with-slug",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+        ],
+        [
+          "system: \"base16\"",
+          "slug: \"my-slug\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "value-long-dq",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+        ],
+        [
+          "system: \"base16\"",
+          "slug: \"my-slug\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "slug-canonical",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: \"my-slug\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "b24-baseline",
+      "base": "base24/dracula.yaml",
+      "replace": [],
+      "expect": "accepted"
+    },
+    {
+      "id": "b24-missing-variant",
+      "base": "base24/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"\u000a",
+          ""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "dup-case-differs",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "Name: \"Other\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "top-key-named-base00",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "base00: \"#abcdef\"\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "system-plain-trail-tab",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "system: base16\u0009"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "variant-plain-trail-tab",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: dark\u0009"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "variant-plain-trail-space-tab",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "variant: \"dark\"",
+          "variant: dark \u0009 "
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "slug-plain-trail-tab",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "system: \"base16\"",
+          "slug: my-slug\u0009\u000asystem: \"base16\""
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "plain-name-ending-space-colon",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: Dracula :\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "VALUE_FORM"
+    },
+    {
+      "id": "indent-mixed",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: \"Dracula\"\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a   base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "INDENTATION"
+    },
+    {
+      "id": "plain-name-quote-mid",
+      "base": "base16/dracula.yaml",
+      "text": "system: \"base16\"\u000aname: Dra\"cula\u000aauthor: \"clach04 (https://github.com/clach04)\"\u000adescription: \"based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\"\u000avariant: \"dark\"\u000a# Subset of base24 Dracula\u000a# https://github.com/tinted-theming/base24/blob/main/styling.md\u000a# https://github.com/tinted-theming/home/blob/main/styling.md\u000a# https://github.com/chriskempson/base16/blob/main/styling.md\u000a# Typically expect order of base00-base07 (dark to light versus light to dark) to differ depending on variant\u000a# based on https://github.com/dracula/draculatheme.com/blob/main/content/spec.mdx\u000apalette:\u000a  base00: \"#282a36\"  # Default Background  # Dracula Background\u000a  base01: \"#21222c\"  # Darker Background (Darkest Gray) (Used for status bars, line number and folding marks) # Dracula Background Dark / AnsiBlack\u000a  base02: \"#44475A\"  # Selection Background (Bright Black) # Dracula Selection\u000a  base03: \"#6272a4\"  # Comments, Invisibles, Line Highlighting (Grey) # Dracula Current Line / Comment / AnsiBrightBlack\u000a  base04: \"#9ea8c7\"  # Dark/Light Foreground (Used for status bars) (Light Grey) # NOT a Dracula color!\u000a  base05: \"#f8f8f2\"  # Default Foreground, Caret, Delimiters, Operators (Foreground) # Dracula Foreground / AnsiWhite\u000a  base06: \"#f8f8f2\"  # Dark Foreground (Not often used) (White)  # TODO review, currently same as above base05\u000a  base07: \"#ffffff\"  # Dark Background (Not often used) (Bright White) # Dracula AnsiBrightWhite\u000a  # ANSI8 (without Black/White) + 2 (Orange + Dark Red/Brown)\u000a  base08: \"#ff5555\"  # Red\u000a  base09: \"#FFB86C\"  # Orange\u000a  base0A: \"#f1fa8c\"  # Yellow\u000a  base0B: \"#50fa7b\"  # Green\u000a  base0C: \"#8be9fd\"  # Aqua / Cyan\u000a  base0D: \"#bd93f9\"  # Blue\u000a  base0E: \"#ff79c6\"  # Purple / Magenta\u000a  base0F: \"#993333\"  # Dark Red or Brown, derive dark red from base08 - derived via https://www.color-hex.com/color/ff5555\u000a",
+      "expect": "accepted"
+    },
+    {
+      "id": "bom-in-plain",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: Dra\ufeffcula"
+        ]
+      ],
+      "expect": "accepted"
+    },
+    {
+      "id": "nbsp-in-plain",
+      "base": "base16/dracula.yaml",
+      "replace": [
+        [
+          "name: \"Dracula\"",
+          "name: Dra\u00a0cula"
+        ]
+      ],
+      "expect": "accepted"
+    }
+  ],
+  "fuzz": {
+    "seed": 20261017,
+    "count": 800,
+    "editsPerCase": [
+      1,
+      3
+    ],
+    "tokens": [
+      "\"",
+      "'",
+      "#",
+      " #",
+      ": ",
+      "/",
+      "\u0009",
+      "\u000d",
+      "\u000d\u000a",
+      "\u000a  ",
+      "\u0085",
+      "\u2028",
+      "\u2029",
+      "\ufeff",
+      "\u0000",
+      "\u0001",
+      "\u007f",
+      "\u0080",
+      "\u00a0",
+      "\ufffe",
+      "---",
+      "...",
+      "- ",
+      "? ",
+      "&a ",
+      "*a",
+      "!!str ",
+      "|",
+      ">",
+      "|-",
+      "{",
+      "}",
+      "[",
+      "]",
+      ",",
+      "%",
+      "@",
+      "`",
+      "~",
+      "\\",
+      "null",
+      "Null",
+      "true",
+      "yes",
+      "no",
+      "on",
+      "inf",
+      "nan",
+      ".inf",
+      "0",
+      "1e5",
+      "base0D",
+      "base12",
+      "variant: light",
+      "variant: dark",
+      "variant: |",
+      "system: |",
+      "system: \"base24\"",
+      "name: \"x\"",
+      "slug:",
+      "slug: \"a/b\"",
+      "palette:",
+      "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      "abc",
+      "abcd",
+      "abcdef",
+      "abcdef12"
+    ],
+    "ops": [
+      "insert-line-start",
+      "insert-after-colon",
+      "insert-before-quote",
+      "insert-after-quote",
+      "insert-line-end",
+      "append-unterminated",
+      "insert-offset",
+      "delete-line",
+      "duplicate-line",
+      "swap-lines",
+      "swap-lines",
+      "swap-lines",
+      "swap-lines",
+      "swap-lines",
+      "indent-line",
+      "dedent-line",
+      "change-case",
+      "strip-quotes",
+      "single-quotes"
+    ]
+  }
+}
