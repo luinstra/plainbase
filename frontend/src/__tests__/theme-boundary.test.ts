@@ -280,9 +280,9 @@ describe("theme source boundaries", () => {
   it("the contract ships with its documentation", () => {
     const tintedRoot = path.join(repositoryRoot, "contrib", "tinted");
     expect.soft(existsSync(path.join(repositoryRoot, "docs", "theming.md")), "theming guide exists").toBe(true);
-    const releaseNotes = readFileSync(path.join(repositoryRoot, "docs", "release-notes", "unreleased.md"), "utf8");
+    const releaseNotes = readFileSync(path.join(repositoryRoot, "docs", "release-notes", "0.6.0.md"), "utf8");
     expect.soft(releaseNotes, "release notes name theme inputs").toContain("--pb-theme-");
-    expect.soft(releaseNotes, "release notes link the guide").toContain("](../theming.md");
+    expect.soft(releaseNotes, "release notes link the guide").toContain("](https://github.com/luinstra/plainbase/blob/v0.6.0/docs/theming.md)");
     const readme = readFileSync(path.join(tintedRoot, "README.md"), "utf8").toLowerCase();
     expect.soft(readme, "Tinted README is released").not.toContain("unreleased");
     expect.soft(readme, "Tinted README names the contract").not.toContain("candidate");
