@@ -50,7 +50,9 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.ApplicationStopPreparing
 import io.ktor.server.application.install
+import io.ktor.server.application.serverConfig
 import io.ktor.server.cio.CIO
+import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -63,6 +65,7 @@ import io.ktor.server.sessions.Sessions
 import io.ktor.server.sessions.cookie
 import io.ktor.server.sse.SSE
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
 import java.util.concurrent.CountDownLatch
@@ -107,33 +110,49 @@ class KtorServer(
     // Held rather than discarded, so shutdown can STOP it: on SIGTERM the teardown must drain in-flight
     // requests instead of severing them mid-write. Built here as a `val` (the engine binds at start(), not
     // at construction), which also publishes it safely to the shutdown-hook thread with no mutable state.
-    private val engine = embeddedServer(CIO, host = config.host, port = config.port) {
-        monitor.subscribe(ApplicationStopPreparing) {
-            admission.closeAdmission()
-        }
-        // Setup is before plugins, authentication and routing. Closed admission therefore has no collaborator or
-        // business-code path to resolve, including on an already-accepted keep-alive connection.
-        intercept(ApplicationCallPipeline.Setup) {
-            if (!admission.tryAdmit(context)) {
-                context.response.header(HttpHeaders.Connection, "close")
-                context.respondText(
-                    RestJson.encodeToString(
-                        ErrorEnvelope.serializer(),
-                        ErrorEnvelope(ErrorBody(ErrorCodes.SERVER_SHUTTING_DOWN, "Server is shutting down")),
-                    ),
-                    ContentType.Application.Json,
-                    HttpStatusCode.ServiceUnavailable,
-                )
-                finish()
-            } else {
-                nextReceiveObservation.getAndSet(null)?.let { observer ->
-                    context.attributes.put(RECEIVE_BODY_ENTRY_OBSERVER, observer)
-                }
-                nextStructuredChild.getAndSet(null)?.invoke(context)
+    private val engine = embeddedServer(
+        CIO,
+        serverConfig {
+            // CIO's accept job otherwise sends startup failures (such as BindException) to the global uncaught
+            // handler, while start() also throws them. Keep coroutine failures visible in this engine's error log.
+            parentCoroutineContext = CoroutineExceptionHandler { _, failure ->
+                logger.error(failure) { "HTTP engine coroutine failed" }
             }
-        }
-        plainbaseModule(routeContext, secureCookie = TransportSecurityPolicy.derive(config).secureCookie)
-    }.apply {
+            module {
+                monitor.subscribe(ApplicationStopPreparing) {
+                    admission.closeAdmission()
+                }
+                // Setup is before plugins, authentication and routing. Closed admission therefore has no collaborator or
+                // business-code path to resolve, including on an already-accepted keep-alive connection.
+                intercept(ApplicationCallPipeline.Setup) {
+                    if (!admission.tryAdmit(context)) {
+                        context.response.header(HttpHeaders.Connection, "close")
+                        context.respondText(
+                            RestJson.encodeToString(
+                                ErrorEnvelope.serializer(),
+                                ErrorEnvelope(ErrorBody(ErrorCodes.SERVER_SHUTTING_DOWN, "Server is shutting down")),
+                            ),
+                            ContentType.Application.Json,
+                            HttpStatusCode.ServiceUnavailable,
+                        )
+                        finish()
+                    } else {
+                        nextReceiveObservation.getAndSet(null)?.let { observer ->
+                            context.attributes.put(RECEIVE_BODY_ENTRY_OBSERVER, observer)
+                        }
+                        nextStructuredChild.getAndSet(null)?.invoke(context)
+                    }
+                }
+                plainbaseModule(routeContext, secureCookie = TransportSecurityPolicy.derive(config).secureCookie)
+            }
+        },
+        configure = {
+            connector {
+                host = config.host
+                port = config.port
+            }
+        },
+    ).apply {
         engineConfig.shutdownGracePeriod = STOP_GRACE_MILLIS
         engineConfig.shutdownTimeout = STOP_TIMEOUT_MILLIS
     }
