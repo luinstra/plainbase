@@ -48,6 +48,7 @@ import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IdResolution
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageRootResolver
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthor
 import com.plainbase.domain.service.ProposalAuthorLabeler
@@ -542,7 +543,7 @@ private class DiscussionFacadeFixture(
         clock = object : Clock {
             override fun now(): Instant = Instant.fromEpochMilliseconds(1_700_000_000_000)
         },
-        enforced = true,
+        mode = PolicyMode.ENFORCED,
         editableOf = { registry.byName(it)?.editable == true },
         objectBackendOf = { registry.byName(it)?.backend is RootBackend.Object },
         discussionsEnabledOf = discussionsEnabledOf ?: { registry.byName(it)?.discussionsEnabled == true },

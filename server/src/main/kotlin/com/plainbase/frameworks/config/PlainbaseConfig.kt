@@ -34,12 +34,14 @@ data class PlainbaseConfig(
     val storage: StorageConfig = StorageConfig(),
     /** Source of [contentDir], used to warn when object mode ignores an explicitly set CONTENT_DIR. */
     val contentDirSource: ConfigSource = ConfigSource.DEFAULT,
+    val profile: DeploymentProfile = DeploymentProfile.WORKSPACE,
     /**
      * Parsed `roots {}` topology, or the synthesized back-compat main root for a legacy config. The default runs only
      * at construction; `copy(contentDir = ...)` or `copy(storage = ...)` retains the prior topology.
      */
-    val roots: RootsConfig = RootsConfig.synthesized(contentDir, storage),
+    val roots: RootsConfig = RootsConfig.synthesized(contentDir, storage, profile),
     val theme: ThemeConfig = ThemeConfig(),
+    val site: SiteConfig = SiteConfig(),
 ) {
     /** Path of the app-owned SQLite database. */
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")

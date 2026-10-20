@@ -24,8 +24,11 @@ in the container, independent of the ordinary log level.
 
 ## Env-wins-over-file, restart-only
 
-Environment variables always win over `DATA_DIR/plainbase.conf` (HOCON, ADR-0009): the file only
-supplies values env omits. Secrets (`PLAINBASE_PROXY_SECRET`) belong in env, not the file - the
+Environment variables win over `DATA_DIR/plainbase.conf` (HOCON, ADR-0009): the file only
+supplies values env omits. `PLAINBASE_PROFILE` only enables reader mode: either env `reader` or file
+`profile = reader` selects it. Unset or blank env leaves the file in control; any other non-blank env value,
+including `workspace`, refuses configuration loading.
+Secrets (`PLAINBASE_PROXY_SECRET`) belong in env, not the file - the
 file path exists for completeness, not as the recommended place for a secret. Config loads once at
 boot; every key here is restart-only, there is no hot reload.
 
@@ -48,6 +51,10 @@ is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUS
 |---|---|---|---|
 | `CONTENT_DIR` | `contentDir` | `./content` | ConfigDecoder.kt |
 | `DATA_DIR` | (env/default only, never file) | `./data` | ConfigValuePolicy.kt |
+| `PLAINBASE_PROFILE` | `profile` | unset or blank: the file decides | ConfigDecoder.kt (trimmed, case-insensitive `reader` enables reader mode even with a missing file, absent key or file `workspace`; any other non-blank value refuses) |
+| - (file) | `profile` | `workspace` when absent and env does not select reader | ConfigDecoder.kt (`workspace` or `reader`, case-insensitive; file `reader` enables reader mode; file `workspace` cannot override env `reader`; blank, null and non-string values refuse); ConfigLoader.kt (`readOperatorFile`: literal only, `${...}` substitutions refuse; strict regular-file read, following symlinks to regular files) |
+| - (file only) | `site.canonicalOrigin` | none | ConfigDecoder.kt (quoted canonical `"https://host[:port]"`, lower-case host, no path or default `:443`, port 1-65535 without leading zeros; validated under either profile) |
+| - (file only) | `site.name` | none | ConfigDecoder.kt (trimmed, non-blank, no ISO control characters) |
 | `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`) | ConfigDecoder.kt |
 | `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`) | ConfigDecoder.kt |
 | `PLAINBASE_LOG_LEVEL` | - | `INFO` | `logback.xml:8-9` (`${PLAINBASE_LOG_LEVEL:-INFO}`; **not** a `PlainbaseConfig` field) |
@@ -75,6 +82,11 @@ is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUS
 | `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | ConfigDecoder.kt |
 | - (file only) | `theme.light` (CSS or scheme file) | bundled light definition | ConfigDecoder.kt |
 | - (file only) | `theme.dark` (CSS or scheme file) | bundled dark definition | ConfigDecoder.kt |
+
+An absent `plainbase.conf` loads defaults, with reader mode enabled when `PLAINBASE_PROFILE=reader`.
+Either source can enable reader mode; neither can turn it off. Env unset or blank and an absent file key select workspace.
+A directory, dangling symlink or unreadable operator file refuses configuration loading under either profile.
+A symlink to a regular file, including a file outside `DATA_DIR`, is followed. Other keys still support HOCON substitutions.
 
 Any `storage.object.*` key set while `storage.backend=local` is ignored with a single startup warning
 that names the keys (a shared `plainbase.conf` across a local and an object deploy stays legal). In
@@ -151,15 +163,17 @@ env-var grammar for it (a `plainbase root add/remove/list` CLI manages a second,
 instead - see [The CLI and the two files](#the-cli-and-the-two-files) below) - and like every key it
 is restart-only.
 
+Workspace example:
+
 ```hocon
 roots {
   docs    { path = "/home/me/docs" }                    # editable=true, history=auto by default
-  memoria { path = "/home/me/dev/memoria/.crew" }       # editable=false, history=off by default
+  memoria { path = "/home/me/dev/memoria/docs" }        # editable=false, history=off by default
   notes   { path = "/home/me/notes", editable = true }
 }
 ```
 
-Per-root keys:
+Per-root keys with workspace defaults:
 
 | Key | Meaning | Default (`docs`) | Default (extras) |
 |---|---|---|---|
@@ -171,6 +185,10 @@ Per-root keys:
 | `includes` | optional list of JDK glob patterns selecting files; omitted keeps the legacy default, while `[]` selects no files | omitted | omitted |
 | `excludes` | list of JDK glob patterns subtracted from the selected files | `[]` | `[]` |
 | `folderLabels` | exact NFC-normalized relative folder paths mapped to display labels; labels do not change URLs or `_folder.yaml` | `{}` | `{}` |
+
+Under `profile = reader`, every root defaults to `editable = false`, `history = off`, and
+`discussionsEnabled = false`. Explicit capabilities that contradict these reader settings are refused,
+whether declared in `plainbase.conf` or managed `roots.conf`.
 
 Root content filtering is evaluated at boot and applies consistently to scans, filesystem reads and writes, watches,
 index publication, durable identity resolution, and search. Patterns use `/` separators, are relative, and cannot

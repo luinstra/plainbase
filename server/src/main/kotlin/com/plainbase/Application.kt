@@ -36,6 +36,7 @@ import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.ConfigBootInspector
 import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.ConfigValuePolicy
+import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.TransportSecurityPolicy
@@ -51,6 +52,7 @@ import com.plainbase.frameworks.koin.createRepositoryModule
 import com.plainbase.frameworks.koin.createRestModule
 import com.plainbase.frameworks.koin.createSearchModule
 import com.plainbase.frameworks.koin.indexModule
+import com.plainbase.frameworks.koin.readerModules
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
 import com.plainbase.frameworks.ktor.RouteContext
@@ -157,14 +159,16 @@ private fun runOwnedServer(
             GitMaintenanceTasks().also(resources::ownMaintenance)
         }
         app.modules(
-            module { single { config } },
-            createRepositoryModule(runOpeners.openDriver, control.closeDriver, resources),
-            securityModule,
-            indexModule,
-            checkpointModule,
-            createSearchModule(runOpeners.openSearch, control.closeSearch, resources),
-            createDiscussionModule(resources),
-            createRestModule(resources, control.afterRouteContextBuilt, control.buildRouteContext),
+            listOf(
+                module { single { config } },
+                createRepositoryModule(runOpeners.openDriver, control.closeDriver, resources),
+                securityModule,
+                indexModule,
+                checkpointModule,
+                createSearchModule(runOpeners.openSearch, control.closeSearch, resources),
+                createDiscussionModule(resources),
+                createRestModule(resources, control.afterRouteContextBuilt, control.buildRouteContext),
+            ) + readerModules(config),
         )
         val koin = app.koin
         // THE BOOT GATE, consumed in stages. The gate itself - `evaluateBootGate` - is the ONE function
@@ -208,6 +212,7 @@ private fun runOwnedServer(
         if (ownedLock == null) {
             refuseServe(output, "another Plainbase process is holding ${config.dataDir} - stop it before starting a second instance")
         }
+        refuseFirst(ConfigBootInspector.readerDataDirRefusals(config), TOPOLOGY_REFUSAL_KINDS, output)
         // Everything past the lock runs INSIDE the try/finally so the lock ALWAYS releases - including a
         // prepare() failure (a forced-on Git hitting a read-only/disk-full content dir, or a `git init` fault),
         // which must surface as the same actionable `serve:` message as gateCheck(), never a raw stack trace
@@ -605,6 +610,8 @@ val TOPOLOGY_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(
     BootRefusal.Kind.ROOT_PAIR,
     BootRefusal.Kind.ROOT_VS_DATA_DIR,
     BootRefusal.Kind.OBJECT_KEYS,
+    BootRefusal.Kind.READER_PROFILE,
+    BootRefusal.Kind.READER_DATA_DIR,
 )
 
 val BIND_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.BIND_GUARD)
@@ -798,12 +805,12 @@ private fun Set<RootName>.sortedNames(): String = map { it.value }.sorted().join
 
 /**
  * The single rev-3.4 backup-guidance WARN (pure accessor, the [TransportSecurityPolicy]
- * idiom): non-null exactly when an object-mode boot runs without git history, i.e. point-in-time
+ * idiom): non-null exactly when an object-mode workspace boots without git history, i.e. point-in-time
  * content recovery is entirely the operator's backup schedule. `serve()` logs it ONCE; there is no
  * snapshot or manifest writer (backups are operator-owned by decision).
  */
 internal fun objectModeGitDisabledWarning(config: PlainbaseConfig, history: HistoryProvider): String? =
-    if (config.storage.backend == StorageBackend.OBJECT && !history.enabled) {
+    if (config.profile != DeploymentProfile.READER && config.storage.backend == StorageBackend.OBJECT && !history.enabled) {
         "object mode with git disabled: no commit-grained history; content point-in-time recovery is " +
             "your backup schedule (see the backup guidance)"
     } else {

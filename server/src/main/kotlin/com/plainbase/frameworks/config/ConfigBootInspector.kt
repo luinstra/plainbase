@@ -2,9 +2,12 @@ package com.plainbase.frameworks.config
 
 import com.plainbase.domain.discussion.isReservedTopSegment
 import com.plainbase.domain.root.BootRefusal
+import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.theming.THEMES_DIRECTORY
+import com.plainbase.frameworks.filesystem.withDirectoryStream
 import java.io.IOException
+import java.nio.file.DirectoryStream
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -24,11 +27,77 @@ internal object ConfigBootInspector {
      */
     fun bootRefusals(config: PlainbaseConfig): List<BootRefusal> =
         topologyRefusals(config) +
+            readerProfileRefusals(config) +
             listOfNotNull(
                 TransportSecurityPolicy.derive(config).bindRefusal?.let {
                     BootRefusal(BootRefusal.Kind.BIND_GUARD, emptySet(), it)
                 },
             )
+
+    /** Serving-only, under the data directory lock: root commands hold roots.lock; their shared gate is local-only. */
+    internal fun readerDataDirRefusals(
+        config: PlainbaseConfig,
+        readNames: (DirectoryStream<Path>) -> List<String> = { stream -> stream.map { it.fileName.toString() } },
+    ): List<BootRefusal> = buildList {
+        if (config.profile != DeploymentProfile.READER || config.storage.backend != StorageBackend.OBJECT) return@buildList
+        val remedy = "begin from a DATA_DIR holding only plainbase.conf and plainbase.lock; " +
+            "if another Plainbase process is running on this DATA_DIR, " +
+            "stop it first; a plainbase.lock left by a stopped process is safe to remove"
+        fun refuse(message: String) = add(BootRefusal(BootRefusal.Kind.READER_DATA_DIR, emptySet(), "$message; $remedy"))
+        val names = try {
+            withDirectoryStream(config.dataDir, readNames)
+        } catch (failure: IOException) {
+            refuse("cannot list DATA_DIR to prove it is fresh: ${failure.message}")
+            return@buildList
+        }
+        val allowed = setOf("plainbase.conf", "plainbase.lock")
+        val strays = names.filterNot { it in allowed }.sorted()
+        if (strays.isEmpty()) return@buildList
+        val more = if (strays.size > 10) " (+${strays.size - 10} more)" else ""
+        val managed = if ("roots.conf" in strays) "; reader roots are synthesized, so roots.conf is not permitted" else ""
+        refuse("DATA_DIR is not fresh: ${strays.take(10).joinToString(", ")}$more$managed")
+    }
+
+    private fun readerProfileRefusals(config: PlainbaseConfig): List<BootRefusal> = buildList {
+        if (config.profile != DeploymentProfile.READER) return@buildList
+        fun refuse(message: String) = add(BootRefusal(BootRefusal.Kind.READER_PROFILE, emptySet(), message))
+        if (config.git.enabled == true) refuse("profile = reader requires PLAINBASE_GIT_ENABLED / git.enabled to be false")
+        if (config.auth.mode != AuthMode.OFF) refuse("profile = reader requires PLAINBASE_AUTH_MODE / auth.mode to be off")
+        if (config.auth.insecureHttp) {
+            refuse("profile = reader requires PLAINBASE_INSECURE_HTTP / auth.insecureHttp to be false")
+        }
+        if (config.auth.trustedProxyCidrs.isNotEmpty()) {
+            refuse("profile = reader requires PLAINBASE_TRUSTED_PROXY / auth.trustedProxy to be empty")
+        }
+        if (config.auth.proxySecret != null) {
+            refuse("profile = reader requires PLAINBASE_PROXY_SECRET / auth.proxySecret to be absent")
+        }
+        config.roots.list.forEach { root ->
+            val fields = buildList {
+                if (root.editable) add("editable = true")
+                if (root.discussionsEnabled) add("discussionsEnabled = true")
+                if (root.history != HistoryMode.OFF) add("history = ${root.history.name.lowercase()}")
+            }
+            if (fields.isNotEmpty()) {
+                add(
+                    BootRefusal(
+                        BootRefusal.Kind.READER_PROFILE,
+                        setOf(root.name),
+                        "roots.${root.name.value} contradicts profile = reader: ${fields.joinToString(", ")}",
+                    ),
+                )
+            }
+        }
+        if (config.storage.backend == StorageBackend.OBJECT) {
+            if (config.storage.prefixDeclaredInFile) {
+                refuse(
+                    "profile = reader requires an environment prefix: remove storage.object.prefix from plainbase.conf; " +
+                        "set PLAINBASE_S3_PREFIX",
+                )
+            }
+            if (config.storage.prefix.isEmpty()) refuse("profile = reader requires a non-empty prefix: set PLAINBASE_S3_PREFIX")
+        }
+    }
 
     /** Emits filesystem observations in their established order and delegates pure warning text to its owner. */
     fun rootsWarnings(config: PlainbaseConfig): List<String> = buildList {

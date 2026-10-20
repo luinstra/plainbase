@@ -8,6 +8,7 @@ import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.ProposalService
@@ -181,7 +182,7 @@ private class GuardedTestGraph(
         audit = harness.auditRepository,
         idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
         clock = kotlin.time.Clock.System,
-        enforced = false,
+        mode = PolicyMode.OPEN,
         editableOf = { harness.rootRegistry.byName(it)?.editable == true },
         discussionsEnabledOf = { harness.rootRegistry.byName(it)?.discussionsEnabled == true },
     )

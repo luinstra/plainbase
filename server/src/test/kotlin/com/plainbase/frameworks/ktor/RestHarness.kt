@@ -8,6 +8,7 @@ import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.PageService
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
@@ -198,7 +199,7 @@ fun IndexHarness.testRouteContext(
         audit = auditRepository,
         idProvider = UuidV7IdProvider(),
         clock = authClock,
-        enforced = enforced,
+        mode = if (enforced) PolicyMode.ENFORCED else PolicyMode.OPEN,
         editableOf = { rootRegistry.byName(it)?.editable == true },
         discussionsEnabledOf = { rootRegistry.byName(it)?.discussionsEnabled == true },
     )

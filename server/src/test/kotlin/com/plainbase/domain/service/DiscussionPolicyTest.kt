@@ -50,7 +50,7 @@ class DiscussionPolicyTest : FunSpec({
             val policy = PolicyService(
                 roles, SqlDelightApiTokenRepository(db), audit,
                 IdProvider { PageId.of("0190aaaa-bbbb-7ccc-8ddd-%012d".format(serial++))!! },
-                clock, enforced = true,
+                clock, mode = PolicyMode.ENFORCED,
                 discussionsEnabledOf = { true },
             )
             roles.upsert("builtin", "owner", Role.VIEWER, clock.now())
@@ -79,7 +79,7 @@ class DiscussionPolicyTest : FunSpec({
             val policy = PolicyService(
                 roles, tokens, audit,
                 IdProvider { PageId.require("0190aaaa-bbbb-7ccc-8ddd-%012d".format(serial++)) },
-                clock, enforced = true,
+                clock, mode = PolicyMode.ENFORCED,
                 discussionsEnabledOf = { true },
             )
             listOf("viewer" to Role.VIEWER, "editor" to Role.EDITOR, "admin" to Role.ADMIN).forEach { (id, role) ->
@@ -126,7 +126,7 @@ class DiscussionPolicyTest : FunSpec({
             val policy = PolicyService(
                 SqlDelightRoleRepository(db), tokens, audit,
                 IdProvider { PageId.require("0190aaaa-bbbb-7ccc-8ddd-%012d".format(serial++)) },
-                clock, enforced = true,
+                clock, mode = PolicyMode.ENFORCED,
                 discussionsEnabledOf = { true },
             )
             fun agent(mode: AgentMode): Principal.Agent {
@@ -166,7 +166,7 @@ class DiscussionPolicyTest : FunSpec({
             val policy = PolicyService(
                 SqlDelightRoleRepository(db), SqlDelightApiTokenRepository(db), audit,
                 IdProvider { PageId.require("0190aaaa-bbbb-7ccc-8ddd-%012d".format(serial++)) },
-                clock, enforced = false,
+                clock, mode = PolicyMode.OPEN,
                 discussionsEnabledOf = { true },
             )
             val resource = RootedResource(root, "discussion/d")
@@ -195,7 +195,7 @@ class DiscussionPolicyTest : FunSpec({
             val policy = PolicyService(
                 SqlDelightRoleRepository(db), tokens, audit,
                 IdProvider { PageId.require("0190aaaa-bbbb-7ccc-8ddd-%012d".format(serial++)) },
-                clock, enforced = false,
+                clock, mode = PolicyMode.OPEN,
                 discussionsEnabledOf = { true },
             )
             fun agent(mode: AgentMode): Principal.Agent {
@@ -246,7 +246,7 @@ class DiscussionPolicyTest : FunSpec({
             var predicateCalls = 0
             val auditIds = TestIdProvider()
             fun policy(enforced: Boolean, editable: Boolean = true, objectBacked: Boolean = false) = PolicyService(
-                roles, tokens, audit, auditIds, clock, enforced,
+                roles, tokens, audit, auditIds, clock, if (enforced) PolicyMode.ENFORCED else PolicyMode.OPEN,
                 editableOf = { editable }, objectBackendOf = { objectBacked },
                 discussionsEnabledOf = {
                     predicateCalls++
@@ -313,7 +313,7 @@ class DiscussionPolicyTest : FunSpec({
             var predicateCalls = 0
             val auditIds = TestIdProvider()
             fun policy(enforced: Boolean) = PolicyService(
-                roles, tokens, audit, auditIds, clock, enforced,
+                roles, tokens, audit, auditIds, clock, if (enforced) PolicyMode.ENFORCED else PolicyMode.OPEN,
                 discussionsEnabledOf = {
                     predicateCalls++
                     false
@@ -353,7 +353,7 @@ class DiscussionPolicyTest : FunSpec({
             val exactPredicate: (RootName) -> Boolean = { registry.byName(it)?.discussionsEnabled == true }
             exactPredicate(RootName.require("unknown")) shouldBe false
             val defense = PolicyService(
-                roles, tokens, audit, TestIdProvider(), clock, false,
+                roles, tokens, audit, TestIdProvider(), clock, PolicyMode.OPEN,
                 editableOf = { true }, objectBackendOf = { false }, discussionsEnabledOf = exactPredicate,
             )
             defense.checkDiscussionRead(Principal.Anonymous, RootedResource(RootName.require("unknown"), "discussion/d")) shouldBe

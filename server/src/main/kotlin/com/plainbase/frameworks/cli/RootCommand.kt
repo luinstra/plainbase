@@ -9,6 +9,7 @@ import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.config.ConfigBootInspector
 import com.plainbase.frameworks.config.ConfigLoader
+import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.ManagedRootsBackupPresentException
 import com.plainbase.frameworks.config.ManagedRootsFile
 import com.plainbase.frameworks.config.PlainbaseConfig
@@ -169,6 +170,7 @@ object RootCommand {
             backend = RootBackend.Local(path),
             editable = request.editable,
             history = request.history,
+            discussionsEnabled = config.profile != DeploymentProfile.READER,
         )
         // APPENDED, and that is Invariant R rather than an implementation detail: rank is SOURCE precedence and
         // the LOWEST index wins, so a newcomer always ranks last and can never outrank an incumbent. `root add`

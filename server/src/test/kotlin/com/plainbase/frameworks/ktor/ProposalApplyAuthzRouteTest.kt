@@ -19,6 +19,7 @@ import com.plainbase.domain.service.CreateIntent
 import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.MutatingFacade
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.ProposalFacade
@@ -62,8 +63,8 @@ import kotlin.time.Clock
 
 /**
  * PB-PROPOSE-1 P1b apply/rebase ENFORCED-MODE + correctness suite (closes hole #4 — CI/smoke run `auth.mode=off`,
- * where `checkApprove` is GATE-INVISIBLE). Every authz/correctness assertion constructs `PolicyService(enforced =
- * true)`, mirroring [ProposalAuthzRouteTest]'s `withApp` harness over [IndexHarness] + [fixedPrincipal].
+ * where `checkApprove` is GATE-INVISIBLE). Every authz/correctness assertion constructs
+ * `PolicyService(mode = PolicyMode.ENFORCED)`, mirroring [ProposalAuthzRouteTest]'s harness with [IndexHarness] + [fixedPrincipal].
  */
 class ProposalApplyAuthzRouteTest : FunSpec({
 
@@ -164,7 +165,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     harness.auditRepository,
                     com.plainbase.domain.service.UuidV7IdProvider(),
                     Clock.System,
-                    enforced = enforced,
+                    mode = if (enforced) PolicyMode.ENFORCED else PolicyMode.OPEN,
                     discussionsEnabledOf = { true },
                 )
                 val labeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
@@ -403,7 +404,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     harness.auditRepository,
                     com.plainbase.domain.service.UuidV7IdProvider(),
                     Clock.System,
-                    enforced = true,
+                    mode = PolicyMode.ENFORCED,
                     discussionsEnabledOf = { true },
                 )
             val mutate =
@@ -464,7 +465,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     harness.auditRepository,
                     com.plainbase.domain.service.UuidV7IdProvider(),
                     Clock.System,
-                    enforced = true,
+                    mode = PolicyMode.ENFORCED,
                     discussionsEnabledOf = { true },
                 )
             val proposalService =
@@ -875,7 +876,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                         harness.auditRepository,
                         com.plainbase.domain.service.UuidV7IdProvider(),
                         Clock.System,
-                        enforced = true,
+                        mode = PolicyMode.ENFORCED,
                         discussionsEnabledOf = { true },
                     )
                 val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { _, p, b, a, c -> history.commit(p, b, a, c)?.sha }

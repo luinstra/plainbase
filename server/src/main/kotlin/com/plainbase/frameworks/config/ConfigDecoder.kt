@@ -18,8 +18,11 @@ import com.typesafe.config.Config
 import com.typesafe.config.ConfigObject
 import com.typesafe.config.ConfigValue
 import com.typesafe.config.ConfigValueType
+import java.net.URI
+import java.net.URISyntaxException
 import java.nio.file.FileSystems
 import java.nio.file.Path
+import java.util.Locale
 import java.util.regex.PatternSyntaxException
 
 /** Owns typed HOCON decoding and validation, without filesystem observation or application wiring. */
@@ -34,6 +37,7 @@ internal object ConfigDecoder {
     )
 
     fun decode(env: Map<String, String>, sources: ConfigSources): PlainbaseConfig {
+        val profile = parseProfile(env, sources.operator)
         val file = sources.operator
         val managed = sources.managed
         val contentDirEnv = env["CONTENT_DIR"]
@@ -41,15 +45,19 @@ internal object ConfigDecoder {
         val insecureHttp = env.boolStrict("PLAINBASE_INSECURE_HTTP") ?: file.boolStrict("auth.insecureHttp") ?: false
         val contentDir = Path.of(contentDirEnv ?: contentDirFile ?: "./content").toAbsolutePath().normalize()
         val storage = buildStorage(env, file, insecureHttp)
-        val roots = RootsConfigParser.parse(file, managed, contentDir, storage)
-        RootsConfigParser.requireCoherentMainHistory(
-            roots,
-            env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"),
-        )
+        val roots = RootsConfigParser.parse(file, managed, contentDir, storage, profile)
+        // Reader git contradictions belong to boot inspection rather than derived root defaults.
+        if (profile == DeploymentProfile.WORKSPACE) {
+            RootsConfigParser.requireCoherentMainHistory(
+                roots,
+                env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"),
+            )
+        }
         return PlainbaseConfig(
             contentDir = contentDir,
             contentDirSource = contentDirSource(contentDirEnv, contentDirFile),
             storage = storage,
+            profile = profile,
             roots = roots,
             dataDir = ConfigValuePolicy.dataDirFrom(env),
             host = env["PLAINBASE_HOST"] ?: file.stringOrNull("host") ?: PlainbaseConfig.DEFAULT_HOST,
@@ -72,7 +80,51 @@ internal object ConfigDecoder {
             git = buildGit(env, file),
             auth = buildAuth(env, file, insecureHttp, roots),
             theme = parseTheme(file),
+            site = parseSite(file),
         )
+    }
+
+    fun parseProfile(env: Map<String, String>, file: Config): DeploymentProfile {
+        val declared = file.hasPathOrNull("profile")
+        val legalValues = "profile must be a non-blank string: workspace or reader"
+        val profile = if (!declared) {
+            DeploymentProfile.WORKSPACE
+        } else {
+            require(!file.getIsNull("profile")) { legalValues }
+            require(file.getValue("profile").valueType() == ConfigValueType.STRING) { legalValues }
+            val raw = file.getString("profile").trim()
+            DeploymentProfile.entries.firstOrNull { it.name.equals(raw, ignoreCase = true) }
+                ?: throw IllegalArgumentException("$legalValues; got '$raw'")
+        }
+        val environment = env["PLAINBASE_PROFILE"]?.trim()?.takeIf { it.isNotEmpty() }
+        if (environment != null) {
+            require(environment.equals("reader", ignoreCase = true)) {
+                "PLAINBASE_PROFILE: the only accepted value is `reader`; got '$environment'"
+            }
+        }
+        return if (environment != null) DeploymentProfile.READER else profile
+    }
+
+    private fun parseSite(file: Config): SiteConfig = SiteConfig(
+        canonicalOrigin = file.stringOrNull("site.canonicalOrigin")?.let(::parseCanonicalOrigin),
+        name = file.stringOrNull("site.name")?.let { parseDisplayName("site.name", it) },
+    )
+
+    private fun parseCanonicalOrigin(raw: String): String {
+        val message = "site.canonicalOrigin must be a canonical HTTPS origin, for example " +
+            "site.canonicalOrigin = \"https://docs.example.com\""
+        val uri = try {
+            URI(raw)
+        } catch (failure: URISyntaxException) {
+            throw IllegalArgumentException(message, failure)
+        }
+        val host = uri.host
+        require(uri.scheme == "https" && host != null) { message }
+        val port = uri.port
+        require(port == -1 || port in 1..65535) { message }
+        val canonical = "https://" + host.lowercase(Locale.ROOT) + if (port != -1 && port != 443) ":$port" else ""
+        require(raw == canonical) { message }
+        return raw
     }
 
     private fun parseTheme(file: Config): ThemeConfig {
@@ -208,6 +260,7 @@ internal object ConfigDecoder {
             region = env["PLAINBASE_S3_REGION"] ?: file.stringOrNull("storage.object.region")
                 ?: PlainbaseConfig.DEFAULT_S3_REGION,
             prefix = prefix,
+            prefixDeclaredInFile = file.hasPathOrNull("storage.object.prefix"),
             pathStyle = env.boolStrict("PLAINBASE_S3_PATH_STYLE")
                 ?: file.boolStrict("storage.object.pathStyle") ?: true,
             pollSeconds = env.positiveLongStrict("PLAINBASE_S3_POLL_SECONDS")
@@ -299,11 +352,11 @@ internal object ConfigDecoder {
 
 /** Parses one file's typed roots and keeps that parser private to the decoder. */
 private object RootsConfigParser {
-    fun parse(file: Config, managed: Config, contentDir: Path, storage: StorageConfig): RootsConfig {
+    fun parse(file: Config, managed: Config, contentDir: Path, storage: StorageConfig, profile: DeploymentProfile): RootsConfig {
         val declaredPresent = file.hasPath("roots")
-        val declared = parseRootBlock(file)
-        val managedRoots = parseRootBlock(managed)
-        if (!declaredPresent && managedRoots.isEmpty()) return RootsConfig.synthesized(contentDir, storage)
+        val declared = parseRootBlock(file, profile)
+        val managedRoots = parseRootBlock(managed, profile)
+        if (!declaredPresent && managedRoots.isEmpty()) return RootsConfig.synthesized(contentDir, storage, profile)
         require(storage.backend != StorageBackend.OBJECT) {
             "roots {} cannot be combined with storage.backend=object in this release: the bucket is the primary root's content " +
                 "authority and a roots block cannot describe it - remove the roots block to keep the object deployment"
@@ -330,7 +383,7 @@ private object RootsConfigParser {
         val fromDeclaredFile = if (declaredPresent) {
             declared
         } else {
-            listOf(RootsConfig.synthesized(contentDir, storage).primary)
+            listOf(RootsConfig.synthesized(contentDir, storage, profile).primary)
         }
         return RootsConfig.of(
             list = fromDeclaredFile + managedRoots,
@@ -352,16 +405,16 @@ private object RootsConfigParser {
         }
     }
 
-    private fun parseRootBlock(file: Config): List<Root> =
+    private fun parseRootBlock(file: Config, profile: DeploymentProfile): List<Root> =
         if (!file.hasPath("roots")) {
             emptyList()
         } else {
             file.getObject("roots").entries
                 .sortedWith(compareBy({ it.value.origin().lineNumber() }, { it.key }))
-                .map { (key, value) -> parseRoot(key, value) }
+                .map { (key, value) -> parseRoot(key, value, profile) }
         }
 
-    private fun parseRoot(key: String, value: ConfigValue): Root {
+    private fun parseRoot(key: String, value: ConfigValue, profile: DeploymentProfile): Root {
         if (PageId.of(key) != null) {
             throw IllegalArgumentException(
                 "roots.$key: a root name may not look like a page id (a 32-hex or UUID string) - " +
@@ -389,7 +442,7 @@ private object RootsConfigParser {
             ?: throw IllegalArgumentException("roots.$key.path is required and must be a non-blank directory path")
         val isPrimary = name == RootName.PRIMARY
         val history = parseHistoryMode("roots.$key.history", entry.stringOrNull("history"))
-            ?: if (isPrimary) HistoryMode.AUTO else HistoryMode.OFF
+            ?: if (isPrimary && profile == DeploymentProfile.WORKSPACE) HistoryMode.AUTO else HistoryMode.OFF
         require(isPrimary || history != HistoryMode.AUTO) {
             "roots.$key.history = auto is not allowed on an extra root: auto detects a repository and may create " +
                 "one, which Plainbase will not do in a tree it does not own. Use `native` to claim an existing " +
@@ -399,13 +452,14 @@ private object RootsConfigParser {
         return Root(
             name = name,
             backend = RootBackend.Local(Path.of(raw).toAbsolutePath().normalize()),
-            editable = entry.boolStrict("editable", "roots.$key.editable") ?: isPrimary,
+            editable = entry.boolStrict("editable", "roots.$key.editable") ?: (isPrimary && profile == DeploymentProfile.WORKSPACE),
             history = history,
             displayName = entry.stringOrNull("displayName")?.let { parseDisplayName("roots.$key.displayName", it) },
             includes = parseRootGlobs(entry, "includes", key, refuseReservedPrefix = true),
             excludes = parseRootGlobs(entry, "excludes", key).orEmpty(),
             folderLabels = parseFolderLabels(entry, key),
-            discussionsEnabled = entry.boolStrict("discussionsEnabled", "roots.$key.discussionsEnabled") ?: true,
+            discussionsEnabled = entry.boolStrict("discussionsEnabled", "roots.$key.discussionsEnabled")
+                ?: (profile == DeploymentProfile.WORKSPACE),
         )
     }
 
@@ -468,13 +522,6 @@ private object RootsConfigParser {
             ?: throw IllegalArgumentException("$key is not a valid relative folder path: '$raw'")
     }
 
-    private fun parseDisplayName(key: String, raw: String): String {
-        require(raw.none(Char::isISOControl)) { "$key may not contain ISO control characters" }
-        val value = raw.trim()
-        require(value.isNotEmpty()) { "$key must not be blank" }
-        return value
-    }
-
     private fun parseHistoryMode(key: String, raw: String?): HistoryMode? {
         val token = raw?.trim()
         if (token.isNullOrEmpty()) return null
@@ -483,6 +530,13 @@ private object RootsConfigParser {
                 "Unknown $key '$token' - legal values: ${HistoryMode.entries.joinToString(", ") { it.name.lowercase() }}",
             )
     }
+}
+
+private fun parseDisplayName(key: String, raw: String): String {
+    require(raw.none(Char::isISOControl)) { "$key may not contain ISO control characters" }
+    val value = raw.trim()
+    require(value.isNotEmpty()) { "$key must not be blank" }
+    return value
 }
 
 private fun String.toCommaList(): List<String> = split(',').map { it.trim() }.filter { it.isNotEmpty() }

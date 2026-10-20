@@ -44,14 +44,23 @@ data class RootsConfig private constructor(
             return RootsConfig(snapshot, origin, primaryDeclared, managed)
         }
 
-        /** Synthesizes the legacy primary root from the normalized content/storage values. */
-        fun synthesized(contentDir: Path, storage: StorageConfig): RootsConfig {
+        /** Synthesizes the primary root from normalized storage values and profile defaults. */
+        fun synthesized(contentDir: Path, storage: StorageConfig, profile: DeploymentProfile): RootsConfig {
             val backend = when (storage.backend) {
                 StorageBackend.LOCAL -> RootBackend.Local(contentDir)
                 StorageBackend.OBJECT -> RootBackend.Object(storage.bucket.orEmpty(), storage.prefix)
             }
+            val workspace = profile == DeploymentProfile.WORKSPACE
             return of(
-                list = listOf(Root(RootName.PRIMARY, backend, editable = true, history = HistoryMode.AUTO)),
+                list = listOf(
+                    Root(
+                        RootName.PRIMARY,
+                        backend,
+                        editable = workspace,
+                        history = if (workspace) HistoryMode.AUTO else HistoryMode.OFF,
+                        discussionsEnabled = workspace,
+                    ),
+                ),
                 origin = RootsOrigin.SYNTHESIZED,
             )
         }

@@ -16,6 +16,7 @@ import com.plainbase.domain.repository.Role
 import com.plainbase.domain.repository.RoleRepository
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.UnavailableCause
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlin.time.Clock
 
 /**
@@ -32,7 +33,7 @@ import kotlin.time.Clock
  *  - **Compile-time floor:** mutating checks mint typed grants required by their writers. PolicyService is the
  *    only production mint site.
  *
- * Audit is PRE-EFFECT and MUTATING-only: `checkEdit`/`checkCreate`/`checkManage`/`checkDiscussion` write ONE `audit_log` row
+ * Outside READER, audit is PRE-EFFECT and MUTATING-only: mutating checks write ONE `audit_log` row
  * (allowed AND denied) BEFORE returning the grant / throwing; [checkRead] does NOT audit (per-request read
  * volume). The filesystem effect and the audit row cannot be one txn, so the guaranteed row is the DECISION.
  *
@@ -44,12 +45,14 @@ import kotlin.time.Clock
  * page in several roots at once - but because read policy is global and does not audit; the rooted context
  * that a decision has to be recorded against arrives through the WRITE gates.
  *
- * Mode-aware ([enforced]): under `auth.mode = off` (loopback-dev — the phase-4 plan's "open behavior") the
- * matrix is NOT consulted for humans/Anonymous — a grant is minted and a mutating decision is audited as
- * `allowed`. Discussion checks still require a live agent token and discussion mode capability. Under `builtin`/`proxy` the
- * role×action [permits] matrix decides. This
- * is a CONFIG decision, not a claim — non-escalation holds (an OFF deployment is the operator's explicit choice,
- * never a header/frontmatter input).
+ * Under [PolicyMode.OPEN], humans and Anonymous receive grants without consulting the matrix; mutating
+ * decisions are still audited. Discussion checks require a live agent token and its discussion capability.
+ * Under [PolicyMode.ENFORCED], the role×action [permits] matrix decides. The mode is a deployment decision,
+ * never a header or frontmatter claim.
+ *
+ * [PolicyMode.READER] admits READ for every principal without role or live-token lookups. Mutations are refused
+ * with one DEBUG line and no audit row, so an unauthenticated caller cannot grow `audit_log`. Discussion preview
+ * retains its topology refusal for roots with discussions disabled or an object backend.
  */
 class PolicyService(
     private val roles: RoleRepository,
@@ -57,7 +60,7 @@ class PolicyService(
     private val audit: AuditRepository,
     private val idProvider: IdProvider,
     private val clock: Clock,
-    private val enforced: Boolean,
+    private val mode: PolicyMode,
     /**
      * Whether a root permits page-mutation writes (ADR-0011 D6) - the registry's `editable` flag, wired
      * as a narrow function so this domain service never holds the registry. Fails CLOSED on an unknown
@@ -76,24 +79,24 @@ class PolicyService(
     }
 
     /**
-     * EDIT gate: mints + returns an [EditGrant] on success; records the decision row + throws on deny.
+     * EDIT gate: mints an [EditGrant] on success; workspace calls audit the decision, including denials.
      * Serves BOTH EDIT-action write classes - [WriteClass.PageEdit] and [WriteClass.AssetWrite] - and the
      * caller passes the one it means, because a per-root policy discriminates on the CLASS, not the action.
      */
     fun checkEdit(principal: Principal, writeClass: WriteClass, resource: RootedResource): EditGrant =
         gate(principal, Action.EDIT, writeClass, resource) { EditGrant() }
 
-    /** CREATE gate: mints + returns a [CreateGrant] on success; records the decision row + throws on deny. */
+    /** CREATE gate: mints a [CreateGrant] on success; workspace calls audit the decision, including denials. */
     fun checkCreate(principal: Principal, writeClass: WriteClass, resource: RootedResource): CreateGrant =
         gate(principal, Action.CREATE, writeClass, resource) { CreateGrant() }
 
-    /** MANAGE gate (rescan/reindex): mints + returns a [ManageGrant]; records the decision row + throws on deny. */
+    /** MANAGE gate (rescan/reindex): mints a [ManageGrant]; workspace calls audit the decision, including denials. */
     fun checkManage(principal: Principal): ManageGrant =
         gate(principal, Action.MANAGE, writeClass = null, resource = RootedResource(null, MANAGE_RESOURCE)) { ManageGrant() }
 
     /**
-     * APPROVE gate (the proposal status transition, P1a): mints + returns an [ApproveGrant]; records the decision
-     * row + throws on deny. ADMIN-only via the [permits] matrix (`Role.ADMIN -> true` already covers it; VIEWER/
+     * APPROVE gate: mints an [ApproveGrant]; workspace calls audit the decision, including denials.
+     * ADMIN-only via the [permits] matrix (`Role.ADMIN -> true` already covers it; VIEWER/
      * EDITOR exclude it, so an agent — PROPOSE/COMMIT -> EDITOR — can never approve its own proposal, D1).
      */
     fun checkApprove(principal: Principal, resource: String): ApproveGrant =
@@ -105,19 +108,20 @@ class PolicyService(
         facts: DiscussionFacts,
         resource: RootedResource,
     ): DiscussionGrant {
+        if (mode == PolicyMode.READER) readerDenied(principal, operation.auditAction, resource.audit)
         val action = operation.auditAction
         val writeClass = if (operation == DiscussionAction.PURGE) WriteClass.DiscussionPurge else WriteClass.Discussion
-        val mode = (principal as? Principal.Agent)?.let { apiTokens.modeOf(it.tokenId, clock.now()) }
-        val role = if (principal is Principal.Agent) mode?.toRole() else roleFor(principal)
-        if ((enforced && role == null) || (principal is Principal.Agent && mode == null)) {
+        val agentMode = (principal as? Principal.Agent)?.let { apiTokens.modeOf(it.tokenId, clock.now()) }
+        val role = if (principal is Principal.Agent) agentMode?.toRole() else roleFor(principal)
+        if ((mode == PolicyMode.ENFORCED && role == null) || (principal is Principal.Agent && agentMode == null)) {
             denied(principal, action, resource.audit, DenyReason.POLICY)
         }
         resource.root?.let { discussionTopology(it, writeClass) }?.let { denied(principal, action, resource.audit, it) }
-        if (principal is Principal.Agent && !agentCanDiscuss(mode, operation)) {
+        if (principal is Principal.Agent && !agentCanDiscuss(agentMode, operation)) {
             denied(principal, action, resource.audit, DenyReason.POLICY)
         }
-        if (enforced && !permits(role, action)) denied(principal, action, resource.audit, DenyReason.POLICY)
-        val ownership = ownershipFor(operation, role, !enforced && principal == Principal.Anonymous)
+        if (mode == PolicyMode.ENFORCED && !permits(role, action)) denied(principal, action, resource.audit, DenyReason.POLICY)
+        val ownership = ownershipFor(operation, role, mode == PolicyMode.OPEN && principal == Principal.Anonymous)
         val reliedOn = discussionReliedOn(principal, action, resource.audit, ownership, facts)
         audit.record(decisionRow(principal, action, resource.audit, allowed = true))
         return DiscussionGrant(resource.root, operation, reliedOn, ownership != DiscussionOwnership.NONE)
@@ -164,7 +168,7 @@ class PolicyService(
     }
 
     fun checkDiscussionRead(principal: Principal, resource: RootedResource, preview: Boolean = false): DenyReason? {
-        if (principal is Principal.Agent && agentModeFor(principal) == null) {
+        if (mode != PolicyMode.READER && principal is Principal.Agent && agentModeFor(principal) == null) {
             throw AccessDenied(Action.READ, resource.audit, principal)
         }
         checkRead(principal, resource.audit)
@@ -179,20 +183,19 @@ class PolicyService(
      * token at [clock]`.now()`), so [com.plainbase.frameworks.ktor.GuardedMutatingFacade] can decide direct-vs-degrade
      * (P5) WITHOUT an audit side effect — the audit fires later via `checkEdit` on the chosen branch. Reuses the SAME
      * live revoked/expired re-check [roleFor] rides; does NOT touch [audit].
+     * READER returns no mode without consulting the token store; the chosen write branch still reaches its gate.
      */
     fun agentModeFor(principal: Principal): AgentMode? =
-        (principal as? Principal.Agent)?.let { apiTokens.modeOf(it.tokenId, clock.now()) }
+        if (mode == PolicyMode.READER) null else (principal as? Principal.Agent)?.let { apiTokens.modeOf(it.tokenId, clock.now()) }
 
     /**
-     * Record a DENIED [action] decision row for [principal]/[resource], then throw [AccessDenied] — the mint-free deny
-     * for a FACADE-level gate that refuses a request WITHOUT consulting the role×action matrix. (P5 used it for the
-     * agent-create glob gate, refusing an out-of-glob create because create-apply did not yet exist; C1 added
-     * create-apply, so that path now DEGRADES to a create-proposal that applies on approval — leaving this the general
-     * facade-level deny primitive.) Audit stays in this ONE choke point: the denial records exactly one denied row,
-     * like a matrix deny, and never mints a grant the caller would then refuse.
+     * Refuse [action] for [principal]/[resource] without minting a grant. Workspace modes record one denied audit row;
+     * READER emits one DEBUG line and leaves the audit store untouched. Throws [AccessDenied].
+     * Facade-level refusals use this path without consulting the role×action matrix, keeping decision effects
+     * in the same choke point as gate refusals.
      */
     fun deny(principal: Principal, action: Action, resource: String, reason: DenyReason = DenyReason.POLICY): Nothing =
-        denied(principal, action, resource, reason)
+        if (mode == PolicyMode.READER) readerDenied(principal, action, resource) else denied(principal, action, resource, reason)
 
     /**
      * Whether [root] permits page-mutation writes - the [gate]'s EDITABLE arm as a read-only PREDICATE, minting
@@ -206,19 +209,19 @@ class PolicyService(
     fun editable(root: RootName): Boolean = editableOf(root)
 
     /**
-     * The shared mutating gate: record the ONE pre-effect decision row, then mint the grant or throw
-     * [AccessDenied]. Exactly one `audit_log` row per call, allowed or denied - the invariant the agent
-     * decide-first path and the proposal degrade both depend on.
+     * The shared mutating gate: READER refuses before any role or topology lookup and never audits.
+     * Workspace modes record one pre-effect decision row, then mint the grant or throw [AccessDenied].
+     * Exactly one `audit_log` row per workspace call, allowed or denied, preserves the agent decision contract.
      *
      * The three arms evaluate in THIS order, and the order is the decision (ADR-0011 D6):
-     *  1. **AUTHN/ROLE** (enforced modes only): an Anonymous caller, or one with no subject-role/token row,
+     *  1. **AUTHN/ROLE** ([PolicyMode.ENFORCED]): an Anonymous caller, or one with no subject-role/token row,
      *     denies with [DenyReason.POLICY] exactly as it does today. Authn precedes topology, so a root's
      *     `editable` bit can never leak to an unauthenticated prober and anonymous semantics do not change.
-     *  2. **EDITABLE** (EVERY mode, `off` included): `editable = false` is TOPOLOGY, not authorization -
-     *     gating it behind [enforced] would leave the flag unexercised in the loopback-dev default and in
+     *  2. **EDITABLE** (both workspace modes): `editable = false` is TOPOLOGY, not authorization -
+     *     limiting it to [PolicyMode.ENFORCED] would leave the flag unexercised in the loopback-dev default and in
      *     CI, which runs auth-off. A NULL root SKIPS this arm (no registered root owns the target, so there
      *     is no topology to consult - and every unrooted arm 404s before it can write).
-     *  3. **MATRIX** (enforced modes only): the role×action grid, [DenyReason.POLICY].
+     *  3. **MATRIX** ([PolicyMode.ENFORCED]): the role×action grid, [DenyReason.POLICY].
      *
      * So: enforced anonymous × non-editable root = 401 (unchanged); off-mode anyone × non-editable root =
      * 403 `root_not_editable`; enforced VIEWER × non-editable root = 403 `root_not_editable` (authenticated,
@@ -231,26 +234,36 @@ class PolicyService(
         resource: RootedResource,
         mint: () -> G,
     ): G {
+        if (mode == PolicyMode.READER) readerDenied(principal, action, resource.audit)
         val role = roleFor(principal)
-        if (enforced && role == null) denied(principal, action, resource.audit, DenyReason.POLICY)
+        if (mode == PolicyMode.ENFORCED && role == null) denied(principal, action, resource.audit, DenyReason.POLICY)
         val root = resource.root
         if (writeClass != null && writeClass.gatedByEditable && root != null && !editableOf(root)) {
             denied(principal, action, resource.audit, DenyReason.ROOT_NOT_EDITABLE)
         }
-        if (enforced && !permits(role, action)) denied(principal, action, resource.audit, DenyReason.POLICY)
+        if (mode == PolicyMode.ENFORCED && !permits(role, action)) denied(principal, action, resource.audit, DenyReason.POLICY)
         audit.record(decisionRow(principal, action, resource.audit, allowed = true))
         return mint()
     }
 
-    /** Record the DENIED decision row, then throw - the ONE deny path, so every deny audits exactly once. */
+    /** Workspace denial path: record one denied decision row, then throw. */
     private fun denied(principal: Principal, action: Action, resource: String, reason: DenyReason): Nothing {
         audit.record(decisionRow(principal, action, resource, allowed = false))
         throw AccessDenied(action, resource, principal, reason)
     }
 
-    /** OFF (loopback-dev) opens everything; enforced modes consult the role×action matrix. */
-    private fun allows(principal: Principal, action: Action): Boolean =
-        !enforced || permits(roleFor(principal), action)
+    /** DEBUG diagnostics use validated root:path or id resources and fixed labels, never user free text. */
+    private fun readerDenied(principal: Principal, action: Action, resource: String): Nothing {
+        logger.debug { "reader policy denied $action on '$resource' for ${principal::class.simpleName}" }
+        throw AccessDenied(action, resource, principal, DenyReason.POLICY)
+    }
+
+    /** OPEN bypasses the matrix, ENFORCED consults it, and READER permits only READ. */
+    private fun allows(principal: Principal, action: Action): Boolean = when (mode) {
+        PolicyMode.OPEN -> true
+        PolicyMode.ENFORCED -> permits(roleFor(principal), action)
+        PolicyMode.READER -> action == Action.READ
+    }
 
     /**
      * The role of [principal] from the DB/token row ONLY (the non-escalation guarantee), or null (→ default deny):
@@ -288,13 +301,14 @@ class PolicyService(
     }
 
     private companion object {
+        val logger = KotlinLogging.logger {}
         const val MANAGE_RESOURCE = "admin"
         const val AGENT_ISSUER = "agent"
         val STARTER_ACTIONS = setOf(DiscussionAction.RESOLVE, DiscussionAction.REOPEN, DiscussionAction.REATTACH)
 
         /**
          * VIEWER: READ + DISCUSS. EDITOR: those plus EDIT + CREATE. ADMIN: all, including PURGE, MANAGE and APPROVE.
-         * Anonymous / no-row: deny in enforced mode.
+         * Anonymous / no-row: deny under PolicyMode.ENFORCED.
          */
         fun permits(role: Role?, action: Action): Boolean = when (role) {
             null -> false
@@ -327,8 +341,8 @@ enum class DiscussionAction(val auditAction: Action) {
 }
 
 /**
- * A denied authorization decision (A3) — thrown by [PolicyService] AFTER the denied audit row is written. The
- * guarded FACADE catches it and maps it to 401 ([Principal.Anonymous] — no credential) / 403 (an
+ * A denied authorization decision. Workspace mutations record a denied audit row before throwing;
+ * reader denials leave the audit store untouched. The guarded facade maps it to 401 (Anonymous) or 403 (an
  * authenticated-but-unauthorized principal), keeping [PolicyService] transport-free. Throwing (vs a nullable
  * grant) means a caller cannot accidentally ignore a deny and still get a grant — there is no grant on this path.
  *

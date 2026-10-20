@@ -48,7 +48,7 @@ import kotlin.time.Clock
 
 /**
  * P5 ENFORCED-MODE agent direct-commit suite (the `ci-runs-auth-off-blind` rule: every authz assertion constructs
- * `PolicyService(enforced = true)` + a real `Principal.Agent`, mirroring [ProposalApplyAuthzRouteTest]'s `withApp`).
+ * `PolicyService(mode = PolicyMode.ENFORCED)` + a real `Principal.Agent`, mirroring [ProposalApplyAuthzRouteTest]'s `withApp`).
  * It proves the SAME PUT call splits two ways by the `agentDirectCommit.globs` gate (200 direct vs 202 degrade), the
  * mode gate precedes the glob gate, audit truthfulness (one row per branch, zero content mutation on a degrade), and
  * — the BLOCKING-1 guard — that the proposal-APPLY path NEVER re-enters the glob decision (the `WriteOrigin` bypass).

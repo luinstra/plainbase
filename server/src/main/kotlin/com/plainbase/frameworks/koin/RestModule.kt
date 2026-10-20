@@ -18,7 +18,6 @@ import com.plainbase.domain.service.SessionService
 import com.plainbase.domain.service.SetupService
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.domain.theming.ThemeStylesheets
-import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.ConfigValuePolicy
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalThemeStylesheets
@@ -96,8 +95,7 @@ internal fun createRestModule(
     }
     single {
         // No `Clock` Koin single exists (ApiTokenService inlines Clock.System — SecurityModule.kt:18); inline it
-        // here too, the least-surprising choice. `enforced` is auth-mode-derived: OFF (loopback-dev) opens the
-        // choke point; builtin/proxy enforce the role×action matrix.
+        // here too. The deployment profile takes precedence over workspace authentication when deriving policy.
         val registry = get<RootRegistry>()
         PolicyService(
             roles = get(),
@@ -105,7 +103,7 @@ internal fun createRestModule(
             audit = get(),
             idProvider = get(),
             clock = Clock.System,
-            enforced = get<PlainbaseConfig>().auth.mode != AuthMode.OFF,
+            mode = ConfigValuePolicy.policyMode(get()),
             // Fails CLOSED on an unknown name - a belt behind the wire-level `invalid_root` check.
             editableOf = { registry.byName(it)?.editable == true },
             objectBackendOf = { registry.byName(it)?.backend is RootBackend.Object },

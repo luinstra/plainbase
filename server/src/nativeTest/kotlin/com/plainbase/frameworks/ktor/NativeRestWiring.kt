@@ -13,6 +13,7 @@ import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.LoginService
 import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.PageService
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
@@ -164,7 +165,7 @@ fun withRestServices(
                     clock = Clock.System,
                     // Proxy mode enforces the matrix (so a no-role proxy human is denied); default BUILTIN native
                     // smokes keep the open dev behavior.
-                    enforced = authMode == AuthMode.PROXY,
+                    mode = if (authMode == AuthMode.PROXY) PolicyMode.ENFORCED else PolicyMode.OPEN,
                     discussionsEnabledOf = { rootRegistry.byName(it)?.discussionsEnabled == true },
                 )
                 // A4a auth substrate over the SAME in-memory DB (the v7 schema includes users/sessions/setup_tokens).

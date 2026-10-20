@@ -4415,11 +4415,11 @@ private val EXPECTED_SERVICE_PATHS = setOf(
     "DiscussionReadFailed.kt",
     "DiscussionReads.kt", "DiscussionReparseExecutor.kt", "DiscussionReparser.kt", "DiscussionSyncState.kt",
     "DiscussionWriter.kt", "FrontmatterPatcher.kt",
-    "IdProvider.kt", "IdResolution.kt", "IndexBuilder.kt", "IndexIdentityAssignments.kt", "IndexInputs.kt",
+    "IdLessPages.kt", "IdProvider.kt", "IdResolution.kt", "IndexBuilder.kt", "IndexIdentityAssignments.kt", "IndexInputs.kt",
     "IndexSnapshotAssembler.kt", "IndexSourceReader.kt",
     "LinkChecker.kt",
     "LinkResolver.kt", "LoginService.kt", "MutatingFacade.kt", "PageIdentityService.kt", "PageRootResolver.kt",
-    "PageService.kt", "PolicyService.kt", "ProposalAuthorLabeler.kt", "ProposalBaseReader.kt", "ProposalFacade.kt",
+    "PageService.kt", "PolicyMode.kt", "PolicyService.kt", "ProposalAuthorLabeler.kt", "ProposalBaseReader.kt", "ProposalFacade.kt",
     "ProposalIdProvider.kt", "ProposalService.kt", "ReadFacade.kt", "RebuildScheduler.kt", "RootLossClassifier.kt",
     "SearchIndexer.kt", "SearchService.kt", "SectionSplitter.kt", "SessionService.kt", "SetupService.kt",
     "SyncedDiscussionIndex.kt", "TreeBuilder.kt",
@@ -4460,6 +4460,7 @@ private val EXPECTED_INDEX_BUILDER_FIELDS = mapOf(
 )
 
 private val EXPECTED_SERVICE_NON_CLASS_DECLARATIONS = setOf(
+    "IdLessPages.kt|fun idLessPageWarning",
     "AgentDirectCommitDecision.kt|fun agentWriteDecision",
     "ApplyDisposition.kt|fun dispositionOf",
     "PageIdentityService.kt|fun requireDistinctIds",
@@ -4582,6 +4583,7 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "PageIdentityService.kt|PageIdentityService.Source",
     "PageIdentityService.kt|PageIdentityService.Assignment", "PageRootResolver.kt|PageRootResolver", "PageRootResolver.kt|RootStatus",
     "PageRootResolver.kt|ResolvedClaimants", "PageService.kt|PageService", "PageService.kt|PagePayload", "PageService.kt|PageHtmlPayload",
+    "PolicyMode.kt|PolicyMode",
     "PolicyService.kt|PolicyService", "PolicyService.kt|PolicyService.Companion", "PolicyService.kt|Action",
     "PolicyService.kt|DiscussionAction",
     "PolicyService.kt|DiscussionOwnership",
