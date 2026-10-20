@@ -9,6 +9,7 @@ import io.ktor.server.response.header
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 
+/** Serves public bundle files and the guarded shell entry point. */
 fun Route.frontendStaticRoutes(ctx: RouteContext) {
     FrontendBundle.files.filter { it != FrontendBundle.SHELL }.forEach { name ->
         // The rest of the bundle stays PUBLIC pre-login: the login view cannot render without its
@@ -21,8 +22,7 @@ fun Route.frontendStaticRoutes(ctx: RouteContext) {
     // `/index.html` is a SECOND app entry point serving the identical shell bytes, so it goes through
     // the SAME cached, guarded path `spaShellRoutes` uses rather than the bundle-file path:
     //
-    //  - A3's bare arm, because an entry point must REFUSE (421) an insecure-transport credential
-    //    rather than downgrade it to an anonymous shell. Omitting the guard here splits A3.
+    //  - The workspace entry point refuses (421) an insecure-transport credential before serving its shell.
     //  - `respondSpaShell()`, which already emits `text/html; charset=UTF-8` (the whole header
     //    mechanism: `shellSecurityHeadersPlugin` stamps the CSP trio off the CONTENT TYPE, never off
     //    a path) from `lazy`-cached bytes, and stamps no nosniff of its own because the plugin owns

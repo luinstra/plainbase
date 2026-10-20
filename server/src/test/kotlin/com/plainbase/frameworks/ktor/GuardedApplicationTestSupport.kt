@@ -38,5 +38,6 @@ internal fun RouteContext.withExtract(
         proxyIdentityHeader = proxyIdentityHeader,
         secureCookie = secureCookie,
         proxyCsrf = proxyCsrf,
+        reader = reader,
         extract = extract,
     )

@@ -1,20 +1,33 @@
 package com.plainbase
 
+import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.service.AccessDenied
 import com.plainbase.frameworks.cli.CommandOutputFixture
 import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.ktor.PrincipalExtraction
+import com.plainbase.frameworks.ktor.ReaderSurface
+import com.plainbase.frameworks.ktor.ReaderSurfaceContract
+import com.plainbase.frameworks.ktor.routeInventory
 import com.plainbase.frameworks.lifecycle.ServerRunControl
 import com.plainbase.frameworks.objectstore.FakeObjectStore
 import com.plainbase.frameworks.objectstore.ObjectContentStoreFactory
 import com.plainbase.frameworks.runtime.ServerOpeners
 import io.kotest.assertions.assertSoftly
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
+import io.ktor.server.application.ApplicationCall
+import io.mockk.Called
+import io.mockk.mockk
+import io.mockk.verify
 import java.net.ServerSocket
 import java.nio.file.Files
 import java.nio.file.Path
+import java.sql.DriverManager
 import java.util.concurrent.atomic.AtomicInteger
 
 class ReaderServeGateTest : FunSpec({
@@ -126,6 +139,66 @@ class ReaderServeGateTest : FunSpec({
                 Files.exists(world.data.resolve("plainbase.lock")) shouldBe true
                 world.bucket.listCount shouldBe 1
                 world.bucket.putCount shouldBe 0
+            }
+        }
+    }
+
+    test("reader production graph preserves the surface, release, policy and anonymous extraction without audit writes") {
+        withReader { world ->
+            world.useFakeObjectStore = true
+            var inventory: Result<Set<String>>? = null
+            var reader: Result<ReaderSurface?>? = null
+            var manage: Result<Unit>? = null
+            var extraction: Result<PrincipalExtraction>? = null
+            val call = mockk<ApplicationCall>()
+            val status = runServer(
+                world.config(),
+                world.output.output,
+                world.openers,
+                ServerRunControl(
+                    startServer = {},
+                    onRuntimeContext = { ctx ->
+                        inventory = runCatching { routeInventory(ctx) }
+                        reader = runCatching { ctx.reader }
+                        manage = runCatching {
+                            ctx.auth.admin.listRoles(Principal.Anonymous)
+                            Unit
+                        }
+                        extraction = runCatching { ctx.extract.invoke(call) }
+                    },
+                ),
+            )
+            status shouldBe 0
+            val callUntouched = runCatching { verify { call wasNot Called } }
+            val database = world.data.resolve("plainbase.db").toAbsolutePath().normalize()
+            val auditCount = DriverManager.getConnection("jdbc:sqlite:file:$database?mode=ro").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("SELECT COUNT(*) FROM audit_log").use { rows ->
+                        rows.next() shouldBe true
+                        rows.getInt(1)
+                    }
+                }
+            }
+            assertSoftly {
+                world.errors() shouldBe emptyList()
+                withClue("production reader inventory") {
+                    inventory?.exceptionOrNull() shouldBe null
+                    inventory?.getOrNull() shouldBe ReaderSurfaceContract
+                }
+                withClue("production reader release") {
+                    reader?.exceptionOrNull() shouldBe null
+                    reader?.getOrNull() shouldBe ReaderSurface(release = "r1")
+                }
+                withClue("production reader manage attempt: $manage") {
+                    (manage?.exceptionOrNull() is AccessDenied) shouldBe true
+                }
+                withClue("production reader extraction") {
+                    extraction?.exceptionOrNull() shouldBe null
+                    extraction?.getOrNull() shouldBe PrincipalExtraction.Resolved(Principal.Anonymous)
+                    (extraction?.getOrNull() as? PrincipalExtraction.Resolved)?.principal shouldBeSameInstanceAs Principal.Anonymous
+                    callUntouched.isSuccess shouldBe true
+                }
+                withClue("production reader audit count") { auditCount shouldBe 0 }
             }
         }
     }

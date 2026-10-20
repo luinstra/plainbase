@@ -4,6 +4,7 @@ import com.plainbase.domain.content.ContentPathPolicy
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
@@ -13,15 +14,20 @@ import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
+import com.plainbase.domain.service.SessionService
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.theming.BundledThemeStylesheets
 import com.plainbase.domain.theming.ThemeStylesheets
 import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.StorageBackend
+import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
+import com.plainbase.frameworks.protocol.DiscussionTransportFacade
 import com.plainbase.frameworks.runtime.HistoryProviders
 import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.RootStores
@@ -32,6 +38,7 @@ import com.plainbase.frameworks.security.ProxyCsrf
 import io.ktor.client.HttpClient
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import io.mockk.mockk
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Clock
@@ -53,6 +60,12 @@ class RestHarness(
     private val authMode: AuthMode = AuthMode.BUILTIN,
     private val proxySecret: String? = null,
     themes: ThemeStylesheets = BundledThemeStylesheets(embeddedThemeBuiltins()),
+    profile: DeploymentProfile = DeploymentProfile.WORKSPACE,
+    storage: StorageConfig = StorageConfig(),
+    discussions: DiscussionTransportFacade? = null,
+    decorateTokens: (ApiTokenService) -> ApiTokenService = { it },
+    decorateSessions: (SessionService) -> SessionService = { it },
+    context: (RouteContext) -> RouteContext = { it },
 ) : AutoCloseable {
 
     private val store = LocalContentStore(root)
@@ -82,6 +95,7 @@ class RestHarness(
     }
 
     val idMap: IdMapRepository get() = harness.idMap
+    val index: IndexHarness get() = harness
 
     /** Durable checkpoint state for route tests that prove search-only operations are read-only. */
     val checkpoints get() = harness.checkpoints
@@ -109,12 +123,19 @@ class RestHarness(
     init {
         seed(harness.idMap)
         harness.builder.rebuild()
-        services = harness.testRouteContext(
-            searchProvider = searchProvider,
-            history = history,
-            authMode = authMode,
-            proxySecret = proxySecret,
-            themes = themes,
+        services = context(
+            harness.testRouteContext(
+                searchProvider = searchProvider,
+                history = history,
+                authMode = authMode,
+                proxySecret = proxySecret,
+                themes = themes,
+                profile = profile,
+                storage = storage,
+                discussions = discussions,
+                tokens = decorateTokens(harness.apiTokens),
+                sessions = decorateSessions(harness.sessionService),
+            ),
         )
     }
 
@@ -136,6 +157,43 @@ fun restTest(
     block: suspend ApplicationTestBuilder.(RestHarness) -> Unit,
 ) {
     RestHarness(root, seed, history).use { harness ->
+        testApplication {
+            application { plainbaseModule(harness.services) }
+            block(harness)
+        }
+    }
+}
+
+/** Serves the reader profile over the same real index and search stack as [restTest]. */
+fun readerTest(
+    root: Path,
+    prefix: String = "",
+    authMode: AuthMode = AuthMode.OFF,
+    decorateTokens: (ApiTokenService) -> ApiTokenService = { it },
+    decorateSessions: (SessionService) -> SessionService = { it },
+    context: (RouteContext) -> RouteContext = { it },
+    block: suspend ApplicationTestBuilder.(RestHarness) -> Unit,
+) {
+    val storage = if (prefix.isEmpty()) {
+        StorageConfig()
+    } else {
+        StorageConfig(
+            backend = StorageBackend.OBJECT,
+            endpoint = "https://objects.invalid",
+            bucket = "reader-test",
+            prefix = prefix,
+        )
+    }
+    RestHarness(
+        root,
+        authMode = authMode,
+        profile = DeploymentProfile.READER,
+        storage = storage,
+        discussions = mockk(relaxed = true),
+        decorateTokens = decorateTokens,
+        decorateSessions = decorateSessions,
+        context = context,
+    ).use { harness ->
         testApplication {
             application { plainbaseModule(harness.services) }
             block(harness)
@@ -192,6 +250,11 @@ fun IndexHarness.testRouteContext(
     proposalRepository: com.plainbase.domain.repository.ProposalRepository = this.proposalRepository,
     authClock: Clock = Clock.System,
     themes: ThemeStylesheets = BundledThemeStylesheets(embeddedThemeBuiltins()),
+    profile: DeploymentProfile = DeploymentProfile.WORKSPACE,
+    storage: StorageConfig = StorageConfig(),
+    discussions: DiscussionTransportFacade? = null,
+    tokens: ApiTokenService = apiTokens,
+    sessions: SessionService = sessionService,
 ): RouteContext {
     val policy = PolicyService(
         roles = roleRepository,
@@ -199,7 +262,11 @@ fun IndexHarness.testRouteContext(
         audit = auditRepository,
         idProvider = UuidV7IdProvider(),
         clock = authClock,
-        mode = if (enforced) PolicyMode.ENFORCED else PolicyMode.OPEN,
+        mode = when {
+            profile == DeploymentProfile.READER -> PolicyMode.READER
+            enforced -> PolicyMode.ENFORCED
+            else -> PolicyMode.OPEN
+        },
         editableOf = { rootRegistry.byName(it)?.editable == true },
         discussionsEnabledOf = { rootRegistry.byName(it)?.discussionsEnabled == true },
     )
@@ -237,7 +304,7 @@ fun IndexHarness.testRouteContext(
         policies = policies,
     )
     val proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository)
-    val auth = authServices(policy)
+    val auth = authServices(policy, sessions)
     val serving = ServingRuntime(
         index = ObservedIndexRuntime(
             builder = builder,
@@ -262,12 +329,15 @@ fun IndexHarness.testRouteContext(
         proposalService = proposalService,
         proposalLabeler = proposalLabeler,
         agentDirectCommitGlobs = agentDirectCommitGlobs,
+        discussionFacade = discussions,
     )
     val config = PlainbaseConfig(
         contentDir = java.nio.file.Path.of("."),
         dataDir = java.nio.file.Path.of("."),
         host = "127.0.0.1",
         port = 8080,
+        profile = profile,
+        storage = storage,
         auth = AuthConfig(
             mode = authMode,
             trustedProxyCidrs = trustedProxyCidrs,
@@ -280,7 +350,7 @@ fun IndexHarness.testRouteContext(
         security = securityAssembly(
             config = config,
             policy = policy,
-            tokens = apiTokens,
+            tokens = tokens,
             auth = auth,
             proxyCsrf = proxyCsrf,
         ),
@@ -297,14 +367,17 @@ fun IndexHarness.testRouteContext(
 }
 
 /** Builds the A4a [AuthServices] over the harness's in-memory repos, sharing [policy] for the admin checkManage. */
-fun IndexHarness.authServices(policy: PolicyService): com.plainbase.frameworks.ktor.AuthServices {
+fun IndexHarness.authServices(
+    policy: PolicyService,
+    sessions: SessionService = sessionService,
+): com.plainbase.frameworks.ktor.AuthServices {
     val setup = com.plainbase.domain.service.SetupService(
         minter = com.plainbase.frameworks.security.SetupTokenMinter(com.plainbase.frameworks.security.TokenHasher()),
         hasher = com.plainbase.frameworks.security.TokenHasher(),
         setupTokens = setupTokenRepository,
         users = userRepository,
         roles = roleRepository,
-        sessions = sessionService,
+        sessions = sessions,
         passwordHasher = com.plainbase.frameworks.security.Argon2PasswordHasher(),
         idProvider = UuidV7IdProvider(),
         transactions = transactionRunner,
@@ -315,7 +388,7 @@ fun IndexHarness.authServices(policy: PolicyService): com.plainbase.frameworks.k
         users = userRepository,
         roles = roleRepository,
         setup = setup,
-        sessions = sessionService,
+        sessions = sessions,
         passwordHasher = com.plainbase.frameworks.security.Argon2PasswordHasher(),
         idProvider = UuidV7IdProvider(),
         transactions = transactionRunner,
@@ -326,12 +399,12 @@ fun IndexHarness.authServices(policy: PolicyService): com.plainbase.frameworks.k
     val login = com.plainbase.domain.service.LoginService(
         users = userRepository,
         passwordHasher = com.plainbase.frameworks.security.Argon2PasswordHasher(),
-        sessions = sessionService,
+        sessions = sessions,
         transactions = transactionRunner,
         dummyHash = com.plainbase.frameworks.security.dummyPasswordHash(com.plainbase.frameworks.security.Argon2PasswordHasher()),
     )
     return com.plainbase.frameworks.ktor.AuthServices(
-        session = sessionService,
+        session = sessions,
         login = login,
         setup = setup,
         admin = admin,

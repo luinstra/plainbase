@@ -49,9 +49,10 @@ internal suspend fun <T> ApplicationCall.respondRest(serializer: KSerializer<T>,
 }
 
 /**
- * Answers HEAD with the GET status and headers but no body bytes. No AutoHeadResponse is installed and CIO writes
- * whatever a handler emits, so a body sent on HEAD by an all-method handler (the API and theme catch-alls, the
- * StatusPages envelopes) lands in front of the next response on a keep-alive connection.
+ * Answers workspace HEAD with the GET status and headers but no body bytes. The workspace installs no
+ * AutoHeadResponse and CIO writes whatever a handler emits, so a body sent on HEAD by an all-method handler
+ * (the API and theme catch-alls, the StatusPages envelopes) would precede the next keep-alive response.
+ * The reader's AutoHeadResponse rewrites HEAD to GET before this helper and strips the body afterward.
  */
 internal suspend fun ApplicationCall.respondHeadAware(content: OutgoingContent) {
     respond(if (request.httpMethod == HttpMethod.Head) HeadContent(content) else content)
@@ -249,13 +250,11 @@ private suspend fun mapCsrfOutcome(call: ApplicationCall, outcome: CsrfGuard.Out
 }
 
 /**
- * The 421 refusal for an insecure-transport credential — the SINGLE rule for [PrincipalExtraction
- * .InsecureTransportRefused] across EVERY gated route, including those with CUSTOM principal handling (the
- * `/docs`, `/p`, `/browse` redirect / SPA-shell-fallback arms). A credential presented over a non-secure
- * transport must be REFUSED (421), never silently downgraded to anonymous and served the shell/redirect — the
- * route-specific deny behavior (serve shell / 302 / 301 / null) applies ONLY to a normal [AccessDenied], not to
- * an insecure-transport refusal. Use [principalOrRefuseToShell] in a route whose deny behavior is "fall through
- * to the public arm".
+ * Workspace 421 refusal for [PrincipalExtraction.InsecureTransportRefused], shared by guarded routes and custom
+ * principal handling in `/docs`, `/p` and `/browse`. A workspace credential on an insecure transport is refused
+ * before the shell or redirect. Route-specific behavior for [AccessDenied] does not apply to this refusal.
+ * Use [principalOrRefuseToShell] where a denied read falls through to a public arm. The reader uses constant
+ * anonymous extraction.
  */
 internal suspend fun ApplicationCall.respondTransportInsecure() {
     // 421 Misdirected Request — not a named constant in this Ktor; the credential (bearer OR cookie) was refused

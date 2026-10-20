@@ -72,6 +72,7 @@ dependencies {
     implementation(libs.ktor.server.status.pages)
     // Sessions (A4a's opaque-string cookie); allowlisted + native-proven in A1 (SessionCookieNativeTest).
     implementation(libs.ktor.server.sessions)
+    implementation(libs.ktor.server.auto.head.response)
     // SSE - the in-binary MCP transport (P3). The mcp(Route) overload asserts install(SSE); pin it directly (not the
     // SDK transitive) at the same Ktor version. Already allowlisted (rode the SDK transitively); zero drift expected.
     implementation(libs.ktor.server.sse)

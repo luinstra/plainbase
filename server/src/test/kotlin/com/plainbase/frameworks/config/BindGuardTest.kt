@@ -70,6 +70,17 @@ class BindGuardTest : FunSpec({
         security(config("127.0.0.1", AuthConfig(mode = AuthMode.OFF))).bindRefusal.shouldBeNull()
     }
 
+    test("reader with auth off still refuses a non-loopback bind") {
+        val reader = config("0.0.0.0", AuthConfig(mode = AuthMode.OFF)).copy(profile = DeploymentProfile.READER)
+        val refusal = security(reader).bindRefusal
+        refusal.shouldNotBeNull()
+        refusal shouldNotContain "PLAINBASE_INSECURE_HTTP"
+        refusal shouldNotContain "PLAINBASE_TRUSTED_PROXY"
+        refusal shouldContain "reader binds loopback only"
+        refusal shouldContain "PLAINBASE_HOST=127.0.0.1"
+        refusal shouldContain "No setting admits a non-loopback bind"
+    }
+
     test("proxy mode + non-loopback + no CIDRs still refuses (proxy declared but not allowlisted)") {
         security(config("0.0.0.0", AuthConfig(mode = AuthMode.PROXY))).bindRefusal.shouldNotBeNull()
     }

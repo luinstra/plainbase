@@ -96,6 +96,11 @@ class RouteContext(
      */
     val proxyCsrf: ProxyCsrf,
     /**
+     * Non-null selects the reader surface in [plainbaseModule]. Production assembly pairs this carrier with
+     * constant anonymous extraction through [extract].
+     */
+    val reader: ReaderSurface?,
+    /**
      * The per-route principal source, derived from the normalized security assembly in production. Test-only
      * reconstruction adapters may replace it with a fixed principal.
      */

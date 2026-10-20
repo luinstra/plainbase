@@ -39,6 +39,8 @@ ktor-server-status-pages = { module = "io.ktor:ktor-server-status-pages", versio
 # WITH an opaque-String SessionSerializer (NOT the default reflection serializer — a native-crash hazard).
 # ktor-server-auth is deliberately NOT taken (Jackson-transitive risk; extraction is hand-rolled).
 ktor-server-sessions = { module = "io.ktor:ktor-server-sessions", version.ref = "ktor" }
+# AutoHeadResponse: pure-Kotlin Ktor plugin, no reflection, no transitives beyond ktor-server-core; reader HEAD.
+ktor-server-auto-head-response = { module = "io.ktor:ktor-server-auto-head-response", version.ref = "ktor" }
 # SSE: pure-Kotlin Ktor plugin — the in-binary MCP transport (P3). Declared EXPLICITLY at the existing Ktor
 # version (NOT the MCP SDK's transitive) so the binary's SSE path can't drift on an SDK bump; already resolved
 # (and allowlisted) transitively, so the module set is unchanged (zero allowlist drift).

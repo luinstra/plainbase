@@ -227,9 +227,11 @@ class RuntimeCompositionArchitectureTest : FunSpec({
         val normalizedRouteContext = routeContextCode.replace(Regex("\\s+"), " ")
         normalizedRouteContext shouldContain "val limbo: RootLimbo,"
         normalizedRouteContext shouldContain "val themes: ThemeStylesheets,"
+        normalizedRouteContext shouldContain "val reader: ReaderSurface?,"
         normalizedRouteContext shouldContain "val extract: ApplicationCall.() -> PrincipalExtraction,"
         Regex("val limbo: RootLimbo\\s*=").findAll(routeContextCode).count() shouldBe 0
         Regex("val themes: ThemeStylesheets\\s*=").findAll(routeContextCode).count() shouldBe 0
+        Regex("val reader: ReaderSurface\\?\\s*=").findAll(routeContextCode).count() shouldBe 0
         Regex("val extract: ApplicationCall\\.\\(\\) -> PrincipalExtraction\\s*=").findAll(routeContextCode).count() shouldBe 0
 
         val routeContextConstructor = Regex("\\bRouteContext\\s*\\(")

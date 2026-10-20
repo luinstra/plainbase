@@ -31,6 +31,7 @@ import io.ktor.server.routing.RoutingNode
 import io.ktor.server.routing.TrailingSlashRouteSelector
 import io.ktor.server.routing.routingRoot
 import io.ktor.server.testing.testApplication
+import io.mockk.mockk
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -309,6 +310,7 @@ private fun mountedTopLevelSegmentsForAuthMode(
         Fixtures.demoDocs,
         authMode = authMode,
         proxySecret = if (authMode == AuthMode.PROXY) "test-secret" else null,
+        discussions = mockk(relaxed = true),
     ).use { harness ->
         testApplication {
             application { plainbaseModule(harness.services) }

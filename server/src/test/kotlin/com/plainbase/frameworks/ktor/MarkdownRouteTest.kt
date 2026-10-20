@@ -246,5 +246,6 @@ private fun RouteContext.withRead(read: com.plainbase.domain.service.ReadFacade)
     proxyIdentityHeader = proxyIdentityHeader,
     secureCookie = secureCookie,
     proxyCsrf = proxyCsrf,
+    reader = reader,
     extract = extract,
 )
