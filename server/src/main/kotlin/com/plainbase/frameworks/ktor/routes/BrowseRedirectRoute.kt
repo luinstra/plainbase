@@ -62,7 +62,8 @@ fun Route.browseRedirectRoute(ctx: RouteContext) {
             }
             val target = ctx.read.browseTarget(principal, root, path)
                 ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such page file: ${path.value}")
-            call.respondRedirectPreservingQuery(target, permanent = false)
+            val destination = if (ctx.reader != null) ctx.readerDestination(principal, target) else target
+            call.respondRedirectPreservingQuery(destination, permanent = false)
         }
     }
 }

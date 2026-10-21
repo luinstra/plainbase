@@ -410,8 +410,8 @@ re-adopt a directory that reappeared.
 
 The server route table treats the first segment as a root name on every root-scoped surface. Do not add a
 `/docs` prefix before an extra root: `docs` is the primary root's name, while `extra` owns `/extra/...`.
-The following table is the operator-facing status contract for the route families that are easiest to
-misconfigure in a proxy or health check:
+The following table is the workspace profile's operator-facing status contract for the route families
+that are easiest to misconfigure in a proxy or health check:
 
 | surface | request shape | answer |
 |---|---|---|
@@ -423,6 +423,11 @@ misconfigure in a proxy or health check:
 | Standalone Mermaid shell | `/browse/{root}/{path}.mmd` | 200 with the SPA shell for a valid rooted diagram address, including a missing source; 404 shell for malformed or unknown diagram addresses. The source read remains guarded at `/assets/{root}/{path}`. |
 | Agent page lookup | `/api/v1/pages/by-path` | 400 `invalid_path`, because a page path is required. A path whose first segment is not a registered root, or a bare registered root, is 404 `page_not_found`, never a lookup under `docs`; `/api/v1/pages/by-path/docs/guides/deploy-guide` is the rooted form. |
 | Permalink | `/p/<id>` or `/p/<root>/<id>` | 302 when the page is found, 200 for a live path-collision loser, 300 for an ambiguous bare id, 404 for an unknown id, 400 for a malformed shape, 410 for a retired id, and 503 when a live page's root is unavailable. |
+
+The reader profile serves the initial document at page and folder-landing URLs, including root landings,
+and serves landing Markdown when requested. Its HTML misses and unavailable content return shells with
+404 and 503 respectively. A folder without a landing page retains its HTML shell at 200 and answers
+JSON 404 in Markdown mode. See the [reader guide](deploy/public-reader.md#pages-statuses-and-caching).
 
 Once shutdown admission closes, the global `503 server_shutting_down` response can supersede the route-specific answers in this table.
 

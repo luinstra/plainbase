@@ -30,6 +30,8 @@ private val EXPECTED_FILES_BY_ROOT = mapOf(
         "PermalinkRoute.kt",
         "PreviewRoute.kt",
         "ProposalRoutes.kt",
+        "ReaderContentRoute.kt",
+        "ReaderDocument.kt",
         "RootContentRoute.kt",
         "RouteBoundarySupport.kt",
         "RouteSupport.kt",

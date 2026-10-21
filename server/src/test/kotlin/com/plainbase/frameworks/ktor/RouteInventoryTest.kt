@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.SiteConfig
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -38,7 +39,7 @@ class RouteInventoryTest : FunSpec({
             observed = ctx.reader
             ctx.withExtract(ctx.extract)
         }) { harness ->
-            observed shouldBe ReaderSurface(release = null)
+            observed shouldBe ReaderSurface(release = null, site = SiteConfig())
             harness.services.reader shouldBe observed
         }
     }

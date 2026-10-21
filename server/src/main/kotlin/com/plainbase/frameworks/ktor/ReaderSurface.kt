@@ -1,4 +1,6 @@
 package com.plainbase.frameworks.ktor
 
-/** The reader profile's optional opaque release label. */
-data class ReaderSurface(val release: String?)
+import com.plainbase.frameworks.config.SiteConfig
+
+/** The reader profile's release label and configured site identity. */
+data class ReaderSurface(val release: String?, val site: SiteConfig)

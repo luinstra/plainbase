@@ -153,7 +153,7 @@ class ReaderServeGateTest : FunSpec({
                 }
                 withClue("production reader release") {
                     reader?.exceptionOrNull() shouldBe null
-                    reader?.getOrNull() shouldBe ReaderSurface(release = "r1")
+                    reader?.getOrNull() shouldBe ReaderSurface(release = "r1", site = world.config().site)
                 }
                 withClue("production reader manage attempt: $manage") {
                     (manage?.exceptionOrNull() is AccessDenied) shouldBe true

@@ -219,22 +219,27 @@ internal fun splitRootTail(path: TreePath, known: Set<RootName>): Pair<RootName,
 internal suspend fun ApplicationCall.respondSpaShell() = respondShell(HttpStatusCode.OK)
 
 /**
- * The shell at 404: the answer on the browser surface whenever the request names no root, so there
- * is no root decision to serve a page under. The BODY is the shell because the address is still a
- * browser navigation - the SPA renders its own not-found view - while the STATUS stays honest, so a
- * crawler or a script is never told the address exists.
+ * The shell at 404: the browser answer when the request names no root, or a reader document is missing
+ * under a known root. The body is the shell so the SPA can render its not-found view, while the status
+ * tells crawlers and scripts that the address does not exist.
  */
 internal suspend fun ApplicationCall.respondShellNotFound() = respondShell(HttpStatusCode.NotFound)
+
+/** The browser shell for a root or page whose content cannot currently be served. */
+internal suspend fun ApplicationCall.respondShellUnavailable() = respondShell(HttpStatusCode.ServiceUnavailable)
+
+/** HTML documents revalidate on every request and carry the content type that enables the shell CSP. */
+internal suspend fun ApplicationCall.respondHtmlDocument(bytes: ByteArray, status: HttpStatusCode) {
+    response.header(HttpHeaders.CacheControl, CACHE_CONTROL_NO_CACHE)
+    respondBytes(bytes, ContentType.Text.Html.withCharset(Charsets.UTF_8), status)
+}
 
 private suspend fun ApplicationCall.respondShell(status: HttpStatusCode) {
     val shell = SpaShell.bytes
     if (shell == null) {
         respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "SPA shell is not bundled")
     } else {
-        response.header(HttpHeaders.CacheControl, CACHE_CONTROL_NO_CACHE)
-        // The content type is load-bearing, not cosmetic: shellSecurityHeadersPlugin gates the shell
-        // CSP on it alone, so bytes emitted without it render the shell with no CSP at all.
-        respondBytes(shell, ContentType.Text.Html.withCharset(Charsets.UTF_8), status)
+        respondHtmlDocument(shell, status)
     }
 }
 
@@ -292,6 +297,9 @@ internal const val CACHE_CONTROL_NO_CACHE = "no-cache"
 
 /** Prevent storage of dynamic theme endpoint responses. */
 internal const val CACHE_CONTROL_NO_STORE = "no-store"
+
+/** Content-hashed frontend assets can be retained until their URL changes. */
+internal const val CACHE_CONTROL_IMMUTABLE = "public, max-age=31536000, immutable"
 
 /** The small extension → content-type map for served assets (§A4); unknown → octet-stream. */
 internal fun assetContentType(fileName: String): ContentType {

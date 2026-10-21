@@ -24,7 +24,11 @@ internal class SecurityAssembly(
     val proxyAuthEnabled: Boolean = authConfig.mode == AuthMode.PROXY
     val proxySecret: String? = authConfig.proxySecret
     val proxyIdentityHeader: String = authConfig.proxyIdentityHeader
-    val reader: ReaderSurface? = if (config.profile == DeploymentProfile.READER) ReaderSurface(readerRelease(config.storage)) else null
+    val reader: ReaderSurface? = if (config.profile == DeploymentProfile.READER) {
+        ReaderSurface(readerRelease(config.storage), config.site)
+    } else {
+        null
+    }
     val extract: ApplicationCall.() -> PrincipalExtraction = if (reader != null) {
         READER_EXTRACTION
     } else {

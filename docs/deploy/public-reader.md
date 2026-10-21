@@ -99,6 +99,79 @@ HEAD answers on every mounted URL, **the API included**, so HEAD uptime probes w
 full GET handler before dropping the body: asset bytes are read and searches execute. **HEAD costs
 what GET costs** and must count toward the edge rate limit. OPTIONS is unsupported.
 
+## Pages, statuses and caching
+
+The initial HTML for a page includes its rendered article and a
+`<meta name="plainbase-page-id" content="...">` identifier. The article is the same HTML returned by
+`/api/v1/pages/{id}/html`. The initial document title combines the page title and the site name; the site-name
+suffix defaults to `Plainbase` when `site.name` is unset. A non-blank frontmatter `description` scalar
+becomes the description meta tag. Title, description and other head values are HTML-escaped.
+After the app loads, the SPA currently sets titles with a `Plainbase` suffix. Aligning those titles
+with `site.name` remains follow-up SPA work.
+
+Set the optional site values in `DATA_DIR/plainbase.conf`:
+
+```hocon
+site {
+  canonicalOrigin = "https://docs.example.com"
+  name = "Example Docs"
+}
+```
+
+`site.canonicalOrigin` and `site.name` are **plainbase.conf keys, file only, with no environment
+override**. The canonical link is present only when `site.canonicalOrigin` is set, using that origin
+and the resolved page URL. Neither `Host` nor `X-Forwarded-Host` supplies or changes it. Without a
+configured origin, no canonical link is emitted. The origin must be a canonical HTTPS origin without
+a path. See the [configuration reference](../configuration.md#reference-table) for validation rules.
+
+For HTML navigation:
+
+- A page or a folder with a landing page returns 200 with the initial document. Landing selection
+  compares the Markdown filename stems `index` and `readme` without case, preferring `index`.
+- A landing child's URL redirects with 301 to its folder URL when that URL belongs to the landing
+  page. If a sibling page or an alias for another page owns the folder URL, the child serves at its
+  own URL with 200. A bound but missing alias can also hold the folder URL while the child stays
+  readable.
+- An alias redirects with 301 directly to the final destination, without a second redirect. An alias
+  naming its target landing page's own folder URL serves there with 200 instead.
+- A real folder without a landing page returns the shell with 200. This also applies to bare `/docs`
+  when the root has no landing page.
+- A missing page returns the shell with 404. An unavailable root or an alias whose target cannot yet
+  be verified returns the shell with 503.
+
+Internal article links to landing pages still use the page's canonical URL, such as
+`/docs/guides/index`. The reader redirects that URL to its folder with 301, so crawlers following
+these links pay one redirect. This is accepted for now.
+
+With `Accept: text/markdown`, page, alias, landing-child and folder URLs return the page's Markdown
+source directly, without redirects. A folder without a landing page returns 404; unavailable content
+returns 503. `/` remains a 302 redirect. `/p/{id}`, `/p/{root}/{id}` and `/browse/{root}/{path}` use 302
+directly to the final destination in either representation when the page has a canonical URL.
+Standalone diagram browse addresses retain their 200 shell, as do collision-loser HTML permalinks.
+Page representation varies on `Accept`; a Markdown Accept header on a non-negotiating JSON or static
+endpoint does not select a Markdown response.
+
+Reader responses use these Cache-Control directives. HEAD inherits the corresponding GET directive.
+The workspace's caching behavior is unchanged.
+
+| Response | Cache-Control |
+|---|---|
+| Page HTML and folder-listing shells, including 404 and 503 shells | `no-cache` |
+| Markdown page responses and their errors, including negotiated page API responses | `no-store` |
+| JSON API responses, including `/api/v1/session`, with status 200, 404 or 503 | `no-cache` |
+| Content assets under `/assets/{root}/*` with status 200, 404 or 503 | `no-cache` |
+| Root statics: favicon, logos, apple-touch icon, fonts and generic theme stylesheet | `no-cache` |
+| Embedded content-hashed JS and CSS under `/assets/` | `public, max-age=31536000, immutable` |
+| Dynamic theme endpoints under `/_plainbase/`, including errors | `no-store` |
+| `/healthz` | `no-store` |
+| 301 and 302 redirects, including `/`, `/p/` and `/browse/`; `/p/` 404 and `/browse/` 404 and 400 JSON responses | `no-store` |
+| Other statuses, including 400, 405 and 500 | `no-store` |
+
+A directive already set by a route wins. For example, a permalink collision-loser HTML shell retains
+`no-cache`. `no-cache` requires revalidation; it does not forbid storage. Configure the edge to
+**bypass caching for `/assets/{root}/*`**: these content-asset URLs do not carry a build hash. Keep that
+rule separate from the immutable embedded bundle assets, whose filenames change with their content.
+
 ## Several readers and health
 
 Several readers, each with its own DATA_DIR, may read one prefix at once. Answers agree across readers

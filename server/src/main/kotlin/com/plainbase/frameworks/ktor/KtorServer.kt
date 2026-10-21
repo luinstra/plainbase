@@ -25,6 +25,7 @@ import com.plainbase.frameworks.ktor.routes.permalinkRoute
 import com.plainbase.frameworks.ktor.routes.previewRoute
 import com.plainbase.frameworks.ktor.routes.principalOrRefuseToShell
 import com.plainbase.frameworks.ktor.routes.proposalRoutes
+import com.plainbase.frameworks.ktor.routes.readerContentRoutes
 import com.plainbase.frameworks.ktor.routes.readerSessionRoute
 import com.plainbase.frameworks.ktor.routes.respondError
 import com.plainbase.frameworks.ktor.routes.respondRedirectPreservingQuery
@@ -357,6 +358,7 @@ private val logger = KotlinLogging.logger {}
 fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false) {
     if (ctx.reader != null) {
         install(AutoHeadResponse)
+        install(ReaderCacheControl)
     } else {
         install(Sessions) {
             // Identity serialization keeps the opaque token safe for native images (SessionCookieNativeTest).
@@ -517,7 +519,7 @@ private fun Route.readerRoutes(ctx: RouteContext, reader: ReaderSurface) {
     browseRedirectRoute(ctx)
     themeRoutes(ctx)
     frontendStaticRoutes(ctx)
-    rootContentRoutes(ctx)
+    readerContentRoutes(ctx, reader)
     primaryRedirect(ctx)
 }
 

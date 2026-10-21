@@ -42,6 +42,9 @@ interface ReadFacade {
     /** The page at [root]'s canonical-or-alias URL [path] (the route-parsed root segment, C3), or null (§A4 by-path rules). */
     fun pageByUrlPath(principal: Principal, root: RootName, path: TreePath): PagePayload?
 
+    /** Resolves a reader document or folder under [root]; a null [path] addresses the root landing. */
+    fun document(principal: Principal, root: RootName, path: TreePath?): DocumentResolution
+
     fun pageHtml(principal: Principal, id: PageId, root: RootName? = null): PageHtmlPayload?
 
     /**

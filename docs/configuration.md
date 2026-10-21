@@ -469,8 +469,11 @@ Rules:
 
 The primary root is `docs`, but a missing or unreadable root is not a server-boot refusal. `serve` marks
 the root unavailable, logs the following warning, and starts. Root-dependent API, agent, asset, and write
-surfaces answer 503 until the path is restored and the server is restarted. Browser navigation is the
-deliberate exception: it serves the SPA shell with 200 so the client can render its own outage UI:
+surfaces answer 503 until the path is restored and the server is restarted. Workspace HTML navigation
+is the deliberate exception: it serves the SPA shell with 200 so the client can render its own outage UI.
+Reader HTML navigation serves the shell with 503; Markdown requests receive a JSON 503. For available
+content, the reader serves initial page and landing documents, landing Markdown, and HTML 404 shells
+for misses. See the [reader guide](deploy/public-reader.md#pages-statuses-and-caching).
 
 ```
 root 'docs' is not available at /srv/docs: it will serve 503 until the path is restored and the server restarted (its pages, aliases and checkpoints are left untouched)
@@ -487,9 +490,10 @@ A configured root that is missing at boot, or whose directory vanishes while the
 **unavailable** and:
 
 - root-dependent API, agent, asset, and write surfaces answer **503 `root_unavailable`** with a `Retry-After`,
-  **never a 404**. Browser navigation is the deliberate exception: it serves the SPA shell with **200** so
-  the client can render its outage UI. A 404 is a miss in the requested visible scope; a root pin narrows that
-  scope, and hidden or excluded content can also be 404. Do not infer physical deletion or erase historical
+  **never a 404**. Workspace HTML navigation is the deliberate exception: it serves the SPA shell with **200** so
+  the client can render its outage UI. Reader HTML navigation serves a **503** shell, as described in the
+  [reader guide](deploy/public-reader.md#pages-statuses-and-caching). A 404 is a miss in the requested visible scope;
+  a root pin narrows that scope, and hidden or excluded content can also be 404. Do not infer physical deletion or erase historical
   citations/provenance. A 503 leaves availability unresolved: keep citations/provenance and retry after recovery or
   convergence for reads. Root rejection before entry into the operation leaves no write; late discussion failures can
   follow persistence, so inspect the outcome before resubmitting. Shutdown admission is a

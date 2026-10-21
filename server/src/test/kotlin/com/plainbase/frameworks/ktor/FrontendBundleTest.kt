@@ -159,6 +159,13 @@ class FrontendBundleTest : FunSpec({
         }
     }
 
+    test("every embedded asset has a content hash in its filename") {
+        val hashedName = Regex("-[A-Za-z0-9_-]{8}\\.[a-z0-9]+$")
+        bundleAssetsLevel().forEach { (name, _) ->
+            withClue(name) { hashedName.containsMatchIn(name) shouldBe true }
+        }
+    }
+
     test("H2: the FrontendBundle ledger and the served tree name exactly the same top-level entries") {
         // DISTINCT from the reservation row above, and the difference IS the trap that makes one list get
         // written from the other: drop `favicon.svg` from `FrontendBundle.files` and the reservation row

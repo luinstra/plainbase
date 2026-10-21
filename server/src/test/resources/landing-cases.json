@@ -1,0 +1,46 @@
+[
+  {
+    "name": "index page",
+    "children": [{ "type": "page", "path": "index.md", "id": "01900000-0000-7000-8000-000000000101" }],
+    "expected": "01900000-0000-7000-8000-000000000101"
+  },
+  {
+    "name": "README page",
+    "children": [{ "type": "page", "path": "README.md", "id": "01900000-0000-7000-8000-000000000102" }],
+    "expected": "01900000-0000-7000-8000-000000000102"
+  },
+  {
+    "name": "index wins after README",
+    "children": [
+      { "type": "page", "path": "README.md", "id": "01900000-0000-7000-8000-000000000102" },
+      { "type": "page", "path": "index.md", "id": "01900000-0000-7000-8000-000000000101" }
+    ],
+    "expected": "01900000-0000-7000-8000-000000000101"
+  },
+  {
+    "name": "uppercase INDEX stem",
+    "children": [{ "type": "page", "path": "INDEX.md", "id": "01900000-0000-7000-8000-000000000103" }],
+    "expected": "01900000-0000-7000-8000-000000000103"
+  },
+  {
+    "name": "mixed case ReadMe stem",
+    "children": [{ "type": "page", "path": "ReadMe.md", "id": "01900000-0000-7000-8000-000000000104" }],
+    "expected": "01900000-0000-7000-8000-000000000104"
+  },
+  {
+    "name": "first README wins",
+    "children": [
+      { "type": "page", "path": "README.md", "id": "01900000-0000-7000-8000-000000000102" },
+      { "type": "page", "path": "readme.md", "id": "01900000-0000-7000-8000-000000000105" }
+    ],
+    "expected": "01900000-0000-7000-8000-000000000102"
+  },
+  {
+    "name": "neither page nor folder name creates a landing",
+    "children": [
+      { "type": "page", "path": "guide.md", "id": "01900000-0000-7000-8000-000000000106" },
+      { "type": "folder", "path": "index", "id": null }
+    ],
+    "expected": null
+  }
+]

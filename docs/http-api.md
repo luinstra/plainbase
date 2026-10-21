@@ -14,10 +14,12 @@ The full indexed document can be read through either representation:
 - `GET /{root}/{path...}` for a canonical or alias browser address
 - `GET /p/{id}` or `GET /p/{root}/{id}` for the durable permalink surface
 
-Bare root landings such as `/docs` and `/docs/` remain SPA shells.
+In the workspace profile, bare root landings such as `/docs` and `/docs/` remain SPA shells,
+and browser document addresses default to the HTML shell. The reader profile serves an initial
+document for pages and folder landings, landing Markdown when requested, and HTML shells with 404
+for misses or 503 for unavailable content. See the [reader guide](deploy/public-reader.md#pages-statuses-and-caching).
 
-REST reads default to JSON. Browser document addresses default to the HTML shell; normal permalink
-addresses default to redirects to the document URL.
+REST reads default to JSON. Normal permalink addresses default to redirects to the document URL.
 Send `Accept: text/markdown` to opt into Markdown when that explicit range has a positive quality
 strictly greater than the historical default representation. For example:
 
@@ -43,8 +45,10 @@ All affected responses include `Vary: Accept`.
 
 Canonical document URLs in Markdown mode return indexed source on success and structured JSON for
 authentication, authorization, lookup, and root-availability failures, including `503` outage responses.
-A directory URL without an indexed page is JSON `404` in Markdown mode while HTML keeps its landing shell.
-Bare root landings remain shells in either mode.
+In the workspace profile, a directory URL without an indexed page is JSON `404` in Markdown mode
+while HTML keeps its landing shell, and bare root landings remain shells in either mode.
+In the reader profile, a folder or root with a landing page serves its source in Markdown mode;
+without a landing page it answers JSON `404` in Markdown mode and the shell at `200` in HTML mode.
 
 Normal permalink resolutions retain their existing `302` redirect, including the query string;
 follow it while preserving the `Accept` header. Collision losers without a canonical URL can be

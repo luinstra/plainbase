@@ -22,6 +22,7 @@ import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.SiteConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -62,6 +63,7 @@ class RestHarness(
     themes: ThemeStylesheets = BundledThemeStylesheets(embeddedThemeBuiltins()),
     profile: DeploymentProfile = DeploymentProfile.WORKSPACE,
     storage: StorageConfig = StorageConfig(),
+    site: SiteConfig = SiteConfig(),
     discussions: DiscussionTransportFacade? = null,
     decorateTokens: (ApiTokenService) -> ApiTokenService = { it },
     decorateSessions: (SessionService) -> SessionService = { it },
@@ -132,6 +134,7 @@ class RestHarness(
                 themes = themes,
                 profile = profile,
                 storage = storage,
+                site = site,
                 discussions = discussions,
                 tokens = decorateTokens(harness.apiTokens),
                 sessions = decorateSessions(harness.sessionService),
@@ -169,6 +172,8 @@ fun readerTest(
     root: Path,
     prefix: String = "",
     authMode: AuthMode = AuthMode.OFF,
+    site: SiteConfig = SiteConfig(),
+    seed: (IdMapRepository) -> Unit = {},
     decorateTokens: (ApiTokenService) -> ApiTokenService = { it },
     decorateSessions: (SessionService) -> SessionService = { it },
     context: (RouteContext) -> RouteContext = { it },
@@ -186,9 +191,11 @@ fun readerTest(
     }
     RestHarness(
         root,
+        seed = seed,
         authMode = authMode,
         profile = DeploymentProfile.READER,
         storage = storage,
+        site = site,
         discussions = mockk(relaxed = true),
         decorateTokens = decorateTokens,
         decorateSessions = decorateSessions,
@@ -252,6 +259,7 @@ fun IndexHarness.testRouteContext(
     themes: ThemeStylesheets = BundledThemeStylesheets(embeddedThemeBuiltins()),
     profile: DeploymentProfile = DeploymentProfile.WORKSPACE,
     storage: StorageConfig = StorageConfig(),
+    site: SiteConfig = SiteConfig(),
     discussions: DiscussionTransportFacade? = null,
     tokens: ApiTokenService = apiTokens,
     sessions: SessionService = sessionService,
@@ -338,6 +346,7 @@ fun IndexHarness.testRouteContext(
         port = 8080,
         profile = profile,
         storage = storage,
+        site = site,
         auth = AuthConfig(
             mode = authMode,
             trustedProxyCidrs = trustedProxyCidrs,
