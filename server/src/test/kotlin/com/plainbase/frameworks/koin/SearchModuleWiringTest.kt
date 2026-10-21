@@ -57,7 +57,7 @@ class SearchModuleWiringTest : FunSpec({
                         createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
                         repositoryModule(owner),
                         createHistoryModule(config, inputs.history, owner),
-                        indexModule,
+                        indexModule(),
                         searchModule(owner),
                     ),
                 )
@@ -95,8 +95,8 @@ class SearchModuleWiringTest : FunSpec({
                         createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
                         repositoryModule(owner),
                         createHistoryModule(config, inputs.history, owner),
-                        checkpointModule,
-                        indexModule,
+                        checkpointModule(),
+                        indexModule(),
                         searchModule(owner),
                     ),
                 )
@@ -165,7 +165,7 @@ class SearchModuleWiringTest : FunSpec({
                         resourceOwner = owner,
                     ),
                     createHistoryModule(config, inputs.history, owner),
-                    indexModule,
+                    indexModule(),
                     searchModule(owner),
                 ),
             )

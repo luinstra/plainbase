@@ -159,8 +159,8 @@ private fun withDiscussionConfigGraph(base: Path, enabled: Boolean, block: (Koin
         listOf(
             module { single { config } },
             createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
-            repositoryModule(owner), securityModule, createHistoryModule(config, inputs.history, owner), indexModule,
-            checkpointModule, searchModule(owner), createDiscussionModule(owner), createRestModule(owner),
+            repositoryModule(owner), securityModule(), createHistoryModule(config, inputs.history, owner), indexModule(),
+            checkpointModule(), searchModule(owner), createDiscussionModule(owner), createRestModule(owner),
             module {
                 single<DiscussionStore> { spyk(get<LocalDiscussionStore>()) }
                 single { spyk(DiscussionReads(get(), get(), get(), get(), get())) }

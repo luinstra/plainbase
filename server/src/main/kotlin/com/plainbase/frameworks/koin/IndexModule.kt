@@ -25,7 +25,7 @@ import org.koin.dsl.module
  * The runtime factory owns typed source and holder assembly; Koin aliases the resulting builder without a second
  * graph.
  */
-val indexModule = module {
+fun indexModule() = module {
     single<FrontmatterParser> { IndexRuntimeFactory.frontmatterParser() }
     // One UUIDv7 mint shared by the identity service (adopt-time ids) and the create route.
     single<IdProvider> { IndexRuntimeFactory.idProvider() }

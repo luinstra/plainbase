@@ -162,9 +162,9 @@ private fun runOwnedServer(
             listOf(
                 module { single { config } },
                 createRepositoryModule(runOpeners.openDriver, control.closeDriver, resources),
-                securityModule,
-                indexModule,
-                checkpointModule,
+                securityModule(),
+                indexModule(),
+                checkpointModule(),
                 createSearchModule(runOpeners.openSearch, control.closeSearch, resources),
                 createDiscussionModule(resources),
                 createRestModule(resources, control.afterRouteContextBuilt, control.buildRouteContext),

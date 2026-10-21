@@ -13,7 +13,7 @@ import org.koin.dsl.module
  * moves made while the server was down. Its own module — qualified, separately loadable — so each
  * listener stays an explicit opt-in of the composition (`serve` loads all of them).
  */
-val checkpointModule = module {
+fun checkpointModule() = module {
     single<IndexBuilder.PublicationListener>(named("checkpointReplace")) {
         val checkpoint = get<PageCheckpointRepository>()
         IndexBuilder.PublicationListener(checkpoint::replaceFrom)

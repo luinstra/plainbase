@@ -12,6 +12,6 @@ import org.koin.dsl.module
 // ConfigLoader.loadForCommand(), then inlines `module { single { config } }`, so a bad config funnels to a
 // clean `serve:` refusal instead of a Koin InstanceCreationException wrapper. This module remains only for the
 // Koin wiring tests, which pin their env to temp dirs and want the lazy `single {}` shape.
-val configModule = module {
+fun configModule() = module {
     single { ConfigLoader.fromEnvAndFile() }
 }
