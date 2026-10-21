@@ -550,6 +550,7 @@ private class DualObjectWorld : AutoCloseable {
             rowsAtStart = { rowsAtStart(root.name) },
             keyPrefix = "",
             pollSeconds = 3600,
+            polling = true,
             dirtyPaths = { emptySet() },
             mirrorRoot = mirrorRoot,
             ignoreRules = ignoreRules,

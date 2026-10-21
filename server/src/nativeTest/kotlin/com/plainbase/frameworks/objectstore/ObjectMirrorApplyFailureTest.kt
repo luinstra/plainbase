@@ -7,12 +7,17 @@ import com.plainbase.domain.service.CitationFactory
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import io.github.oshai.kotlinlogging.KotlinLogging
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Tag
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -25,6 +30,61 @@ import kotlin.test.assertTrue
 class ObjectMirrorApplyFailureTest {
 
     private val hasher = CitationFactory()::contentHash
+
+    @Test
+    fun `a walk stat failure with an intact listed generation makes the object scan incomplete`() {
+        val fx = newFixture()
+        try {
+            assumeTrue(supportsPosix(fx.mirrorRoot), "temp filesystem must support POSIX permissions")
+            fx.client.seed("a.md", "# A\n".toByteArray())
+            fx.store.hydrate(strict = true)
+            val extra = Files.createDirectory(fx.mirrorRoot.resolve("extra"))
+            Files.writeString(extra.resolve("y.md"), "# Unlisted\n")
+            assertTrue(fx.store.scan().complete, "the readable mirror holds the listed generation")
+            val permissions = Files.getPosixFilePermissions(extra)
+            Files.setPosixFilePermissions(extra, PosixFilePermissions.fromString("r--r--r--"))
+            try {
+                assumeTrue(!Files.isExecutable(extra), "the permission drop must deny traversal to this process")
+                assertFalse(fx.store.scan().complete, "a walk that cannot stat an unlisted child is incomplete")
+                logger.info { "object walk permission check exercised: non-root POSIX permission drop withheld completeness" }
+            } finally {
+                Files.setPosixFilePermissions(extra, permissions)
+            }
+        } finally {
+            fx.close()
+        }
+    }
+
+    @Test
+    fun `strict hydrate refuses a mirror write onto a non-empty directory`() {
+        val base = Files.createTempDirectory("pb-native-strict-mirror")
+        try {
+            val mirrorRoot = Files.createDirectory(base.resolve("mirror"))
+            val client = MiniFakeObjectStore()
+            val ignoreRules = IgnoreRules()
+            client.seed("blocked.md", "bytes".toByteArray())
+            val blocked = Files.createDirectory(mirrorRoot.resolve("blocked.md"))
+            Files.writeString(blocked.resolve(".hidden"), "x")
+            ObjectContentStore(
+                client = client,
+                mirror = LocalContentStore(root = mirrorRoot, ignoreRules = ignoreRules, atomics = FileAtomics.Real),
+                state = MirrorState(base.resolve("mirror-state")),
+                binding = RootBinding("https://fake|bucket|"),
+                keyPrefix = "",
+                pollSeconds = 3_600,
+                polling = true,
+                dirtyPaths = { emptySet() },
+                mirrorRoot = mirrorRoot,
+                ignoreRules = ignoreRules,
+                atomics = FileAtomics.Real,
+            ).use { store ->
+                val failure = assertFailsWith<ObjectStoreException> { store.hydrate(strict = true) }
+                assertTrue(failure.message.orEmpty().contains("mirror write"), failure.message)
+            }
+        } finally {
+            deleteRecursively(base)
+        }
+    }
 
     private fun newFixture(): Fixture {
         val mirrorRoot = Files.createTempDirectory("pb-native-mirror")
@@ -41,6 +101,7 @@ class ObjectMirrorApplyFailureTest {
             binding = RootBinding("https://fake|bucket|"),
             keyPrefix = "",
             pollSeconds = 3_600,
+            polling = true,
             dirtyPaths = { emptySet() },
             mirrorRoot = mirrorRoot,
             ignoreRules = ignoreRules,
@@ -137,6 +198,12 @@ class ObjectMirrorApplyFailureTest {
         } finally {
             fx.close()
         }
+    }
+
+    companion object {
+        private val logger = KotlinLogging.logger {}
+
+        private fun supportsPosix(path: Path): Boolean = path.fileSystem.supportedFileAttributeViews().contains("posix")
     }
 }
 

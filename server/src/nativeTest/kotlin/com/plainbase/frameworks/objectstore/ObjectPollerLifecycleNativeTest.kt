@@ -36,6 +36,7 @@ class ObjectPollerLifecycleNativeTest {
             binding = RootBinding("https://native.example|docs|"),
             keyPrefix = "",
             pollSeconds = 1,
+            polling = true,
             dirtyPaths = { emptySet() },
             mirrorRoot = mirrorRoot,
             ignoreRules = IgnoreRules(),

@@ -310,6 +310,7 @@ class GitBundleDrNativeTest {
             binding = RootBinding("https://fake|bucket|"),
             keyPrefix = "",
             pollSeconds = 3600,
+            polling = true,
             dirtyPaths = { emptySet() },
             mirrorRoot = mirrorRoot,
             ignoreRules = ignoreRules,

@@ -27,6 +27,8 @@ class FakeObjectStore(
     private val objects = linkedMapOf<String, Stored>() // insertion order - deterministic LIST paging
     private val etagSeq = AtomicInteger()
     private val puts = AtomicInteger()
+    private val putCalls = mutableListOf<String>()
+    private val deletes = AtomicInteger()
     private val gets = AtomicInteger()
     private val heads = AtomicInteger()
     private val lists = AtomicInteger()
@@ -34,6 +36,12 @@ class FakeObjectStore(
 
     /** Total `put` calls issued (the create-family "no redundant PUT after heal" probe). */
     val putCount: Int get() = puts.get()
+
+    /** Keys passed to `put`, including calls delegated by `putFromFile`. */
+    val putKeys: List<String> get() = synchronized(lock) { putCalls.toList() }
+
+    /** Total `delete` calls issued, including deletes of absent keys. */
+    val deleteCount: Int get() = deletes.get()
 
     /** Total `get`/`head`/`list` calls issued (the clean-create "no network read on the happy path" probe). */
     val getCount: Int get() = gets.get()
@@ -140,6 +148,7 @@ class FakeObjectStore(
     ): PutOutcome {
         onNetworkOp()
         puts.incrementAndGet()
+        synchronized(lock) { putCalls += key }
         failIfInjected()
         if (armInterleave) {
             pollCycleReached.countDown()
@@ -179,6 +188,7 @@ class FakeObjectStore(
 
     override suspend fun delete(key: String) {
         onNetworkOp()
+        deletes.incrementAndGet()
         failIfInjected()
         synchronized(lock) { objects.remove(key) }
     }

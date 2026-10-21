@@ -37,10 +37,10 @@ boot; every key here is restart-only, there is no hot reload.
 `PLAINBASE_HOST` is passed to the server as configured. The bind guard treats only the case-insensitive,
 unbracketed `localhost`/`ip6-localhost` aliases and numeric loopback literals as loopback; another hostname is
 fail-closed as exposed and is never resolved by the guard. Numeric IPv4 values must be four ASCII
-decimal octets (`0`–`255`), with no abbreviations or leading-zero forms; IPv4 zone suffixes are rejected.
+decimal octets (`0` to `255`), with no abbreviations or leading-zero forms; IPv4 zone suffixes are rejected.
 IPv6 zones are stripped for classification, and IPv4-mapped IPv6 literals retain their IPv4 CIDR behavior.
 
-An optional host port accepts only ASCII decimal `0`–`65535`; bracketed IPv6 uses `[address]:port`.
+An optional host port accepts only ASCII decimal `0` to `65535`; bracketed IPv6 uses `[address]:port`.
 Malformed ports, bracketed aliases, hostnames, Unicode digits and dotted-hex forms are rejected by
 the security predicates. `PLAINBASE_TRUSTED_PROXY` is a comma-separated list of numeric CIDRs and
 is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUSTED_PROXY`.
@@ -57,7 +57,7 @@ is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUS
 | - (file only) | `site.name` | none | ConfigDecoder.kt (trimmed, non-blank, no ISO control characters) |
 | `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`) | ConfigDecoder.kt |
 | `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`) | ConfigDecoder.kt |
-| `PLAINBASE_LOG_LEVEL` | - | `INFO` | `logback.xml:8-9` (`${PLAINBASE_LOG_LEVEL:-INFO}`; **not** a `PlainbaseConfig` field) |
+| `PLAINBASE_LOG_LEVEL` | - | `INFO` | [Logging and command channels](#logging-and-command-channels) (`${PLAINBASE_LOG_LEVEL:-INFO}`; **not** a `PlainbaseConfig` field) |
 | `PLAINBASE_MAX_WRITE_BODY_BYTES` | `maxWriteBodyBytes` | 1 MiB | ConfigDecoder.kt |
 | `PLAINBASE_MAX_ASSET_BYTES` | `maxAssetBytes` | 10 MiB | ConfigDecoder.kt |
 | `PLAINBASE_AUTH_MODE` | `auth.mode` | `off` (blank parses to `OFF`) | ConfigDecoder.kt |
@@ -79,7 +79,7 @@ is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUS
 | `PLAINBASE_S3_REGION` | `storage.object.region` | `auto` (R2) | ConfigDecoder.kt |
 | `PLAINBASE_S3_PREFIX` | `storage.object.prefix` | `""` | ConfigDecoder.kt (validated through the `TreePath` funnel when non-empty) |
 | `PLAINBASE_S3_PATH_STYLE` | `storage.object.pathStyle` | `true` (R2 account-endpoint) | ConfigDecoder.kt |
-| `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | ConfigDecoder.kt |
+| `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | ConfigDecoder.kt (workspace poll interval; no effect on a reader, but the env value is still validated as a positive integer; see [reader polling](deploy/public-reader.md#several-readers-and-health)) |
 | - (file only) | `theme.light` (CSS or scheme file) | bundled light definition | ConfigDecoder.kt |
 | - (file only) | `theme.dark` (CSS or scheme file) | bundled dark definition | ConfigDecoder.kt |
 
@@ -104,7 +104,7 @@ bad signature makes startup **refuse with an operator-actionable message and exi
 stale or empty tree (never disable certificate validation to work around a TLS failure - fix the endpoint
 or this host's CA trust). Git history over the object backend IS available: set
 `PLAINBASE_GIT_ENABLED=true` to commit every save into `DATA_DIR/mirror` and ship a bucket-backed
-`history.bundle` (C5's git-over-the-mirror + bundle DR), recovering commit-grained history after a
+`history.bundle` (Git over the mirror plus bundle DR), recovering commit-grained history after a
 `DATA_DIR` loss, not just content. Leave git unset/false to run object mode without history. See the
 [object-storage deploy guide](deploy/object-storage.md) for a zero-to-serving R2 walkthrough (IAM,
 migration, platform support), [operating-plainbase.md](operating-plainbase.md#backups) for the
@@ -199,7 +199,7 @@ membership behavior and is not filtered by these keys.
 The keys are plural because bare `include` is a HOCON directive, not an ordinary field name.
 JDK glob matching is whole-path matching: `**/*.md` matches nested Markdown but misses a top-level `a.md`, so select
 both shapes when both are intended. Dot-prefixed entries remain hidden unless an include contains the literal
-dot-prefixed prefix (for example `.crew/**`; `**/*.md` does not authorize `.crew`). Internally supplied legacy ignore
+dot-prefixed prefix (for example `.private/**`; `**/*.md` does not authorize `.private`). Internally supplied legacy ignore
 rules remain additive; there is no live `content.ignore` configuration key in this release.
 The top-level `.plainbase/` directory is reserved for authoritative discussion files and is never page content.
 Reservation is NFC-normalized and case-insensitive. Includes whose first literal-prefix segment normalizes to
@@ -234,7 +234,7 @@ re-adding the root makes those proposals visible again.
 
 **A root's rank is its DECLARATION LINE in this block, and the lowest rank wins.** Two roots may hold two
 different pages carrying the same frontmatter `id:` - a copied file, a forked runbook, a page moved
-by hand between trees. Under per-root identity (C5) BOTH pages KEEP that id: each lives in its own root
+by hand between trees. Under per-root identity BOTH pages KEEP that id: each lives in its own root
 and each answers its OWN rooted permalink `/p/{root}/{id}`. Rank no longer decides who "wins" the id - it
 decides only SOURCE PRECEDENCE, the order a bare, root-less lookup ranks the candidate roots in.
 

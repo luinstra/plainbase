@@ -2,6 +2,7 @@ package com.plainbase
 
 import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.repository.IdMapRepository
@@ -22,6 +23,7 @@ import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AnchorPrecompute
 import com.plainbase.domain.service.DiscussionPublicationSignal
 import com.plainbase.domain.service.DiscussionReparseExecutor
+import com.plainbase.domain.service.FirstIndexCompleteness
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.WritePipeline
@@ -43,6 +45,7 @@ import com.plainbase.frameworks.config.TransportSecurityPolicy
 import com.plainbase.frameworks.discussion.DiscussionBoot
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.DiscussionWatcher
+import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.createContentModule
@@ -408,6 +411,7 @@ private fun runOwnedServer(
                 // Full scan at startup builds the snapshot; the rescan route rebuilds on demand. The
                 // rebuild also self-heals the index for any page left dirty by a prior interrupted save.
                 control.initialRebuild(builder)
+                firstIndexRefusal(config, koin, builder)?.let { refuseServe(output, it) }
                 // PB-WRITE-1 fix H: write-ahead recovery of a prior interrupted save, after the index is whole
                 // and before serving - drift-skips a page whose on-disk bytes changed since the crash.
                 koin.get<WritePipeline>().reconcileDirtyPages()
@@ -430,6 +434,24 @@ private fun runOwnedServer(
     } finally {
         resources.close()
     }
+}
+
+/**
+ * Checks a reader's first index against its hydrated listing. [IndexBuilder.current] and
+ * [IndexBuilder.lastFullPassScans] are read as two separate loads, not an atomic pair. They are consistent here
+ * only because no second reader pass can run before this check: object polling is disabled, discussion watchers
+ * are filtered out, and HTTP has not started.
+ */
+private fun firstIndexRefusal(config: PlainbaseConfig, koin: Koin, builder: IndexBuilder): String? {
+    if (config.profile != DeploymentProfile.READER || config.storage.backend != StorageBackend.OBJECT) return null
+    val primary = koin.get<RootRegistry>().primary.name
+    val listed = checkNotNull(koin.get<ObjectContentStore>().latestManifest()) { "a hydrated object store holds a listing" }
+        .listed.filterTo(mutableSetOf()) { it != TreePath.require(FOLDER_META_NAME) }
+    return FirstIndexCompleteness.refusal(
+        listed,
+        FirstIndexCompleteness.indexedSources(builder.current, primary, FOLDER_META_NAME),
+        builder.lastFullPassScans[primary],
+    )
 }
 
 internal fun watcherRoots(registry: RootRegistry, availability: RootAvailability): List<Root> {
@@ -560,7 +582,7 @@ private fun hydrateObjectMode(
                 control.afterDrReconcile(bundleDr)
             }
 
-            false, null -> objectStore.hydrate()
+            false, null -> control.hydrateObject(objectStore, config.profile == DeploymentProfile.READER)
         }
     }.onFailure { failure ->
         rethrowError(failure)

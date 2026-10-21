@@ -149,8 +149,19 @@ class IndexBuilder(
     /** The atomically published snapshot; authority evidence remains pass-local. */
     private val holder = AtomicReference<PageIndex>(PageIndex.EMPTY)
 
+    private val passScans = AtomicReference<Map<RootName, ScanCompleteness>>(emptyMap())
+
     /** The published snapshot, initially [PageIndex.EMPTY]. */
     val current: PageIndex get() = holder.load()
+
+    /**
+     * Scan evidence from the most recent full pass, per root. An absent root was skipped. A targeted [reindex]
+     * republishes [current] but leaves this map alone. Both full-pass publications occur in the same synchronized pass.
+     * Reading [current] and this map takes two separate loads, not an atomic pair. The reader boot check is consistent
+     * only because no second pass can run before it: object polling is disabled, discussion watchers are filtered out,
+     * and HTTP has not started.
+     */
+    val lastFullPassScans: Map<RootName, ScanCompleteness> get() = passScans.load()
 
     /** Runs the serialized full pass and atomically publishes the new snapshot. */
     @Synchronized
@@ -246,6 +257,7 @@ class IndexBuilder(
             previous = previous,
         )
         recordAliases(previousUrlPaths, snapshot, raisedIssues)
+        passScans.store(observed.associateBy({ it.root }, { ScanCompleteness(it.complete, it.pageReadsComplete) }))
         holder.store(snapshot)
         finishRebuild(snapshot, retired, witnessed, scannedRoots, raisedIssues)
         return snapshot

@@ -1,5 +1,8 @@
 package com.plainbase.frameworks.objectstore
 
+import com.plainbase.domain.root.RootBinding
+import com.plainbase.frameworks.filesystem.IgnoreRules
+import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
@@ -269,6 +272,57 @@ class S3ObjectClientTest : FunSpec({
         clock = { Instant.parse("2026-07-05T12:00:00Z") },
         sleeper = { sleeps += it },
     )
+
+    test("a strict hydrate completes when a throttled GET recovers within the client's retries") {
+        val sleeps = mutableListOf<Long>()
+        var gets = 0
+        respond = {
+            if (recorded.last().uri.contains("list-type=2")) {
+                FakeResponse(
+                    HttpStatusCode.OK,
+                    body = """
+                        <ListBucketResult>
+                            <IsTruncated>false</IsTruncated>
+                            <Contents><Key>page.md</Key><ETag>&quot;e1&quot;</ETag><Size>5</Size></Contents>
+                        </ListBucketResult>
+                    """.trimIndent().toByteArray(),
+                )
+            } else {
+                gets++
+                if (gets <= 2) {
+                    FakeResponse(HttpStatusCode.ServiceUnavailable, body = "<Error><Code>SlowDown</Code></Error>".toByteArray())
+                } else {
+                    FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"e1\""), "hello".toByteArray())
+                }
+            }
+        }
+        val base = Files.createTempDirectory("pb-strict-hydrate-retry")
+        try {
+            val mirrorRoot = base.resolve("mirror")
+            val ignoreRules = IgnoreRules()
+            ObjectContentStore(
+                client = throttleClient(sleeps),
+                mirror = LocalContentStore(root = mirrorRoot, ignoreRules = ignoreRules),
+                state = MirrorState(base.resolve("mirror-state")),
+                binding = RootBinding("http://127.0.0.1:$port|scratch|"),
+                keyPrefix = "",
+                pollSeconds = 3_600,
+                polling = true,
+                dirtyPaths = { emptySet() },
+                mirrorRoot = mirrorRoot,
+                ignoreRules = ignoreRules,
+            ).use { store ->
+                store.hydrate(strict = true)
+
+                Files.readString(mirrorRoot.resolve("page.md")) shouldBe "hello"
+                gets shouldBe 3
+                sleeps.size shouldBe 2
+                store.scan().complete shouldBe true
+            }
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
 
     test("B1: a throttled GET (503, 503, 200) succeeds after two bounded backoffs") {
         val sleeps = mutableListOf<Long>()

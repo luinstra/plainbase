@@ -1218,12 +1218,15 @@ class IndexCollaboratorAuthorityTest : FunSpec({
         withClue("reader direct surface diagnostics: ${violations.joinToString("; ")}") {
             violations.shouldBeEmpty()
         }
-        withClue("IndexBuilder retains its reviewed coordinator field surface plus one reader") {
+        withClue("IndexBuilder retains its reviewed coordinator fields, source reader and full-pass scan evidence") {
             val builder = Class.forName("com.plainbase.domain.service.IndexBuilder")
             val fields = builder.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }.associate { it.name to it.type.name }
             fields shouldBe EXPECTED_INDEX_BUILDER_FIELDS
             builder.getDeclaredField("holder").genericType.render() shouldBe
                 "java.util.concurrent.atomic.AtomicReference<com.plainbase.domain.page.PageIndex>"
+            builder.getDeclaredField("passScans").genericType.render() shouldBe
+                "java.util.concurrent.atomic.AtomicReference<" +
+                "java.util.Map<com.plainbase.domain.root.RootName,com.plainbase.domain.service.ScanCompleteness>>"
         }
     }
 
@@ -4414,7 +4417,7 @@ private val EXPECTED_SERVICE_PATHS = setOf(
     "DiscussionPublicationSignal.kt",
     "DiscussionReadFailed.kt",
     "DiscussionReads.kt", "DiscussionReparseExecutor.kt", "DiscussionReparser.kt", "DiscussionSyncState.kt",
-    "DiscussionWriter.kt", "FrontmatterPatcher.kt",
+    "DiscussionWriter.kt", "FirstIndexCompleteness.kt", "FrontmatterPatcher.kt",
     "IdLessPages.kt", "IdProvider.kt", "IdResolution.kt", "IndexBuilder.kt", "IndexIdentityAssignments.kt", "IndexInputs.kt",
     "IndexSnapshotAssembler.kt", "IndexSourceReader.kt",
     "LinkChecker.kt",
@@ -4457,6 +4460,7 @@ private val EXPECTED_INDEX_BUILDER_FIELDS = mapOf(
     "corpusSeen" to "java.util.Set",
     "hiddenGitWarnings" to "java.util.Set",
     "holder" to "java.util.concurrent.atomic.AtomicReference",
+    "passScans" to "java.util.concurrent.atomic.AtomicReference",
 )
 
 private val EXPECTED_SERVICE_NON_CLASS_DECLARATIONS = setOf(
@@ -4469,6 +4473,7 @@ private val EXPECTED_SERVICE_NON_CLASS_DECLARATIONS = setOf(
     "ProposalService.kt|fun toSummaryGuard",
     "DiscussionReads.kt|fun failedSummary",
     "DiscussionWriter.kt|fun action",
+    "IndexSourceReader.kt|fun isPageSource",
     "UnifiedDiff.kt|fun unifiedDiff",
     "UnifiedDiff.kt|fun replaceEverythingScript",
     "UnifiedDiff.kt|fun finalNewlineOnlyScript",
@@ -4560,6 +4565,8 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "IndexBuilder.kt|IndexBuilder.AbsencePass.GitMint",
     "IndexBuilder.kt|IndexBuilder.AbsencePass.GitReads", "IndexBuilder.kt|IndexBuilder.AbsencePass.Companion",
     "IndexBuilder.kt|IndexBuilder.Companion",
+    "FirstIndexCompleteness.kt|ScanCompleteness", "FirstIndexCompleteness.kt|IndexedSources",
+    "FirstIndexCompleteness.kt|FirstIndexCompleteness",
     "IndexInputs.kt|Draft", "IndexInputs.kt|SourceScan", "IndexInputs.kt|Identity",
     "IndexIdentityAssignments.kt|IndexIdentityAssignments", "IndexSnapshotAssembler.kt|IndexSnapshotAssembler",
     "IndexSourceReader.kt|IndexSourceReader", "IndexSourceReader.kt|IndexSourceReader.Companion",

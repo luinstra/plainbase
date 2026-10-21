@@ -72,7 +72,7 @@ pending indefinitely. Production grace/default policy is unchanged; see the
 
 ## Operating limits
 
-- Object mode remains one instance per bucket; `DataDirLock` only excludes a shared local `DATA_DIR`. See [the deployment rule](deploy/object-storage.md#one-instance-per-bucket-the-v1-rule).
+- Object mode permits one writable instance per bucket; `DataDirLock` only excludes a shared local `DATA_DIR`. See [the deployment rule](deploy/object-storage.md#one-instance-per-bucket-the-v1-rule). Read-only readers may share a bucket, each with its own DATA_DIR; follow the [reader procedure](deploy/public-reader.md#a-fresh-data_dir-on-every-start).
 - Rebuilds/publication are serialized in [`IndexBuilder`](../server/src/main/kotlin/com/plainbase/domain/service/IndexBuilder.kt); `search.db` has one synchronized writer and bounded reader pool in [`SearchDb`](../server/src/main/kotlin/com/plainbase/frameworks/search/SearchDb.kt).
 - `discussions.db` has one synchronized writer and a bounded reader pool in [`DiscussionDb`](../server/src/main/kotlin/com/plainbase/frameworks/discussion/DiscussionDb.kt); [`JdbcDiscussionRows`](../server/src/main/kotlin/com/plainbase/frameworks/discussion/JdbcDiscussionRows.kt) provides discussion-row operations over it.
 - `/healthz` is unauthenticated liveness: `status` stays `ok` while per-root `available`, watcher `coverage` and `limbo` report different facts. Root unavailability is sticky until restart; watcher coverage can recover.

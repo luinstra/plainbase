@@ -84,6 +84,8 @@ class ObjectContentStore(
     /** `""`, or the configured `storage.prefix` + `"/"`. */
     private val keyPrefix: String,
     private val pollSeconds: Long,
+    /** Whether [watch] starts a poller; false for a reader that serves only its boot-hydrated release. */
+    private val polling: Boolean,
     /** The per-chunk ACTUALLY-FETCHED byte bound ([fetchChunkBounded]); injectable so a test can force deferral cheaply. */
     private val fetchByteBudget: Long = FETCH_BYTE_BUDGET,
     /** Hydrate's fetch concurrency; injectable so a test can make the deferral arithmetic deterministic (poll is always 1). */
@@ -187,14 +189,15 @@ class ObjectContentStore(
      * has gone away is NOT an empty scan here, it is the store's NIO failure, which the rebuild's root-loss
      * classifier turns into skip-and-carry (never the mass delete an empty ScanResult would authorize).
      *
-     * **`complete` is DERIVED AT CALL TIME from the latest generation, and it is never a flag** (C3): this mirror is
-     * a whole view of the bucket exactly when it holds, as a REGULAR FILE, every key the last complete LIST returned,
-     * at the etag that LIST returned for it ([mirrorHoldsGeneration]). That supplies the required WALK-completeness
-     * observation, not the whole OBJECT_LIST proof: the indexing pass also requires every selected Markdown candidate
+     * `complete` requires the walk to see the whole mirror AND the mirror to hold, as a REGULAR FILE, every key the
+     * last complete LIST returned, at the etag that LIST returned for it ([mirrorHoldsGeneration]). Both are evaluated
+     * within this scan. That supplies the required walk-completeness observation, not the whole OBJECT_LIST proof:
+     * the indexing pass also requires every selected Markdown candidate
      * to yield bytes and its binding/proof checks to pass. A pass gets DELETE AUTHORITY only after those gates, while
      * every readable page the mirror does hold still publishes and still serves. A transient GET failure must never
      * blank a site. An incomplete walk supplies no new OBJECT_LIST retirement evidence; previously committed
-     * retirements may still reconcile independently.
+     * retirements may still reconcile independently. In a workspace, a walk racing a poll apply can also be
+     * incomplete, withholding new evidence for that pass.
      *
      * A store that has never completed a LIST answers `false`, and that is not pedantry: it has listed nothing, so it
      * vouches for nothing - including for the claim that its mirror is a whole view of a corpus. (PREVIEW adopt lives
@@ -204,7 +207,7 @@ class ObjectContentStore(
         if (mirrorProbe.get() == null && !Files.isDirectory(mirrorRoot)) {
             ScanResult(files = emptyList(), folders = emptyList(), issues = emptyList(), complete = false)
         } else {
-            mirror.scan().copy(complete = mirrorHoldsGeneration())
+            mirror.scan().let { walk -> walk.copy(complete = walk.complete && mirrorHoldsGeneration()) }
         }
 
     /**
@@ -441,6 +444,8 @@ class ObjectContentStore(
 
     // ---- Watch: the Q5 poll-reconcile ----------------------------------------------------------
 
+    // With !polling, return a no-op closer before creating any thread or invoking any callback.
+    //
     // [onFailure] is accepted and IGNORED beyond the existing retry/logging below: a poll fault is transient by
     // design (the next tick re-reconciles), and availability is not an object-mode concept (D10) - there is no
     // root to mark unavailable.
@@ -463,6 +468,7 @@ class ObjectContentStore(
         onCoverage: (WatchCoverage) -> Unit,
         onBreak: (BreakCause) -> Unit,
     ): AutoCloseable {
+        if (!polling) return AutoCloseable {}
         val stop = CountDownLatch(1)
         val thread = Thread {
             while (!awaitPollStop(stop)) {
@@ -645,15 +651,13 @@ class ObjectContentStore(
      * (mark-precedes-CAS), so a page whose bytes may be mid-flight to the bucket is ALWAYS present in
      * the journal; boot can never reap an unpushed dirty edit before `reconcileDirtyPages` runs.
      *
-     * C5 FORK 1 - [strict]: on the RESTORE path (a bundle-restore/reconcile is owed, `Application.kt`
-     * passes `strict = restored.isRestored`), any of the THREE best-effort failure sites below - (a) a
-     * GET failure/404-while-listed, (b) a mirror-WRITE failure after a good GET, (c) a delete-phase
-     * failure - THROWS instead of deferring, aborting the boot (which retries via the :128-135 idiom,
-     * with the FORK-2 sentinel keeping the reconcile owed until a strict hydrate fully succeeds).
-     * Reason: any of the three leaves the mirror INCOMPLETE, and `GitBundleDr`'s reconcile enumerates
-     * [authoritativeMirrorPaths] AFTER hydrate - a successful-GET-but-failed-WRITE key silently absent
-     * from the mirror would make the reconcile's remove-set FALSE-DELETE it from history (HOLE A
-     * reopening). WARM object boots pass `strict = false` (unchanged C4 best-effort behavior).
+     * [strict] is used for reader boot and when a bundle restore requires reconciliation. A GET failure or
+     * listed 404, a mirror-write failure after a successful GET, or a delete-phase failure throws instead of
+     * deferring and aborts the boot. Both callers require a complete mirror: a reader must not serve a partial
+     * release, and the bundle reconcile enumerates [authoritativeMirrorPaths] after hydrate, so a key absent
+     * because its mirror write failed would otherwise be falsely removed from history. The restore sentinel
+     * keeps reconciliation owed until a strict hydrate succeeds. Other workspace boots keep best-effort behavior
+     * with `strict = false`.
      */
     fun hydrate(strict: Boolean = false) {
         Files.createDirectories(mirrorRoot) // deferred out of the factory so PREVIEW (no hydrate) never mkdirs
@@ -684,7 +688,7 @@ class ObjectContentStore(
                     byteBudget = fetchByteBudget,
                     onFailure = { path, failure ->
                         logger.warn {
-                            "hydrate GET of '${path.value}' failed (${causeOf(failure)}); invalidating so a later poll re-detects"
+                            "hydrate GET of '${path.value}' failed (${causeOf(failure)}); the object could not be hydrated"
                         }
                     },
                 ) { entry -> client.get(keyPrefix + entry.rawRelative) }
@@ -699,12 +703,11 @@ class ObjectContentStore(
             if (deleteMirrorFile(path)) {
                 state.invalidate(path) // drop state ONLY after the file is gone (finding 3)
             } else if (strict) {
-                // (c) delete-phase failure (a swallowed IOException). C5 FORK 1: under `strict` a file the
-                // bucket no longer has must actually be gone before the reconcile enumerates the mirror -
-                // a surviving stale file would masquerade as authoritative and be re-committed. Abort.
+                // Strict callers require bucket-absent files to be gone: a reader must not serve stale release
+                // content, and bundle reconciliation must not re-commit a stale file as authoritative. Abort.
                 throw ObjectStoreException(
-                    "strict hydrate (restore path): deleting bucket-absent mirror file '${path.value}' failed; " +
-                        "the mirror would be incomplete for the boot reconcile",
+                    "strict hydrate: deleting bucket-absent mirror file '${path.value}' failed; " +
+                        "the mirror would be incomplete",
                 )
             }
         }
@@ -747,13 +750,13 @@ class ObjectContentStore(
         // (a) GET failed or 404'd while the mirror file is missing/stale. Best-effort: DROP the state entry so the
         // mirror-file-missing / etag diff stays detectable and a later poll (whose diff is etag-only) or the next
         // hydrate re-fetches - retaining the old etag here would wedge the key absent forever (poll would see
-        // before[path] == listed.etag and never retry). C5 FORK 1: under `strict`, this leaves the mirror incomplete
-        // for a key the reconcile enumeration will need - abort the boot instead.
+        // before[path] == listed.etag and never retry). Strict callers abort instead: a reader must not serve a
+        // partial release, and bundle reconciliation must not treat an unfetched key as absent from authority.
         val unfetched: (TreePath) -> Unit = { path ->
             if (strict) {
                 throw ObjectStoreException(
-                    "strict hydrate (restore path): GET of '${path.value}' failed or 404'd while listed; " +
-                        "the mirror would be incomplete for the boot reconcile",
+                    "strict hydrate: GET of '${path.value}' failed or 404'd while listed; " +
+                        "the mirror would be incomplete",
                 )
             }
             state.invalidate(path)
@@ -784,13 +787,13 @@ class ObjectContentStore(
             state.recordConfirmed(path, outcome.body.etag)
             return true
         }
-        // (b) Hydrate-apply failure (seam g). Best-effort: boot does NOT fail on a single-key mirror write error -
-        // the bucket stays authority; the key stays absent and re-heals later. C5 FORK 1: under `strict`, a
-        // durable-but-unmirrored key here is exactly the HOLE A false-delete class - abort the boot instead.
+        // Best-effort boot tolerates a single-key mirror write error: the bucket stays authority and the key
+        // re-heals later. Strict callers abort: a reader must not serve a partial release, and bundle
+        // reconciliation must not falsely remove a durable key from history because its mirror write failed.
         if (strict) {
             throw ObjectStoreException(
-                "strict hydrate (restore path): mirror write of '${path.value}' failed after a successful " +
-                    "GET ($failure); the mirror would be incomplete for the boot reconcile",
+                "strict hydrate: mirror write of '${path.value}' failed after a successful " +
+                    "GET ($failure); the mirror would be incomplete",
             )
         }
         logger.warn { "mirror_hydrate_failed: '${path.value}' could not be applied ($failure); the poll will retry" }
