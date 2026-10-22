@@ -20,6 +20,7 @@ export type SmokeSeed = { setupToken: string; agentToken: string };
 export type SmokeScenario = {
   authMode: "off" | "builtin";
   roots: "single" | "multi" | "multi-missing" | "discussion-config";
+  reader?: boolean;
 };
 
 export type SmokeServer = {
@@ -116,6 +117,9 @@ export async function startSmokeServer(
 
     const permalinkFixture = path.join(frontendDir, "e2e", "fixtures", "permalink");
     cpSync(permalinkFixture, path.join(contentDir, "permalink"), { recursive: true });
+    if (scenario.reader) {
+      cpSync(path.join(frontendDir, "e2e", "fixtures", "reader"), path.join(contentDir, "reader"), { recursive: true });
+    }
     if (scenario.roots === "discussion-config") {
       // Temporary roots have no owned Git repository; keep history coherently off for this scenario.
       mkdirSync(extraDir, { recursive: true });
@@ -178,7 +182,8 @@ export async function startSmokeServer(
       CONTENT_DIR: contentDir,
       DATA_DIR: dataDir,
       PLAINBASE_AUTH_MODE: scenario.authMode,
-      PLAINBASE_GIT_ENABLED: scenario.roots === "discussion-config" ? "false" : "true",
+      PLAINBASE_GIT_ENABLED: scenario.reader || scenario.roots === "discussion-config" ? "false" : "true",
+      ...(scenario.reader ? { PLAINBASE_PROFILE: "reader" } : {}),
       PLAINBASE_HOST: "127.0.0.1",
       PLAINBASE_LOG_LEVEL: "INFO",
       PLAINBASE_PORT: String(port),

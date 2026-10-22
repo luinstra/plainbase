@@ -10,6 +10,7 @@ import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.SaveRequest
 import com.plainbase.domain.service.SaveResult
@@ -88,7 +89,7 @@ class ProposalApplyRootPinTest : FunSpec({
                         harness.auditRepository,
                         UuidV7IdProvider(),
                         Clock.System,
-                        enforced = false,
+                        mode = PolicyMode.OPEN,
                         discussionsEnabledOf = { true },
                     ),
                     writePipeline = harness.writePipeline(),
@@ -155,7 +156,7 @@ class ProposalApplyRootPinTest : FunSpec({
                         harness.auditRepository,
                         UuidV7IdProvider(),
                         Clock.System,
-                        enforced = false,
+                        mode = PolicyMode.OPEN,
                         discussionsEnabledOf = { true },
                     ),
                     writePipeline = harness.writePipeline(),

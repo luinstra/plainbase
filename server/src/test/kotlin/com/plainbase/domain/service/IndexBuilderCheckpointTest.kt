@@ -254,7 +254,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
                 audit = SqlDelightAuditRepository(database),
                 idProvider = UuidV7IdProvider(),
                 clock = kotlin.time.Clock.System,
-                enforced = false,
+                mode = PolicyMode.OPEN,
                 discussionsEnabledOf = { true },
             )
             val tokens = ApiTokenService(

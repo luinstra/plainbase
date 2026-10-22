@@ -18,6 +18,7 @@ import com.plainbase.frameworks.ktor.dto.PageExistsBody
 import com.plainbase.frameworks.ktor.dto.PageExistsEnvelope
 import com.plainbase.frameworks.ktor.dto.PageHtmlResponse
 import com.plainbase.frameworks.ktor.dto.PreviewResponse
+import com.plainbase.frameworks.ktor.dto.ReaderSessionResponse
 import com.plainbase.frameworks.ktor.dto.RebasedResponse
 import com.plainbase.frameworks.ktor.dto.RejectChangeRequest
 import com.plainbase.frameworks.ktor.dto.RoleListResponse
@@ -351,6 +352,10 @@ class WireTypeGoldenTest : FunSpec({
             SessionResponse.serializer(),
             SessionResponse(authenticated = false, username = null, csrfToken = null, authMode = "builtin"),
         ),
+        "readerSessionResponse" to encoded(
+            ReaderSessionResponse.serializer(),
+            ReaderSessionResponse(authenticated = false, authMode = "reader", release = "r1"),
+        ),
         "tokenListResponse" to encoded(
             TokenListResponse.serializer(),
             TokenListResponse(
@@ -471,9 +476,9 @@ class WireTypeGoldenTest : FunSpec({
             RejectChangeRequest(comment = null)
     }
 
-    test("the fixture's key set equals the covered-entry set — 31 entries, none silently skipped") {
+    test("the fixture's key set equals the covered-entry set — 32 entries, none silently skipped") {
         fixture.keys shouldBe responses.keys + setOf("createPageRequest", "rejectChangeRequest")
-        fixture.keys.size shouldBe 31
+        fixture.keys.size shouldBe 32
     }
     test("discussion tree setting is optional default-omitted and false round-trips") {
         val root = RootTreeDto(

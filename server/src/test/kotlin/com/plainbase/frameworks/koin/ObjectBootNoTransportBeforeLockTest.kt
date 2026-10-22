@@ -40,7 +40,7 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
                     module { single { config } },
                     createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
                     repositoryModule(owner),
-                    securityModule,
+                    securityModule(),
                     createHistoryModule(config, inputs.history, owner),
                 ),
             )
@@ -83,7 +83,7 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
                     module { single { objectEnvConfig } },
                     createContentModule(objectEnvConfig, inputs, openers.openObject, { it.close() }, owner),
                     repositoryModule(owner),
-                    securityModule,
+                    securityModule(),
                     createHistoryModule(objectEnvConfig, inputs.history, owner),
                 ),
             )

@@ -44,6 +44,12 @@ data class BootRefusal(val kind: Kind, val roots: Set<RootName>, val message: St
         /** The object-mode required-key matrix. Unreachable from the CLI; present so `serve` shares one type. */
         OBJECT_KEYS,
 
+        /** A configured value contradicts the reader profile; root capabilities are keyed by root. */
+        READER_PROFILE,
+
+        /** An object reader's DATA_DIR cannot be proved fresh. */
+        READER_DATA_DIR,
+
         /** The ADR-0008 fail-closed bind guard. Root-independent, so [roots] is empty. */
         BIND_GUARD,
 

@@ -56,6 +56,8 @@ io.ktor:ktor-serialization-kotlinx
 io.ktor:ktor-serialization-kotlinx-json
 io.ktor:ktor-serialization-kotlinx-json-jvm
 io.ktor:ktor-serialization-kotlinx-jvm
+io.ktor:ktor-server-auto-head-response
+io.ktor:ktor-server-auto-head-response-jvm
 io.ktor:ktor-server-cio
 io.ktor:ktor-server-cio-jvm
 io.ktor:ktor-server-content-negotiation

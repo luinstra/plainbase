@@ -86,9 +86,12 @@ internal suspend fun observeWire(port: Int, method: String, path: String): WireO
 }
 
 /** A real CIO server over the production module, so the bytes on the socket are what a client sees. */
-internal suspend fun wireServer(block: suspend (Int) -> Unit) {
-    RestHarness(Fixtures.demoDocs, authMode = AuthMode.OFF).use { harness ->
-        val ctx = harness.services
+internal suspend fun wireServer(
+    harness: () -> RestHarness = { RestHarness(Fixtures.demoDocs, authMode = AuthMode.OFF) },
+    block: suspend (Int) -> Unit,
+) {
+    harness().use { rest ->
+        val ctx = rest.services
         val server = embeddedServer(ServerCIO, host = "127.0.0.1", port = 0) { plainbaseModule(ctx) }
         try {
             server.start(wait = false)

@@ -2,6 +2,7 @@ package com.plainbase
 
 import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.repository.IdMapRepository
@@ -22,6 +23,7 @@ import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AnchorPrecompute
 import com.plainbase.domain.service.DiscussionPublicationSignal
 import com.plainbase.domain.service.DiscussionReparseExecutor
+import com.plainbase.domain.service.FirstIndexCompleteness
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.WritePipeline
@@ -36,12 +38,14 @@ import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.ConfigBootInspector
 import com.plainbase.frameworks.config.ConfigLoader
 import com.plainbase.frameworks.config.ConfigValuePolicy
+import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.TransportSecurityPolicy
 import com.plainbase.frameworks.discussion.DiscussionBoot
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.DiscussionWatcher
+import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.createContentModule
@@ -51,6 +55,7 @@ import com.plainbase.frameworks.koin.createRepositoryModule
 import com.plainbase.frameworks.koin.createRestModule
 import com.plainbase.frameworks.koin.createSearchModule
 import com.plainbase.frameworks.koin.indexModule
+import com.plainbase.frameworks.koin.readerModules
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
 import com.plainbase.frameworks.ktor.RouteContext
@@ -157,14 +162,16 @@ private fun runOwnedServer(
             GitMaintenanceTasks().also(resources::ownMaintenance)
         }
         app.modules(
-            module { single { config } },
-            createRepositoryModule(runOpeners.openDriver, control.closeDriver, resources),
-            securityModule,
-            indexModule,
-            checkpointModule,
-            createSearchModule(runOpeners.openSearch, control.closeSearch, resources),
-            createDiscussionModule(resources),
-            createRestModule(resources, control.afterRouteContextBuilt, control.buildRouteContext),
+            listOf(
+                module { single { config } },
+                createRepositoryModule(runOpeners.openDriver, control.closeDriver, resources),
+                securityModule(),
+                indexModule(),
+                checkpointModule(),
+                createSearchModule(runOpeners.openSearch, control.closeSearch, resources),
+                createDiscussionModule(resources),
+                createRestModule(resources, control.afterRouteContextBuilt, control.buildRouteContext),
+            ) + readerModules(config),
         )
         val koin = app.koin
         // THE BOOT GATE, consumed in stages. The gate itself - `evaluateBootGate` - is the ONE function
@@ -208,6 +215,7 @@ private fun runOwnedServer(
         if (ownedLock == null) {
             refuseServe(output, "another Plainbase process is holding ${config.dataDir} - stop it before starting a second instance")
         }
+        refuseFirst(ConfigBootInspector.readerDataDirRefusals(config), TOPOLOGY_REFUSAL_KINDS, output)
         // Everything past the lock runs INSIDE the try/finally so the lock ALWAYS releases - including a
         // prepare() failure (a forced-on Git hitting a read-only/disk-full content dir, or a `git init` fault),
         // which must surface as the same actionable `serve:` message as gateCheck(), never a raw stack trace
@@ -403,6 +411,7 @@ private fun runOwnedServer(
                 // Full scan at startup builds the snapshot; the rescan route rebuilds on demand. The
                 // rebuild also self-heals the index for any page left dirty by a prior interrupted save.
                 control.initialRebuild(builder)
+                firstIndexRefusal(config, koin, builder)?.let { refuseServe(output, it) }
                 // PB-WRITE-1 fix H: write-ahead recovery of a prior interrupted save, after the index is whole
                 // and before serving - drift-skips a page whose on-disk bytes changed since the crash.
                 koin.get<WritePipeline>().reconcileDirtyPages()
@@ -425,6 +434,24 @@ private fun runOwnedServer(
     } finally {
         resources.close()
     }
+}
+
+/**
+ * Checks a reader's first index against its hydrated listing. [IndexBuilder.current] and
+ * [IndexBuilder.lastFullPassScans] are read as two separate loads, not an atomic pair. They are consistent here
+ * only because no second reader pass can run before this check: object polling is disabled, discussion watchers
+ * are filtered out, and HTTP has not started.
+ */
+private fun firstIndexRefusal(config: PlainbaseConfig, koin: Koin, builder: IndexBuilder): String? {
+    if (config.profile != DeploymentProfile.READER || config.storage.backend != StorageBackend.OBJECT) return null
+    val primary = koin.get<RootRegistry>().primary.name
+    val listed = checkNotNull(koin.get<ObjectContentStore>().latestManifest()) { "a hydrated object store holds a listing" }
+        .listed.filterTo(mutableSetOf()) { it != TreePath.require(FOLDER_META_NAME) }
+    return FirstIndexCompleteness.refusal(
+        listed,
+        FirstIndexCompleteness.indexedSources(builder.current, primary, FOLDER_META_NAME),
+        builder.lastFullPassScans[primary],
+    )
 }
 
 internal fun watcherRoots(registry: RootRegistry, availability: RootAvailability): List<Root> {
@@ -555,7 +582,7 @@ private fun hydrateObjectMode(
                 control.afterDrReconcile(bundleDr)
             }
 
-            false, null -> objectStore.hydrate()
+            false, null -> control.hydrateObject(objectStore, config.profile == DeploymentProfile.READER)
         }
     }.onFailure { failure ->
         rethrowError(failure)
@@ -605,6 +632,8 @@ val TOPOLOGY_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(
     BootRefusal.Kind.ROOT_PAIR,
     BootRefusal.Kind.ROOT_VS_DATA_DIR,
     BootRefusal.Kind.OBJECT_KEYS,
+    BootRefusal.Kind.READER_PROFILE,
+    BootRefusal.Kind.READER_DATA_DIR,
 )
 
 val BIND_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.BIND_GUARD)
@@ -798,12 +827,12 @@ private fun Set<RootName>.sortedNames(): String = map { it.value }.sorted().join
 
 /**
  * The single rev-3.4 backup-guidance WARN (pure accessor, the [TransportSecurityPolicy]
- * idiom): non-null exactly when an object-mode boot runs without git history, i.e. point-in-time
+ * idiom): non-null exactly when an object-mode workspace boots without git history, i.e. point-in-time
  * content recovery is entirely the operator's backup schedule. `serve()` logs it ONCE; there is no
  * snapshot or manifest writer (backups are operator-owned by decision).
  */
 internal fun objectModeGitDisabledWarning(config: PlainbaseConfig, history: HistoryProvider): String? =
-    if (config.storage.backend == StorageBackend.OBJECT && !history.enabled) {
+    if (config.profile != DeploymentProfile.READER && config.storage.backend == StorageBackend.OBJECT && !history.enabled) {
         "object mode with git disabled: no commit-grained history; content point-in-time recovery is " +
             "your backup schedule (see the backup guidance)"
     } else {

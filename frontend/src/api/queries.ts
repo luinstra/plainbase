@@ -235,8 +235,8 @@ export function invalidateAfterWrite(queryClient: QueryClient, { id, url }: { id
 }
 
 /**
- * The auth/session read (A4b) — `authenticated` / `username` / `csrf_token` / `auth_mode`, nothing more (no
- * role, no capabilities — F8). The Shell gates the "Review" nav link on `authenticated`; the review route uses
+ * The session read exposes authentication and auth mode; workspace sessions also include username and a CSRF token.
+ * No role or capabilities are exposed. The Shell gates the "Review" nav link on `authenticated`; the review route uses
  * it too. csrf.ts keeps its OWN independent `/session` fetch (the mutation-token cache) — leave it.
  */
 export const sessionQuery = queryOptions({

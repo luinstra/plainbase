@@ -28,11 +28,10 @@ import kotlin.io.path.isRegularFile
 import kotlin.io.path.readText
 
 /**
- * Rev 3.4's backup-guidance WARN: exactly non-null when object mode boots with git disabled. Since C5,
- * `git.enabled=true` in object mode wires a real `GitCliHistoryProvider` + bundle DR (a real
- * `enabled == true` [HistoryProvider]), so this WARN fires only on a git-DISABLED object boot, not on
- * every object boot. No snapshot/manifest writer and no `storage.object.snapshot.*` keys exist (rev 3.4
- * removed that alternative outright) - a companion source-scan pins both absences.
+ * Workspace backup guidance is present only for object deployments with git history disabled.
+ * Readers omit this advice because they never write the content authority. An enabled [HistoryProvider]
+ * suppresses the warning for workspaces as well. The source scan also checks that no snapshot/manifest
+ * writer or `storage.object.snapshot.*` configuration keys exist.
  */
 class ObjectGitDisabledWarnTest : FunSpec({
 
@@ -62,6 +61,24 @@ class ObjectGitDisabledWarnTest : FunSpec({
     test("LOCAL mode never warns, git enabled or not") {
         objectModeGitDisabledWarning(localConfig, NoOpHistoryProvider).shouldBeNull()
         objectModeGitDisabledWarning(localConfig, enabledHistoryStub).shouldBeNull()
+    }
+
+    test("object reader with disabled history should omit workspace backup guidance") {
+        val data = Files.createTempDirectory("pb-reader-backup-warning")
+        try {
+            Files.writeString(data.resolve("plainbase.conf"), "profile = reader")
+            val config = ConfigLoader.fromEnvAndFile(
+                mapOf(
+                    "DATA_DIR" to data.toString(), "PLAINBASE_STORAGE_BACKEND" to "object",
+                    "PLAINBASE_S3_ENDPOINT" to "https://acct.example.com", "PLAINBASE_S3_BUCKET" to "docs",
+                    "PLAINBASE_S3_ACCESS_KEY_ID" to "key", "PLAINBASE_S3_SECRET_ACCESS_KEY" to "secret",
+                    "PLAINBASE_S3_PREFIX" to "releases/r1", "PLAINBASE_GIT_ENABLED" to "false",
+                ),
+            )
+            objectModeGitDisabledWarning(config, NoOpHistoryProvider).shouldBeNull()
+        } finally {
+            data.toFile().deleteRecursively()
+        }
     }
 
     test("the accessor result, fed through the facade exactly as serve() does, logs EXACTLY ONE backup WARN") {

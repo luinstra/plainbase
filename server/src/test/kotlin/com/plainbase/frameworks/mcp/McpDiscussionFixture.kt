@@ -28,6 +28,7 @@ import com.plainbase.domain.service.DiscussionWriteOutcome
 import com.plainbase.domain.service.DiscussionWriter
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.PageRootResolver
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.SyncedDiscussionIndex
@@ -113,7 +114,7 @@ internal class McpDiscussionFixture(
             audit = harness.auditRepository,
             idProvider = UuidV7IdProvider(),
             clock = authClock,
-            enforced = enforced,
+            mode = if (enforced) PolicyMode.ENFORCED else PolicyMode.OPEN,
             editableOf = { harness.rootRegistry.byName(it)?.editable == true },
             objectBackendOf = { harness.rootRegistry.byName(it)?.backend is RootBackend.Object },
             discussionsEnabledOf = { harness.rootRegistry.byName(it)?.discussionsEnabled == true },

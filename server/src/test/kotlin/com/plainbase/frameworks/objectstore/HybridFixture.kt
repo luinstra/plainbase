@@ -55,6 +55,7 @@ class HybridFixture(
         rowsAtStart = rowsAtStart,
         keyPrefix = keyPrefix,
         pollSeconds = pollSeconds,
+        polling = true,
         fetchByteBudget = fetchByteBudget,
         fetchParallelism = fetchParallelism,
         dirtyPaths = { dirtyPaths.toSet() },

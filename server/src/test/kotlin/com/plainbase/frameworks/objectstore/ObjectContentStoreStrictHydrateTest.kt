@@ -17,6 +17,18 @@ import java.nio.file.Files
  */
 class ObjectContentStoreStrictHydrateTest : FunSpec({
 
+    test("a listed key that 404s at GET aborts a strict hydrate") {
+        HybridFixture().use { hybrid ->
+            val key = "vanished.md"
+            hybrid.fake.seed(key, "v1".toByteArray())
+            hybrid.fake.onGetKey = { if (it == key) hybrid.fake.remove(it) }
+
+            val failure = shouldThrow<ObjectStoreException> { hybrid.store.hydrate(strict = true) }
+            failure.message shouldContain "GET"
+            failure.message shouldContain key
+        }
+    }
+
     test("(a) strict hydrate: a GET failure for a bucket-only key aborts the boot") {
         HybridFixture().use { hybrid ->
             val path = TreePath.require("bucket-only.md")

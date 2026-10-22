@@ -18,6 +18,7 @@ import com.plainbase.domain.service.RootLossClassifier
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.config.ConfigLoader
+import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -97,6 +98,13 @@ object AdoptCommand {
         if (mode == null) {
             output.error(USAGE)
             return 2
+        }
+        if (config.profile == DeploymentProfile.READER && mode != AdoptionPass.Mode.PREVIEW) {
+            output.error(
+                "adopt: profile = reader cannot write identity state into DATA_DIR or the content authority; " +
+                    "run adopt in the source checkout",
+            )
+            return 1
         }
 
         // PREVIEW's contract is zero writes, db included: it must not create or migrate the app db,

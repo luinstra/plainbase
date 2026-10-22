@@ -333,6 +333,7 @@ private class NativeObjectGraph : AutoCloseable {
             rowsAtStart = ::rowsAtStart,
             keyPrefix = "",
             pollSeconds = 3600,
+            polling = true,
             dirtyPaths = { emptySet() },
             mirrorRoot = mirrorRoot,
             ignoreRules = ignoreRules,

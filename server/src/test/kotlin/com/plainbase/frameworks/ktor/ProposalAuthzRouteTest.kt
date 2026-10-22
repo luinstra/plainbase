@@ -4,6 +4,7 @@ import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.service.IndexHarness
+import com.plainbase.domain.service.PolicyMode
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -106,7 +107,7 @@ class ProposalAuthzRouteTest : FunSpec({
                     audit = harness.auditRepository,
                     idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
                     clock = Clock.System,
-                    enforced = true,
+                    mode = PolicyMode.ENFORCED,
                     discussionsEnabledOf = { true },
                 )
                 val facade = GuardedProposalFacade(

@@ -24,8 +24,11 @@ in the container, independent of the ordinary log level.
 
 ## Env-wins-over-file, restart-only
 
-Environment variables always win over `DATA_DIR/plainbase.conf` (HOCON, ADR-0009): the file only
-supplies values env omits. Secrets (`PLAINBASE_PROXY_SECRET`) belong in env, not the file - the
+Environment variables win over `DATA_DIR/plainbase.conf` (HOCON, ADR-0009): the file only
+supplies values env omits. `PLAINBASE_PROFILE` only enables reader mode: either env `reader` or file
+`profile = reader` selects it. Unset or blank env leaves the file in control; any other non-blank env value,
+including `workspace`, refuses configuration loading.
+Secrets (`PLAINBASE_PROXY_SECRET`) belong in env, not the file - the
 file path exists for completeness, not as the recommended place for a secret. Config loads once at
 boot; every key here is restart-only, there is no hot reload.
 
@@ -34,10 +37,10 @@ boot; every key here is restart-only, there is no hot reload.
 `PLAINBASE_HOST` is passed to the server as configured. The bind guard treats only the case-insensitive,
 unbracketed `localhost`/`ip6-localhost` aliases and numeric loopback literals as loopback; another hostname is
 fail-closed as exposed and is never resolved by the guard. Numeric IPv4 values must be four ASCII
-decimal octets (`0`–`255`), with no abbreviations or leading-zero forms; IPv4 zone suffixes are rejected.
+decimal octets (`0` to `255`), with no abbreviations or leading-zero forms; IPv4 zone suffixes are rejected.
 IPv6 zones are stripped for classification, and IPv4-mapped IPv6 literals retain their IPv4 CIDR behavior.
 
-An optional host port accepts only ASCII decimal `0`–`65535`; bracketed IPv6 uses `[address]:port`.
+An optional host port accepts only ASCII decimal `0` to `65535`; bracketed IPv6 uses `[address]:port`.
 Malformed ports, bracketed aliases, hostnames, Unicode digits and dotted-hex forms are rejected by
 the security predicates. `PLAINBASE_TRUSTED_PROXY` is a comma-separated list of numeric CIDRs and
 is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUSTED_PROXY`.
@@ -48,9 +51,13 @@ is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUS
 |---|---|---|---|
 | `CONTENT_DIR` | `contentDir` | `./content` | ConfigDecoder.kt |
 | `DATA_DIR` | (env/default only, never file) | `./data` | ConfigValuePolicy.kt |
+| `PLAINBASE_PROFILE` | `profile` | unset or blank: the file decides | ConfigDecoder.kt (trimmed, case-insensitive `reader` enables reader mode even with a missing file, absent key or file `workspace`; any other non-blank value refuses) |
+| - (file) | `profile` | `workspace` when absent and env does not select reader | ConfigDecoder.kt (`workspace` or `reader`, case-insensitive; file `reader` enables reader mode; file `workspace` cannot override env `reader`; blank, null and non-string values refuse); ConfigLoader.kt (`readOperatorFile`: literal only, `${...}` substitutions refuse; strict regular-file read, following symlinks to regular files) |
+| - (file only) | `site.canonicalOrigin` | none | ConfigDecoder.kt (quoted canonical `"https://host[:port]"`, lower-case host, no path or default `:443`, port 1-65535 without leading zeros; validated under either profile) |
+| - (file only) | `site.name` | none | ConfigDecoder.kt (trimmed, non-blank, no ISO control characters) |
 | `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`) | ConfigDecoder.kt |
 | `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`) | ConfigDecoder.kt |
-| `PLAINBASE_LOG_LEVEL` | - | `INFO` | `logback.xml:8-9` (`${PLAINBASE_LOG_LEVEL:-INFO}`; **not** a `PlainbaseConfig` field) |
+| `PLAINBASE_LOG_LEVEL` | - | `INFO` | [Logging and command channels](#logging-and-command-channels) (`${PLAINBASE_LOG_LEVEL:-INFO}`; **not** a `PlainbaseConfig` field) |
 | `PLAINBASE_MAX_WRITE_BODY_BYTES` | `maxWriteBodyBytes` | 1 MiB | ConfigDecoder.kt |
 | `PLAINBASE_MAX_ASSET_BYTES` | `maxAssetBytes` | 10 MiB | ConfigDecoder.kt |
 | `PLAINBASE_AUTH_MODE` | `auth.mode` | `off` (blank parses to `OFF`) | ConfigDecoder.kt |
@@ -72,9 +79,14 @@ is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUS
 | `PLAINBASE_S3_REGION` | `storage.object.region` | `auto` (R2) | ConfigDecoder.kt |
 | `PLAINBASE_S3_PREFIX` | `storage.object.prefix` | `""` | ConfigDecoder.kt (validated through the `TreePath` funnel when non-empty) |
 | `PLAINBASE_S3_PATH_STYLE` | `storage.object.pathStyle` | `true` (R2 account-endpoint) | ConfigDecoder.kt |
-| `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | ConfigDecoder.kt |
+| `PLAINBASE_S3_POLL_SECONDS` | `storage.object.pollSeconds` | `60` | ConfigDecoder.kt (workspace poll interval; no effect on a reader, but the env value is still validated as a positive integer; see [reader polling](deploy/public-reader.md#several-readers-and-health)) |
 | - (file only) | `theme.light` (CSS or scheme file) | bundled light definition | ConfigDecoder.kt |
 | - (file only) | `theme.dark` (CSS or scheme file) | bundled dark definition | ConfigDecoder.kt |
+
+An absent `plainbase.conf` loads defaults, with reader mode enabled when `PLAINBASE_PROFILE=reader`.
+Either source can enable reader mode; neither can turn it off. Env unset or blank and an absent file key select workspace.
+A directory, dangling symlink or unreadable operator file refuses configuration loading under either profile.
+A symlink to a regular file, including a file outside `DATA_DIR`, is followed. Other keys still support HOCON substitutions.
 
 Any `storage.object.*` key set while `storage.backend=local` is ignored with a single startup warning
 that names the keys (a shared `plainbase.conf` across a local and an object deploy stays legal). In
@@ -92,7 +104,7 @@ bad signature makes startup **refuse with an operator-actionable message and exi
 stale or empty tree (never disable certificate validation to work around a TLS failure - fix the endpoint
 or this host's CA trust). Git history over the object backend IS available: set
 `PLAINBASE_GIT_ENABLED=true` to commit every save into `DATA_DIR/mirror` and ship a bucket-backed
-`history.bundle` (C5's git-over-the-mirror + bundle DR), recovering commit-grained history after a
+`history.bundle` (Git over the mirror plus bundle DR), recovering commit-grained history after a
 `DATA_DIR` loss, not just content. Leave git unset/false to run object mode without history. See the
 [object-storage deploy guide](deploy/object-storage.md) for a zero-to-serving R2 walkthrough (IAM,
 migration, platform support), [operating-plainbase.md](operating-plainbase.md#backups) for the
@@ -151,15 +163,17 @@ env-var grammar for it (a `plainbase root add/remove/list` CLI manages a second,
 instead - see [The CLI and the two files](#the-cli-and-the-two-files) below) - and like every key it
 is restart-only.
 
+Workspace example:
+
 ```hocon
 roots {
   docs    { path = "/home/me/docs" }                    # editable=true, history=auto by default
-  memoria { path = "/home/me/dev/memoria/.crew" }       # editable=false, history=off by default
+  memoria { path = "/home/me/dev/memoria/docs" }        # editable=false, history=off by default
   notes   { path = "/home/me/notes", editable = true }
 }
 ```
 
-Per-root keys:
+Per-root keys with workspace defaults:
 
 | Key | Meaning | Default (`docs`) | Default (extras) |
 |---|---|---|---|
@@ -172,6 +186,10 @@ Per-root keys:
 | `excludes` | list of JDK glob patterns subtracted from the selected files | `[]` | `[]` |
 | `folderLabels` | exact NFC-normalized relative folder paths mapped to display labels; labels do not change URLs or `_folder.yaml` | `{}` | `{}` |
 
+Under `profile = reader`, every root defaults to `editable = false`, `history = off`, and
+`discussionsEnabled = false`. Explicit capabilities that contradict these reader settings are refused,
+whether declared in `plainbase.conf` or managed `roots.conf`.
+
 Root content filtering is evaluated at boot and applies consistently to scans, filesystem reads and writes, watches,
 index publication, durable identity resolution, and search. Patterns use `/` separators, are relative, and cannot
 contain `..` segments or backslashes. For includes, `docs/**` selects the subtree while `docs` alone selects only
@@ -181,7 +199,7 @@ membership behavior and is not filtered by these keys.
 The keys are plural because bare `include` is a HOCON directive, not an ordinary field name.
 JDK glob matching is whole-path matching: `**/*.md` matches nested Markdown but misses a top-level `a.md`, so select
 both shapes when both are intended. Dot-prefixed entries remain hidden unless an include contains the literal
-dot-prefixed prefix (for example `.crew/**`; `**/*.md` does not authorize `.crew`). Internally supplied legacy ignore
+dot-prefixed prefix (for example `.private/**`; `**/*.md` does not authorize `.private`). Internally supplied legacy ignore
 rules remain additive; there is no live `content.ignore` configuration key in this release.
 The top-level `.plainbase/` directory is reserved for authoritative discussion files and is never page content.
 Reservation is NFC-normalized and case-insensitive. Includes whose first literal-prefix segment normalizes to
@@ -216,7 +234,7 @@ re-adding the root makes those proposals visible again.
 
 **A root's rank is its DECLARATION LINE in this block, and the lowest rank wins.** Two roots may hold two
 different pages carrying the same frontmatter `id:` - a copied file, a forked runbook, a page moved
-by hand between trees. Under per-root identity (C5) BOTH pages KEEP that id: each lives in its own root
+by hand between trees. Under per-root identity BOTH pages KEEP that id: each lives in its own root
 and each answers its OWN rooted permalink `/p/{root}/{id}`. Rank no longer decides who "wins" the id - it
 decides only SOURCE PRECEDENCE, the order a bare, root-less lookup ranks the candidate roots in.
 
@@ -451,8 +469,11 @@ Rules:
 
 The primary root is `docs`, but a missing or unreadable root is not a server-boot refusal. `serve` marks
 the root unavailable, logs the following warning, and starts. Root-dependent API, agent, asset, and write
-surfaces answer 503 until the path is restored and the server is restarted. Browser navigation is the
-deliberate exception: it serves the SPA shell with 200 so the client can render its own outage UI:
+surfaces answer 503 until the path is restored and the server is restarted. Workspace HTML navigation
+is the deliberate exception: it serves the SPA shell with 200 so the client can render its own outage UI.
+Reader HTML navigation serves the shell with 503; Markdown requests receive a JSON 503. For available
+content, the reader serves initial page and landing documents, landing Markdown, and HTML 404 shells
+for misses. See the [reader guide](deploy/public-reader.md#pages-statuses-and-caching).
 
 ```
 root 'docs' is not available at /srv/docs: it will serve 503 until the path is restored and the server restarted (its pages, aliases and checkpoints are left untouched)
@@ -469,9 +490,10 @@ A configured root that is missing at boot, or whose directory vanishes while the
 **unavailable** and:
 
 - root-dependent API, agent, asset, and write surfaces answer **503 `root_unavailable`** with a `Retry-After`,
-  **never a 404**. Browser navigation is the deliberate exception: it serves the SPA shell with **200** so
-  the client can render its outage UI. A 404 is a miss in the requested visible scope; a root pin narrows that
-  scope, and hidden or excluded content can also be 404. Do not infer physical deletion or erase historical
+  **never a 404**. Workspace HTML navigation is the deliberate exception: it serves the SPA shell with **200** so
+  the client can render its outage UI. Reader HTML navigation serves a **503** shell, as described in the
+  [reader guide](deploy/public-reader.md#pages-statuses-and-caching). A 404 is a miss in the requested visible scope;
+  a root pin narrows that scope, and hidden or excluded content can also be 404. Do not infer physical deletion or erase historical
   citations/provenance. A 503 leaves availability unresolved: keep citations/provenance and retry after recovery or
   convergence for reads. Root rejection before entry into the operation leaves no write; late discussion failures can
   follow persistence, so inspect the outcome before resubmitting. Shutdown admission is a

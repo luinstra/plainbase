@@ -194,7 +194,7 @@ class ContentModuleWiringTest : FunSpec({
                     module { single { config } },
                     createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
                     repositoryModule(owner),
-                    securityModule,
+                    securityModule(),
                     createHistoryModule(config, inputs.history, owner),
                 ),
             )
@@ -428,7 +428,7 @@ private fun preparedModules(
         module { single { config } },
         createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
         createRepositoryModule(openers.openDriver, { it.close() }, owner),
-        securityModule,
+        securityModule(),
         createHistoryModule(config, inputs.history, owner),
     )
 }

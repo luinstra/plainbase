@@ -25,6 +25,9 @@ import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.AssetReadOutcome
+import com.plainbase.domain.service.DocumentIndex
+import com.plainbase.domain.service.DocumentResolution
+import com.plainbase.domain.service.DocumentResolver
 import com.plainbase.domain.service.IdResolution
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.LinkChecker
@@ -42,14 +45,16 @@ import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.domain.service.RootedResource
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.UrlAliasRegistry
+import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 /**
  * The frameworks-side [ReadFacade] impl (A3): it holds the raw read services + the [PolicyService] as PRIVATE
  * deps, calls `checkRead` FIRST on every method (throwing [com.plainbase.domain.service.AccessDenied] BEFORE any
  * snapshot/membership work, so a read never leaks page existence to anonymous), then delegates. The route never
- * sees the raw services. The memoized tree JSON ([TreeJsonCache]) lives here (per-snapshot framework state, not a
- * mutator). The `AccessDenied` → 401/403 mapping is the route's; this impl just lets the throw propagate.
+ * sees the raw services. Two per-snapshot framework memos live here: the tree JSON ([TreeJsonCache]) and the
+ * reader-only [DocumentIndex] map, filled lazily per root. Neither is a mutator. The `AccessDenied` → 401/403 mapping
+ * is the route's; this impl just lets the throw propagate.
  *
  * **Availability is checked AFTER the gate, always (ADR-0011 D5).** Every read that resolves a root throws
  * [RootUnavailable] once `checkRead` has passed and the root turns out not to be serving; the route funnel maps it
@@ -87,6 +92,9 @@ class GuardedReadFacade(
 ) : ReadFacade {
 
     private val treeJson = TreeJsonCache(indexBuilder, registry, availability)
+    private class DocumentIndexes(val snapshot: PageIndex, val byRoot: Map<RootName, DocumentIndex>)
+
+    private val documentIndexes = AtomicReference<DocumentIndexes?>(null)
 
     /** The shared exit boundary for a rooted BACKEND call - here, the two git reads (see [history]/[diff]). */
     private val rootLoss = RootLossClassifier(availability)
@@ -213,6 +221,40 @@ class GuardedReadFacade(
         if (!allowsPage(payload.page)) return null
         requireAvailable(payload.page.root)
         return payload
+    }
+
+    override fun document(principal: Principal, root: RootName, path: TreePath?): DocumentResolution {
+        policy.checkRead(principal, RootedResource(root, path?.value ?: "").audit)
+        requireAvailable(root)
+        val snapshot = indexBuilder.current
+        val index = documentIndex(snapshot, root)
+        val resolution = DocumentResolver.resolve(
+            index,
+            path,
+            aliasRegistry::find,
+            bindsLive = { registry.byName(it.root) != null && resolver.bindsLive(it.root, it.id) },
+            servable = ::allowsPage,
+            unverifiedAlias = {
+                requireAvailable(it.root)
+                absence.requireVerifiedAbsence(it.root, it.id, snapshot)
+            },
+        )
+        when (resolution) {
+            is DocumentResolution.Serve -> requireAvailable(resolution.page.root)
+            is DocumentResolution.Redirect -> requireAvailable(resolution.page.root)
+            DocumentResolution.FolderListing, DocumentResolution.Miss -> Unit
+        }
+        return resolution
+    }
+
+    private fun documentIndex(snapshot: PageIndex, root: RootName): DocumentIndex {
+        while (true) {
+            val memo = documentIndexes.load()
+            val byRoot = memo?.takeIf { it.snapshot === snapshot }?.byRoot.orEmpty()
+            byRoot[root]?.let { return it }
+            val index = DocumentResolver.index(snapshot, root, registry.byName(root)?.folderLabels.orEmpty())
+            if (documentIndexes.compareAndSet(memo, DocumentIndexes(snapshot, byRoot + (root to index)))) return index
+        }
     }
 
     override fun search(principal: Principal, q: String?, limit: String?, offset: String?, root: RootName?): SearchService.Outcome {

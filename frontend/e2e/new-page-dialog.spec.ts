@@ -6,6 +6,23 @@ import { gotoExpectStatus } from "./helpers";
 import { PAGE_TEMPLATES } from "../src/lib/pageTemplates";
 
 const current = "/docs/guides/deploy-guide";
+for (const opener of ["header", "listing"]) {
+  test(`trailing-slash workspace folder opens creation from the ${opener}`, async ({ page }) => {
+    await gotoExpectStatus(page, "/docs/guides/");
+    await expect(page.locator("[data-pb-folder]")).toBeVisible();
+    if (opener === "header") {
+      await expect(page.locator("[data-pb-new-page]")).toBeEnabled();
+      await page.locator("[data-pb-new-page]").click();
+    } else {
+      await page.getByRole("link", { name: "New page here" }).click();
+    }
+    await expect(page.getByRole("dialog", { name: "New page" })).toBeVisible();
+    await expect(page.locator("[data-pb-new-folder]")).toHaveValue(JSON.stringify(["folder", "guides"]));
+    await expect(page.locator('.pb-sidebar a[href="/docs/guides"]')).toHaveAttribute("aria-current", "page");
+    expect(new URL(page.url()).pathname).toBe("/docs/guides/");
+  });
+}
+
 async function open(page: import("@playwright/test").Page) {
   await expect(page.locator("a[data-pb-new-page]")).toBeVisible();
   await page.locator("[data-pb-new-page]").click();

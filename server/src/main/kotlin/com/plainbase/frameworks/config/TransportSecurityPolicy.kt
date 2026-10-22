@@ -7,6 +7,8 @@ internal object TransportSecurityPolicy {
     fun derive(config: PlainbaseConfig): TransportSecurityValues {
         val nonLoopbackBind = RemoteAddress.isNonLoopbackBind(config.host)
         val bindRefusal = when {
+            config.profile == DeploymentProfile.READER && nonLoopbackBind ->
+                "reader binds loopback only; set PLAINBASE_HOST=127.0.0.1. No setting admits a non-loopback bind (${config.host})."
             // Proxy completeness must precede loopback and insecure admission.
             config.auth.mode == AuthMode.PROXY &&
                 (config.auth.trustedProxyCidrs.isEmpty() || config.auth.proxySecret.isNullOrBlank()) ->

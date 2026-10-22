@@ -3,6 +3,7 @@ package com.plainbase.frameworks.objectstore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RowsAtStart
+import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -76,6 +77,7 @@ object ObjectContentStoreFactory {
             rowsAtStart = rowsAtStart,
             keyPrefix = if (storage.prefix.isEmpty()) "" else "${storage.prefix}/",
             pollSeconds = storage.pollSeconds,
+            polling = config.profile != DeploymentProfile.READER,
             dirtyPaths = dirtyPaths,
             isDirty = isDirty,
             mirrorRoot = mirrorRoot,

@@ -2,12 +2,19 @@ package com.plainbase.frameworks.config
 
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.CommitGlob
+import com.plainbase.domain.service.PolicyMode
 import java.net.URI
 import java.net.URISyntaxException
 import java.nio.file.Path
 
 /** Pure normalized-value derivations shared by config loading and runtime consumers. */
 internal object ConfigValuePolicy {
+    fun policyMode(config: PlainbaseConfig): PolicyMode = when {
+        config.profile == DeploymentProfile.READER -> PolicyMode.READER
+        config.auth.mode == AuthMode.OFF -> PolicyMode.OPEN
+        else -> PolicyMode.ENFORCED
+    }
+
     /** Resolves the app-owned data directory; it is intentionally independent of file configuration. */
     fun dataDirFrom(env: Map<String, String>): Path =
         Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize()

@@ -20,7 +20,7 @@ async function fetchCsrfToken(): Promise<string | null> {
   const response = await fetch("/api/v1/session", { headers: { accept: "application/json" } });
   if (!response.ok) return null;
   const session = (await response.json()) as SessionResponse;
-  return session.csrf_token;
+  return session.csrf_token ?? null;
 }
 
 /** The cached CSRF token, fetching `/session` on first use (null in `off` mode). [forceRefresh] re-fetches (a stale-token retry). */

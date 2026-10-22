@@ -23,7 +23,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "e2e/fixtures/*.vitest.ts"],
     setupFiles: ["src/test-setup.ts"],
     // Keep the per-test ceiling strictly ABOVE Testing-Library's `asyncUtilTimeout` (5000ms, set in
     // test-setup.ts). At the vitest default (also 5000ms) the two ceilings collide: a slow-but-correct

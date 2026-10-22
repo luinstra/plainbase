@@ -30,6 +30,7 @@ import com.plainbase.domain.service.DiscussionPageResolver
 import com.plainbase.domain.service.DiscussionReads
 import com.plainbase.domain.service.DiscussionSyncState
 import com.plainbase.domain.service.DiscussionWriter
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.SyncedDiscussionIndex
@@ -121,7 +122,7 @@ private class DiscussionHttpFixture(val harness: MultiRootRestHarness, rootPath:
             audit = harness.audit,
             idProvider = UuidV7IdProvider(),
             clock = clock,
-            enforced = enforced,
+            mode = if (enforced) PolicyMode.ENFORCED else PolicyMode.OPEN,
             editableOf = { harness.registry.byName(it)?.editable == true },
             objectBackendOf = { harness.registry.byName(it)?.backend is RootBackend.Object },
             discussionsEnabledOf = { harness.registry.byName(it)?.discussionsEnabled == true },

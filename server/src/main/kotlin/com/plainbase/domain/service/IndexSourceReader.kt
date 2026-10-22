@@ -16,6 +16,8 @@ import com.plainbase.domain.root.UnavailableCause
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 
+internal fun isPageSource(path: TreePath): Boolean = path.name.endsWith(".md")
+
 /** Reads one source into an eager [SourceScan]; the coordinator owns proof, identity, persistence, and publication. */
 internal class IndexSourceReader(
     private val frontmatterParser: FrontmatterParser,
@@ -105,7 +107,7 @@ internal class IndexSourceReader(
         var pageReadsComplete = true
         val unread = mutableSetOf<TreePath>()
         val drafts = scan.files
-            .filter { it.path.name.endsWith(".md") }
+            .filter { isPageSource(it.path) }
             .sortedBy { it.path.value }
             .mapNotNull { file ->
                 // An uncertain read is buffered as unread and stays in limbo; a confirmed absence only withholds
@@ -132,7 +134,7 @@ internal class IndexSourceReader(
                 }
                 Draft(file, bytes, frontmatterParser.parse(bytes))
             }
-        val assets = scan.files.filterNot { it.path.name.endsWith(".md") }.map { it.path }.toSet()
+        val assets = scan.files.filterNot { isPageSource(it.path) }.map { it.path }.toSet()
         // Keep rawName verbatim: TreePath would normalize Unicode and erase the collision diagnostic's loser name.
         val urls = CanonicalUrlBuilder.build(
             root = rootName,

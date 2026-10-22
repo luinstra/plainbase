@@ -18,12 +18,15 @@ import com.plainbase.frameworks.ktor.routes.healthRoute
 import com.plainbase.frameworks.ktor.routes.historyRoutes
 import com.plainbase.frameworks.ktor.routes.malformedQueryMessage
 import com.plainbase.frameworks.ktor.routes.pageCreateRoutes
+import com.plainbase.frameworks.ktor.routes.pageReadRoutes
 import com.plainbase.frameworks.ktor.routes.pageRoutes
 import com.plainbase.frameworks.ktor.routes.pageWriteRoutes
 import com.plainbase.frameworks.ktor.routes.permalinkRoute
 import com.plainbase.frameworks.ktor.routes.previewRoute
 import com.plainbase.frameworks.ktor.routes.principalOrRefuseToShell
 import com.plainbase.frameworks.ktor.routes.proposalRoutes
+import com.plainbase.frameworks.ktor.routes.readerContentRoutes
+import com.plainbase.frameworks.ktor.routes.readerSessionRoute
 import com.plainbase.frameworks.ktor.routes.respondError
 import com.plainbase.frameworks.ktor.routes.respondRedirectPreservingQuery
 import com.plainbase.frameworks.ktor.routes.rootContentRoutes
@@ -50,19 +53,24 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.ApplicationStopPreparing
 import io.ktor.server.application.install
+import io.ktor.server.application.serverConfig
 import io.ktor.server.cio.CIO
+import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.BadRequestException
+import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.response.header
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.sessions.Sessions
 import io.ktor.server.sessions.cookie
 import io.ktor.server.sse.SSE
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
 import java.util.concurrent.CountDownLatch
@@ -107,33 +115,49 @@ class KtorServer(
     // Held rather than discarded, so shutdown can STOP it: on SIGTERM the teardown must drain in-flight
     // requests instead of severing them mid-write. Built here as a `val` (the engine binds at start(), not
     // at construction), which also publishes it safely to the shutdown-hook thread with no mutable state.
-    private val engine = embeddedServer(CIO, host = config.host, port = config.port) {
-        monitor.subscribe(ApplicationStopPreparing) {
-            admission.closeAdmission()
-        }
-        // Setup is before plugins, authentication and routing. Closed admission therefore has no collaborator or
-        // business-code path to resolve, including on an already-accepted keep-alive connection.
-        intercept(ApplicationCallPipeline.Setup) {
-            if (!admission.tryAdmit(context)) {
-                context.response.header(HttpHeaders.Connection, "close")
-                context.respondText(
-                    RestJson.encodeToString(
-                        ErrorEnvelope.serializer(),
-                        ErrorEnvelope(ErrorBody(ErrorCodes.SERVER_SHUTTING_DOWN, "Server is shutting down")),
-                    ),
-                    ContentType.Application.Json,
-                    HttpStatusCode.ServiceUnavailable,
-                )
-                finish()
-            } else {
-                nextReceiveObservation.getAndSet(null)?.let { observer ->
-                    context.attributes.put(RECEIVE_BODY_ENTRY_OBSERVER, observer)
-                }
-                nextStructuredChild.getAndSet(null)?.invoke(context)
+    private val engine = embeddedServer(
+        CIO,
+        serverConfig {
+            // CIO's accept job otherwise sends startup failures (such as BindException) to the global uncaught
+            // handler, while start() also throws them. Keep coroutine failures visible in this engine's error log.
+            parentCoroutineContext = CoroutineExceptionHandler { _, failure ->
+                logger.error(failure) { "HTTP engine coroutine failed" }
             }
-        }
-        plainbaseModule(routeContext, secureCookie = TransportSecurityPolicy.derive(config).secureCookie)
-    }.apply {
+            module {
+                monitor.subscribe(ApplicationStopPreparing) {
+                    admission.closeAdmission()
+                }
+                // Setup is before plugins, authentication and routing. Closed admission therefore has no collaborator or
+                // business-code path to resolve, including on an already-accepted keep-alive connection.
+                intercept(ApplicationCallPipeline.Setup) {
+                    if (!admission.tryAdmit(context)) {
+                        context.response.header(HttpHeaders.Connection, "close")
+                        context.respondText(
+                            RestJson.encodeToString(
+                                ErrorEnvelope.serializer(),
+                                ErrorEnvelope(ErrorBody(ErrorCodes.SERVER_SHUTTING_DOWN, "Server is shutting down")),
+                            ),
+                            ContentType.Application.Json,
+                            HttpStatusCode.ServiceUnavailable,
+                        )
+                        finish()
+                    } else {
+                        nextReceiveObservation.getAndSet(null)?.let { observer ->
+                            context.attributes.put(RECEIVE_BODY_ENTRY_OBSERVER, observer)
+                        }
+                        nextStructuredChild.getAndSet(null)?.invoke(context)
+                    }
+                }
+                plainbaseModule(routeContext, secureCookie = TransportSecurityPolicy.derive(config).secureCookie)
+            }
+        },
+        configure = {
+            connector {
+                host = config.host
+                port = config.port
+            }
+        },
+    ).apply {
         engineConfig.shutdownGracePeriod = STOP_GRACE_MILLIS
         engineConfig.shutdownTimeout = STOP_TIMEOUT_MILLIS
     }
@@ -326,23 +350,26 @@ class KtorServer(
 private val logger = KotlinLogging.logger {}
 
 /**
- * Shared between the real server and `testApplication` tests. [secureCookie] mirrors the secure context (ADR-0008):
- * the `pb_session` cookie's `Secure` attribute is true whenever the transport is TLS-fronted — a non-loopback
- * bind OR a loopback bind that declares a trusted proxy (the canonical prod deployment, see
- * [TransportSecurityPolicy]) — and false ONLY on pure loopback-dev with no proxy (a `Secure` cookie would never
- * be sent back over plain http://localhost). Defaults to false (the dev/test loopback default).
+ * Shared between the real server and `testApplication` tests. The session cookie is installed only in the workspace
+ * profile. [secureCookie] mirrors its secure context (ADR-0008): the `pb_session` cookie's `Secure` attribute is true
+ * for a non-loopback bind or a loopback bind with a trusted proxy (see [TransportSecurityPolicy]), and false for
+ * loopback development without a proxy. Defaults to false.
  */
 fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false) {
-    install(Sessions) {
-        // The opaque session token (§1): a String round-tripped by identity — NO reflection serializer (the
-        // native-crash hazard SessionCookieNativeTest proves this avoids). HttpOnly + Path=/ + SameSite=Lax;
-        // Secure mirrors the bind transport (see [secureCookie]).
-        cookie<String>(SESSION_COOKIE_NAME) {
-            cookie.httpOnly = true
-            cookie.path = "/"
-            cookie.secure = secureCookie
-            cookie.extensions["SameSite"] = "Lax"
-            serializer = OpaqueStringSerializer
+    if (ctx.reader != null) {
+        install(AutoHeadResponse)
+        install(ReaderCacheControl)
+    } else {
+        install(Sessions) {
+            // Identity serialization keeps the opaque token safe for native images (SessionCookieNativeTest).
+            // HttpOnly + Path=/ + SameSite=Lax; Secure mirrors the workspace bind transport (see [secureCookie]).
+            cookie<String>(SESSION_COOKIE_NAME) {
+                cookie.httpOnly = true
+                cookie.path = "/"
+                cookie.secure = secureCookie
+                cookie.extensions["SameSite"] = "Lax"
+                serializer = OpaqueStringSerializer
+            }
         }
     }
     install(ContentNegotiation) {
@@ -415,66 +442,94 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
     // skipped (with a warning) when no frontend is bundled. Must precede routing so it sees every respond.
     installShellSecurityHeaders()
     routing {
-        // Routing order: API, assets, permalinks/aliases/browse, public theme namespace, frontend files, then content and shell.
-        healthRoute(ctx)
-        // A4a builtin auth surface: registered ONLY in auth.mode=builtin. In OFF (loopback dev) and PROXY
-        // (A4b asserts identity via a trusted header) there is no password login, so these routes must be ABSENT
-        // (404) — leaving them live would let a leftover builtin user/session authenticate as Principal.Human and
-        // bypass the proxy/off identity path. login/session/setup/reset call NO facade `check*` (PolicyService
-        // denies Anonymous under enforced mode, so routing them through `check*` would make auth impossible); they
-        // run the secure-context gate + their own rate-limit/CSRF/single-use-token guards. Admin user CRUD is GATED
-        // through the `checkManage`-gated AdminFacade.
-        if (ctx.builtinAuthEnabled) {
-            authRoutes(ctx)
-            setupRoutes(ctx)
-            adminUserRoutes(ctx)
-        }
-        // /session is the CSRF-bootstrap read in BOTH builtin (synchronizer token) and proxy (double-submit token)
-        // modes — public, pre-identity (A4b WIDEN). login/setup/admin-user stay builtin-only above.
-        if (ctx.builtinAuthEnabled || ctx.proxyAuthEnabled) {
-            sessionRoutes(ctx)
-            // The token/audit/role management surface is `manage`-gated and mode-INDEPENDENT (a proxy admin needs it
-            // too) — registered when EITHER auth mode is active; user CRUD (adminUserRoutes) stays builtin-only.
-            adminTokenRoutes(ctx)
-        }
-        pageRoutes(ctx)
-        // PUT save coexists with the GETs by method on the same `/api/v1/pages/{id}` path.
-        pageWriteRoutes(ctx)
-        // POST create on the collection path `/api/v1/pages` — distinct from the item-path GET/PUT.
-        pageCreateRoutes(ctx)
-        // PB-PROPOSE-1 (P1a): the agent proposal surface under `/api/v1/changes` (distinct constant prefix).
-        proposalRoutes(ctx)
-        discussionRoutes(ctx)
-        // P3: the in-binary MCP server (SSE-on-CIO) at `/api/v1/mcp` — agent-only connect auth on the SSE GET. Mounted
-        // here (a distinct constant prefix), BEFORE apiFallbackRoute(), so the §A4 "API → fallback → static" order holds.
-        plainbaseMcp(ctx)
-        // Per-page history/diff reads — `/{id}/history` and `/{id}/diff`, distinct paths from the GETs.
-        historyRoutes(ctx)
-        // W3b read-only preview render (private, non-contractual); the asset upload folds into pageWriteRoutes.
-        previewRoute(ctx)
-        treeRoute(ctx)
-        searchRoute(ctx)
-        adminRoute(ctx)
-        // Tailcard under /api: loses to every real API route by specificity, beats the static
-        // fallback — an unknown API path must 404 in the envelope, never 200 the shell.
-        apiFallbackRoute()
-        assetRoute(ctx)
-        permalinkRoute(ctx)
-        browseRedirectRoute(ctx)
-        themeRoutes(ctx)
-        frontendStaticRoutes(ctx)
-        rootContentRoutes(ctx)
-        spaShellRoutes(ctx)
-        // A3's bare arm on the LAST entry point. `RouteSupport`'s A3 contract names redirect arms
-        // explicitly: an insecure-transport credential is REFUSED (421), never silently downgraded to
-        // anonymous and handed a 302. This arm is new in this commit and was the one entry point that
-        // still downgraded, while `/docs`, `/index.html`, `/admin`, `/browse` and `/p` all refused.
-        get("/") root@{
-            if (ctx.principalOrRefuseToShell(call) is ExtractedPrincipal.Refused) return@root
-            // The query rides through, same as every other redirect on this surface: `/?mode=edit` is a
-            // pasted link or a refresh, and dropping the query here would land the SPA in the read view
-            // while the alias and browse hops preserve it. One idiom for every hop.
-            call.respondRedirectPreservingQuery("/${ctx.primary.value}", permanent = false)
-        }
+        val reader = ctx.reader
+        if (reader != null) readerRoutes(ctx, reader) else workspaceRoutes(ctx)
+    }
+}
+
+private fun Route.workspaceRoutes(ctx: RouteContext) {
+    // Routing order: API, assets, permalinks/aliases/browse, public theme namespace, frontend files, then content and shell.
+    healthRoute(ctx)
+    // Password login, setup and user administration exist only in builtin auth mode. Off mode is loopback
+    // development; proxy mode asserts identity through a trusted header. Keeping builtin routes absent in those
+    // modes prevents leftover users or sessions from bypassing their identity path. Login, session, setup and reset
+    // use the secure-context gate and their own rate-limit, CSRF and single-use-token guards instead of facade
+    // checks, which deny Anonymous under enforced policy and would prevent authentication. User administration
+    // goes through AdminFacade's checkManage gate.
+    if (ctx.builtinAuthEnabled) {
+        authRoutes(ctx)
+        setupRoutes(ctx)
+        adminUserRoutes(ctx)
+    }
+    // /session is the public, pre-identity CSRF-bootstrap read in builtin (synchronizer token) and proxy
+    // (double-submit token) modes. Login, setup and user administration stay builtin-only above.
+    if (ctx.builtinAuthEnabled || ctx.proxyAuthEnabled) {
+        sessionRoutes(ctx)
+        // Token, audit and role management requires manage permission in either auth mode, including for proxy
+        // admins. User administration stays builtin-only.
+        adminTokenRoutes(ctx)
+    }
+    pageRoutes(ctx)
+    // PUT save coexists with the GETs by method on the same `/api/v1/pages/{id}` path.
+    pageWriteRoutes(ctx)
+    // POST create uses the collection path `/api/v1/pages`, distinct from the item-path GET/PUT.
+    pageCreateRoutes(ctx)
+    // PB-PROPOSE-1 proposal contract under `/api/v1/changes`, a distinct constant prefix.
+    proposalRoutes(ctx)
+    discussionRoutes(ctx)
+    // The in-binary MCP server uses SSE on CIO at `/api/v1/mcp` with agent-only connect auth on the SSE GET.
+    // Mount its distinct constant prefix before the API fallback to preserve API, fallback, then static ordering.
+    plainbaseMcp(ctx)
+    // Per-page history/diff reads use `/{id}/history` and `/{id}/diff`, distinct paths from the page GETs.
+    historyRoutes(ctx)
+    // Read-only preview rendering is private and non-contractual; asset uploads belong to pageWriteRoutes.
+    previewRoute(ctx)
+    treeRoute(ctx)
+    searchRoute(ctx)
+    adminRoute(ctx)
+    // The /api tailcard loses to every real API route by specificity and beats the static fallback.
+    // An unknown API path must return 404 in the envelope, never 200 with the shell.
+    apiFallbackRoute()
+    assetRoute(ctx)
+    permalinkRoute(ctx)
+    browseRedirectRoute(ctx)
+    themeRoutes(ctx)
+    frontendStaticRoutes(ctx)
+    rootContentRoutes(ctx)
+    spaShellRoutes(ctx)
+    primaryRedirect(ctx)
+}
+
+/**
+ * Only this positive list is mounted for the reader profile. Unmounted paths reach the API fallback, the
+ * `/_plainbase/{...}` theme fallback or the root-content 404 without calling a facade or writing an audit row.
+ * The live-tree contract checks registration shape only; handler bodies, route interceptors and handlers sharing
+ * the same selectors are outside its view.
+ * See the READER profile KDoc for the trust boundary.
+ */
+private fun Route.readerRoutes(ctx: RouteContext, reader: ReaderSurface) {
+    healthRoute(ctx)
+    readerSessionRoute(reader)
+    pageReadRoutes(ctx)
+    treeRoute(ctx)
+    searchRoute(ctx)
+    apiFallbackRoute()
+    assetRoute(ctx)
+    permalinkRoute(ctx)
+    browseRedirectRoute(ctx)
+    themeRoutes(ctx)
+    frontendStaticRoutes(ctx)
+    readerContentRoutes(ctx, reader)
+    primaryRedirect(ctx)
+}
+
+private fun Route.primaryRedirect(ctx: RouteContext) {
+    // The workspace redirect refuses (421) an insecure-transport credential before choosing its destination.
+    get("/") root@{
+        if (ctx.principalOrRefuseToShell(call) is ExtractedPrincipal.Refused) return@root
+        // The query rides through, same as every other redirect on this surface: `/?mode=edit` is a
+        // pasted link or a refresh, and dropping the query here would land the SPA in the read view
+        // while the alias and browse hops preserve it. One idiom for every hop.
+        call.respondRedirectPreservingQuery("/${ctx.primary.value}", permanent = false)
     }
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { pageDiscussionsQuery, previewDiscussionAnchor, refreshDiscussionViews, startDiscussion } from "../api/discussions";
 import { sessionQuery } from "../api/queries";
+import { signInRequired } from "../api/sessionMode";
 import { useDiscussionRefresh } from "../lib/useDiscussionRefresh";
 import { focusDiscussionElement } from "../lib/discussionFocus";
 import { retireDiscussionDraft, useDiscussionDraft } from "../lib/useDiscussionDraft";
@@ -80,7 +81,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
   inspection.current = creationRecovery === "inspect";
   useDiscussionRefresh(query, active && query.data?.pages[0]?.discussions_available !== false,
     () => posting.current || threadBusy.current || inspection.current || threadAction.current);
-  const session = useQuery(sessionQuery);
+  const session = useQuery({ ...sessionQuery, retryOnMount: false });
   const first = query.data?.pages[0];
   const latest = query.data?.pages.at(-1);
   const items = uniqueDiscussionItems(query.data?.pages ?? []);
@@ -236,7 +237,7 @@ export function DiscussionPanel({ root, pageId, sourceHash, sourceReady, sourceB
     }
   }
 
-  const knownSignIn = session.data?.auth_mode !== "off" && session.data?.authenticated === false;
+  const knownSignIn = signInRequired(session.data);
   const confirmedEmpty = first?.discussions_available && items.length === 0 && !query.hasNextPage && !query.isRefetchError && !creationRecovery;
   const disabled = pageChanged ? "Reload the page and review it before posting." :
     !sourceReady ? (sourceBusy ? "The page is loading. Wait before posting." : "The page could not be read. Reload it before posting.") :

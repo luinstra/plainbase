@@ -40,6 +40,15 @@ route serves the shell, then the SPA matches the tree's folder URL.
 This is a URL-shape correction, not a silent rewrite of the folder decision. The old examples remain
 above so the record shows the address shape that this amendment originally amended.
 
+## Amendment (2026-10-20, reader navigation)
+
+The shell-only server behavior above applies to the workspace profile. The reader profile serves
+the initial document at folder and root URLs that have a landing page, and serves that landing's
+source for Markdown requests. A landing child's HTML URL redirects to its folder when the landing
+owns that URL. Folders without landings keep the HTML shell at 200; reader misses and unavailable
+content return HTML shells at 404 and 503. See the
+[reader guide](../deploy/public-reader.md#pages-statuses-and-caching) for the full reader contract.
+
 ## Context
 
 Phase 1 gave folders no URL of their own: `index.md` is an ordinary page, the `/docs/$` route
@@ -63,8 +72,13 @@ subtree out of path space, per ADR-0002's folder-folder rule). The synthetic roo
 matrix already serves the shell at every `/docs/*` path. The tree golden was regenerated with
 exactly this additive diff (recorded in `ForeverApiGoldenSuite`'s policy block).
 
-**SPA:** when `by-path` 404s, the current pathname is matched VERBATIM against the loaded tree's
-folder `url`s. On a match:
+**SPA:** when `by-path` 404s, the current router pathname is matched against the loaded tree's
+folder `url`s after applying the router's decoding to those URLs only. Matching preserves path
+identity: Unicode is decoded, while encoded percent signs, backslashes and reserved separators
+retain the router's spelling. The pathname is never decoded again. Both sides are compared after
+NFC normalization per segment and with one trailing slash dropped, the same equivalence the server
+applies to a content path. Server-issued folder segments are slugs of letters, marks, digits,
+hyphens and underscores, so a reserved separator never appears in a folder URL. On a match:
 
 - **README-preference:** a direct child page whose filename stem is `index` or `readme`
   (case-insensitive, from the node's `path` — never re-slugified) renders AT the folder URL,

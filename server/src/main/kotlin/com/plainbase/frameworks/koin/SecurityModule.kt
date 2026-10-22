@@ -13,7 +13,7 @@ import com.plainbase.frameworks.security.TokenHasher
 import org.koin.dsl.module
 import kotlin.time.Clock
 
-val securityModule = module {
+fun securityModule() = module {
     single<PasswordHasher> { Argon2PasswordHasher() }
     single<TokenSecretHasher> { TokenHasher() }
     single<TokenMinter> { ApiTokenMinter(get()) }

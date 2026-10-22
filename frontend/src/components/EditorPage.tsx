@@ -16,6 +16,7 @@ import { linkDiagnosticGutter, setLinkDiagnostics, tableSourceLayout } from "../
 import { insertLink, toggleBold, toggleCode, toggleItalic } from "../lib/markdownCommands";
 import { permalinkOf } from "../lib/permalink";
 import { breadcrumbTrail } from "../lib/breadcrumbs";
+import { isCanonicalPathname, samePathname } from "../lib/tree";
 import { useDebounced } from "../lib/useDebounced";
 import { EditorToolbar } from "./EditorToolbar";
 import { isRootUnavailable, QueryErrorView } from "./ErrorView";
@@ -46,9 +47,9 @@ export function EditorPage({ path, property }: { path: string; property?: "statu
   const resolvedFor = `/${encodeTreePath(path)}`;
   const resolved = page.data;
   useEffect(() => {
-    if (!resolved || location.pathname !== resolvedFor) return;
+    if (!resolved || !samePathname(location.pathname, resolvedFor)) return;
     const canonicalUrl = resolved.url;
-    if (canonicalUrl && canonicalUrl !== resolvedFor) {
+    if (canonicalUrl && !isCanonicalPathname(location.pathname, canonicalUrl)) {
       const canonicalPath = byPathKeyForUrl(canonicalUrl);
       if (canonicalPath !== null) {
         queryClient.setQueryData(pageByPathQuery(canonicalPath).queryKey, resolved);

@@ -13,18 +13,15 @@ import io.ktor.server.sessions.sessions
 import java.security.MessageDigest
 
 /**
- * The seam identity sources plug into. A1 established it returning [Principal.Anonymous] — no source was
- * registered yet. A2 added the `pb_` bearer source; A4a adds the `pb_session` COOKIE source through the SAME
- * decision + the SAME credential-CONDITIONAL secure-context gate; A4b adds the proxy header.
+ * Workspace identity extraction from bearer tokens, builtin session cookies and trusted proxy headers.
+ * The reader uses constant anonymous extraction.
  *
- * SECURE-CONTEXT CONTRACT (ADR-0008): at the point a source EXTRACTS a credential (a session cookie OR an
- * `Authorization: Bearer pb_…`), it MUST first evaluate [isSecureContext] over the SOCKET remote address +
- * `X-Forwarded-Proto` + the configured trusted-proxy CIDRs, and refuse if it is false — presenting a credential
- * over plain non-loopback HTTP LEAKS it. The cookie is NEVER hashed/looked-up over a leaky transport.
+ * Workspace secure-context contract (ADR-0008): before authenticating a credential, evaluate [isSecureContext]
+ * over the socket remote address, all `X-Forwarded-Proto` values and the configured trusted-proxy CIDRs. Refuse an
+ * insecure transport before hashing or looking up the credential.
  *
- * PRECEDENCE (pinned, A4a): if a request carries BOTH a `pb_` bearer AND a `pb_session` cookie, the BEARER WINS —
- * an agent call carrying a stray cookie is still an agent (and a bearer-resolved principal is CSRF-exempt). Tested
- * in `SessionCookieExtractionTest`.
+ * Workspace precedence: a `pb_` bearer wins over a `pb_session` cookie, and its agent principal is CSRF-exempt.
+ * Tested in `SessionCookieExtractionTest`.
  */
 @Suppress("UnusedReceiverParameter")
 fun ApplicationCall.extractPrincipal(): Principal = Principal.Anonymous
@@ -68,8 +65,9 @@ enum class Source { COOKIE, PROXY }
 enum class ProxyRejectReason { MULTI_VALUE, BLANK, CONTROL_CHARS, OVERSIZED }
 
 /**
- * A2/A4a: resolve an `Authorization: Bearer pb_…` to [Principal.Agent] OR a `pb_session` cookie to
- * [Principal.Human] — gated by the credential-CONDITIONAL secure-context (ADR-0008). A request with NO credential
+ * Workspace credential resolution; the reader uses constant anonymous extraction. Resolve an
+ * `Authorization: Bearer pb_…` to [Principal.Agent] or a `pb_session` cookie to [Principal.Human], gated by the
+ * credential-conditional secure context (ADR-0008). A workspace request with no credential
  * (no bearer, no cookie) is [PrincipalExtraction.Resolved] `Anonymous` regardless of transport. A credential over
  * a non-secure transport is [PrincipalExtraction.InsecureTransportRefused] and neither [tokens] nor [sessions] is
  * consulted — the secret must not be touched over a leaky transport. Bearer wins over cookie (see file note).

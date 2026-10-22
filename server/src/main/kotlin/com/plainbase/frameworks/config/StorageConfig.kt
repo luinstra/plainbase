@@ -36,4 +36,5 @@ data class StorageConfig(
     val accessKeyId: String? = null,
     val secretAccessKey: String? = null,
     val ignoredObjectKeys: List<String> = emptyList(),
+    val prefixDeclaredInFile: Boolean = false,
 )

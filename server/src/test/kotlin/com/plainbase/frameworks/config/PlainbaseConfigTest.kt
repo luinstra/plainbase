@@ -695,7 +695,7 @@ class PlainbaseConfigTest : FunSpec({
         (copied.roots === original.roots) shouldBe true
         copied.roots.primary.localPath shouldBe originalContent
 
-        val explicitRoots = RootsConfig.synthesized(replacementContent, copied.storage)
+        val explicitRoots = RootsConfig.synthesized(replacementContent, copied.storage, copied.profile)
         copied.copy(roots = explicitRoots).roots.primary.localPath shouldBe replacementContent
     }
 

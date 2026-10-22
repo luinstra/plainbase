@@ -139,6 +139,10 @@ credentialed S3 run yet) - never fabricated.
   design - no per-boot PUT probe that would write on every boot.
 - AWS S3 conditional-write semantics are still PENDING a credentialed run; R2 is fully characterized.
 
+**Amendment, 2026-10-20:** The one-instance-per-bucket limit applies to writable instances. Read-only
+readers may share the bucket, each with its own freshly prepared DATA_DIR. Follow the
+[reader procedure](../deploy/public-reader.md#a-fresh-data_dir-on-every-start).
+
 **Reversibility - high.** The `ObjectStoreClient` SPI isolates the client (the Q7 escape hatch: swap in
 an SDK-backed client behind the SPI on the container tier, never an artifact branch); the mirror is
 deletable; `storage.backend=local` remains the untouched default.

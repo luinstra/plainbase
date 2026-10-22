@@ -53,7 +53,7 @@ class PolicyServiceTest : FunSpec({
             var n = 0
             val ids = IdProvider { PageId.of("0190aaaa-bbbb-7ccc-8ddd-%012d".format(n++))!! }
             block(
-                PolicyService(roles, tokens, audit, ids, fixedClock, enforced = true, discussionsEnabledOf = { true }),
+                PolicyService(roles, tokens, audit, ids, fixedClock, mode = PolicyMode.ENFORCED, discussionsEnabledOf = { true }),
                 roles, tokens, audit,
             )
         }

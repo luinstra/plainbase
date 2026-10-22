@@ -1,9 +1,12 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.readerRelease
 import com.plainbase.frameworks.security.ProxyCsrf
 import io.ktor.server.application.ApplicationCall
 
@@ -21,18 +24,29 @@ internal class SecurityAssembly(
     val proxyAuthEnabled: Boolean = authConfig.mode == AuthMode.PROXY
     val proxySecret: String? = authConfig.proxySecret
     val proxyIdentityHeader: String = authConfig.proxyIdentityHeader
-    val extract: ApplicationCall.() -> PrincipalExtraction = {
-        extractPrincipal(
-            tokens = tokens,
-            trustedProxyCidrs = trustedProxyCidrs,
-            sessions = auth.session,
-            builtinAuthEnabled = builtinAuthEnabled,
-            proxyAuthEnabled = proxyAuthEnabled,
-            proxySecret = proxySecret,
-            proxyIdentityHeader = proxyIdentityHeader,
-        )
+    val reader: ReaderSurface? = if (config.profile == DeploymentProfile.READER) {
+        ReaderSurface(readerRelease(config.storage), config.site)
+    } else {
+        null
+    }
+    val extract: ApplicationCall.() -> PrincipalExtraction = if (reader != null) {
+        READER_EXTRACTION
+    } else {
+        {
+            extractPrincipal(
+                tokens = tokens,
+                trustedProxyCidrs = trustedProxyCidrs,
+                sessions = auth.session,
+                builtinAuthEnabled = builtinAuthEnabled,
+                proxyAuthEnabled = proxyAuthEnabled,
+                proxySecret = proxySecret,
+                proxyIdentityHeader = proxyIdentityHeader,
+            )
+        }
     }
 }
+
+private val READER_EXTRACTION: ApplicationCall.() -> PrincipalExtraction = { PrincipalExtraction.Resolved(Principal.Anonymous) }
 
 internal fun securityAssembly(
     config: PlainbaseConfig,

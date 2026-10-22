@@ -13,7 +13,7 @@ reference stack under `deploy/proxy/`.
 
 The bind guard and proxy trust checks accept numeric address literals only. IPv4 must use four ASCII
 decimal octets without abbreviation or leading-zero ambiguity; IPv4 zones are rejected, while IPv6 may carry
-a zone, which is removed before classification. Host ports are validated as ASCII decimal `0`–`65535`, with bracketed IPv6
+a zone, which is removed before classification. Host ports are validated as ASCII decimal `0` to `65535`, with bracketed IPv6
 syntax for a port-bearing value. Case-insensitive, unbracketed `localhost` and `ip6-localhost` remain supported aliases for
 loopback bind/remote checks, but bracketed aliases and arbitrary hostnames are not loopback evidence.
 
@@ -410,8 +410,8 @@ re-adopt a directory that reappeared.
 
 The server route table treats the first segment as a root name on every root-scoped surface. Do not add a
 `/docs` prefix before an extra root: `docs` is the primary root's name, while `extra` owns `/extra/...`.
-The following table is the operator-facing status contract for the route families that are easiest to
-misconfigure in a proxy or health check:
+The following table is the workspace profile's operator-facing status contract for the route families
+that are easiest to misconfigure in a proxy or health check:
 
 | surface | request shape | answer |
 |---|---|---|
@@ -423,6 +423,11 @@ misconfigure in a proxy or health check:
 | Standalone Mermaid shell | `/browse/{root}/{path}.mmd` | 200 with the SPA shell for a valid rooted diagram address, including a missing source; 404 shell for malformed or unknown diagram addresses. The source read remains guarded at `/assets/{root}/{path}`. |
 | Agent page lookup | `/api/v1/pages/by-path` | 400 `invalid_path`, because a page path is required. A path whose first segment is not a registered root, or a bare registered root, is 404 `page_not_found`, never a lookup under `docs`; `/api/v1/pages/by-path/docs/guides/deploy-guide` is the rooted form. |
 | Permalink | `/p/<id>` or `/p/<root>/<id>` | 302 when the page is found, 200 for a live path-collision loser, 300 for an ambiguous bare id, 404 for an unknown id, 400 for a malformed shape, 410 for a retired id, and 503 when a live page's root is unavailable. |
+
+The reader profile serves the initial document at page and folder-landing URLs, including root landings,
+and serves landing Markdown when requested. Its HTML misses and unavailable content return shells with
+404 and 503 respectively. A folder without a landing page retains its HTML shell at 200 and answers
+JSON 404 in Markdown mode. See the [reader guide](deploy/public-reader.md#pages-statuses-and-caching).
 
 Once shutdown admission closes, the global `503 server_shutting_down` response can supersede the route-specific answers in this table.
 
@@ -481,7 +486,7 @@ Restart also brings an added enabled editable local root into discussion watcher
 `root remove <name>` does not touch the root's content or its database rows. Its pages keep their
 `id_map`, `url_alias` and `page_checkpoint` rows exactly as they were; the rows just become
 **detached**, because the name no longer names a configured root. `root add` of the **same** name
-later revives them, and under per-root identity (C5) that revival is permalink-SAFE: each page keeps
+later revives them, and under per-root identity that revival is permalink-SAFE: each page keeps
 its own `id:` and answers the same rooted `/p/{name}/{id}` it did before. Two things are still worth
 naming:
 
@@ -645,13 +650,17 @@ ones are reaped automatically on every bundle-restore boot (any boot that recove
 absent `.git`, so even legacy husks are bounded when the current boot mints none), so repeated
 self-heals never accumulate unbounded debris.
 
-**Strict-hydrate boot-loop escape hatch.** On the restore path specifically (a bundle-restore/reconcile is
-owed), hydrate runs *strict*: any bucket-fetch or mirror-write failure for a SINGLE key aborts the boot
-outright rather than silently leaving the mirror incomplete (FORK-1 design - a silently-incomplete mirror
-would let the boot reconcile mis-delete that key from history). If that failure is persistent (a
+**Strict-hydrate boot-loop escape hatch (workspaces only).** A public reader's object boot is always
+strict and has no best-effort escape hatch. Every reader retry requires a fresh DATA_DIR; see
+[reader boot requirements](deploy/public-reader.md#complete-or-refuse-boot) and
+[fresh DATA_DIR preparation](deploy/public-reader.md#a-fresh-data_dir-on-every-start).
+
+For a workspace, hydrate runs *strict* on the restore path when a bundle-restore/reconcile is owed:
+any bucket-fetch or mirror-write failure for a SINGLE key aborts the boot outright rather than silently
+leaving the mirror incomplete, which could make the history reconcile delete that key. If that failure is persistent (a
 permanently corrupted or inaccessible bucket object), this is a fail-loud boot loop by design: every
 restart hits the same strict-hydrate failure and aborts again. The operator escape is
-`rm DATA_DIR/restore-pending` - that clears the FORK-2 sentinel, so the next boot sees a complete `.git`
+`rm DATA_DIR/restore-pending` - that clears the restore sentinel, so the next boot sees a complete `.git`
 with no sentinel and takes the ordinary warm, non-strict path instead (skipping that boot's reconcile
 commit; the reconcile obligation is simply dropped, not deferred). Content itself is never at risk during
 any of this - only the commit-grained history reconcile is gated.
@@ -692,7 +701,7 @@ your store, sized to how much history you want:
 of backend - a local `.git` worktree in local mode, the bucket-shipped `history.bundle` in object mode -
 on top of whichever content backup you run.
 
-**The three-choices exposure (R17).** Object mode + `git.enabled=false` + no external backup on a
+**The three-choices exposure.** Object mode + `git.enabled=false` + no external backup on a
 no-versioning provider (i.e. R2 with no `rclone` cron) = **current-state durability only**. That is not
 a bug; it is the sum of three explicit operator choices, the same posture a backup-less local deploy has
 always had. The git-disabled startup WARN names it exactly: *"object mode with git disabled: no
@@ -771,7 +780,11 @@ follow directly from nuking `plainbase.db` and are not separately tested.
 
 ### Object-mode DR drills (operator recipes)
 
-One truth governs every object-mode restore: **content enters the mirror ONLY via a boot `hydrate()` or
+The recipes below apply to writable workspaces. Readers never poll and require a fresh DATA_DIR on
+every start; publish restored content under a new immutable release prefix and follow the
+[reader deployment procedure](deploy/public-reader.md#a-fresh-data_dir-on-every-start).
+
+For an object-mode workspace, **content enters the mirror ONLY via a boot `hydrate()` or
 the background poll** - never via `rescan`. `POST /api/v1/admin/rescan` re-scans the LOCAL mirror only
 (it never LISTs or GETs the bucket), so it does NOT surface content you just restored INTO the bucket.
 There is no on-demand forced-hydrate admin action today. Restore recipes reflect this:
@@ -902,7 +915,7 @@ What the object-mode diagnostics mean and what you do about each:
 - **IAM signature: a green boot, then a persistent write 503 (403-mapped) on EVERY save.** The boot LIST
   proved READ, not WRITE - your credentials are missing PUT. Fix the IAM grant, not the app (see
   [Least-privilege IAM](deploy/object-storage.md#least-privilege-iam-stated-honestly)).
-- **Q13 outage signature: writes 503 while reads keep serving 200.** The bucket (write authority) is out;
+- **Outage signature: writes 503 while reads keep serving 200.** The bucket (write authority) is out;
   the app is fine - reads are local by construction. A boot attempted DURING an outage fails fast by
   design (the boot LIST self-check).
 - **A throttled GET (503/SlowDown, 429) takes longer instead of failing.** The in-memory mirror GETs
@@ -912,7 +925,7 @@ What the object-mode diagnostics mean and what you do about each:
   throttled boot still refuses on its LIST self-check (the bullet above). The worst case per GET is round-trip
   inclusive: up to 4 request timeouts plus about 2 seconds of backoff, so about 2 minutes at the default
   30 s request timeout. A boot against a throttling provider is slow, never unbounded.
-- **R16 fail-closed signature: an object-mode boot refusing on a TLS or signature rejection.** That is
+- **Fail-closed signature: an object-mode boot refusing on a TLS or signature rejection.** That is
   the guard working, not a failure to route around. Never disable certificate validation to "fix" it -
   fix the endpoint or install the host CA trust (see
   [base-image requirements](deploy/object-storage.md#native-binary-base-image-requirements)).
@@ -945,7 +958,7 @@ exists to repair, so a re-run converges on it. Adoption deletes nothing and is i
 Reading everything before writing anything is also what lets it settle a page id that two files in ONE
 root both claim (a copy-paste within a tree, say): the same id cannot live twice in one root, so one page
 keeps it and the other is given a fresh one, reported as a `duplicate_id`. The SAME id in two DIFFERENT
-roots is not a contest at all under per-root identity (C5) - a file copied between trees keeps its id in
+roots is not a contest at all under per-root identity - a file copied between trees keeps its id in
 BOTH, each root answering its own rooted `/p/{root}/{id}` - so adopt reassigns nothing there and reports
 nothing. `adopt --write-ids --dry-run` previews exactly these decisions - the same bytes - without
 touching a file.
@@ -998,7 +1011,7 @@ are checked-in contracts.
 - FTS5 search p95 < 200 ms, warm, over the same corpus (`Fts5CorpusPerfTest`).
 - Native-startup CI regression tripwire: 2000 ms (`ci.yml`, the `native-gate` job).
 
-**Measured-during-C2 observations** (reproduce them yourself rather than trusting these numbers as
+**Measured observations** (reproduce them yourself rather than trusting these numbers as
 they age):
 
 - Native cold-start (exec → first `200 /healthz`, against an *empty* content dir): ~467 ms local
@@ -1080,7 +1093,7 @@ stdout locally and typed JSON stderr in the container, and refuses the write if 
 
 ## Known limitations (v0.1)
 
-Recorded cuts - conscious v0.1 trade-offs, not gaps discovered later and not TODOs:
+Recorded cuts - conscious v0.1 trade-offs, not gaps discovered later:
 
 - **Audit-log read asymmetry.** Denied *reads* are deliberately not audited (`checkRead`'s KDoc
   says so plainly: "Not audited") - only mutating denials (edit/create/manage/approve) record a

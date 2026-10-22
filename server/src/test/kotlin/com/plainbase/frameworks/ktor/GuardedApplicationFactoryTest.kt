@@ -1,13 +1,16 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.service.AbsenceClassifier
+import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.ProposalService
@@ -20,6 +23,7 @@ import com.plainbase.domain.theming.BundledThemeStylesheets
 import com.plainbase.domain.theming.ThemeStylesheets
 import com.plainbase.frameworks.config.AuthConfig
 import com.plainbase.frameworks.config.AuthMode
+import com.plainbase.frameworks.config.DeploymentProfile
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.ktor.routes.embeddedThemeBuiltins
@@ -28,10 +32,13 @@ import com.plainbase.frameworks.runtime.ObservedIndexRuntime
 import com.plainbase.frameworks.runtime.RootStores
 import com.plainbase.frameworks.runtime.ServingRuntime
 import com.plainbase.frameworks.security.ProxyCsrf
+import io.kotest.assertions.assertSoftly
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.types.shouldBeSameInstanceAs
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -42,8 +49,11 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import io.mockk.Called
 import io.mockk.confirmVerified
 import io.mockk.mockk
+import io.mockk.spyk
+import io.mockk.verify
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -132,7 +142,8 @@ class GuardedApplicationFactoryTest : FunSpec({
 
                 builtin.builtinAuthEnabled shouldBe true
                 builtin.proxyAuthEnabled shouldBe false
-                val builtinExtraction = captureExtraction(builtin, session.plaintext)
+                val headers = mapOf(HttpHeaders.Cookie to "$SESSION_COOKIE_NAME=${session.plaintext}")
+                val builtinExtraction = captureExtraction(builtin, headers)
                 val builtinResolved = builtinExtraction as PrincipalExtraction.Resolved
                 builtinResolved.principal shouldBe Principal.Human("builtin", userId)
                 builtinResolved.source shouldBe Source.COOKIE
@@ -140,16 +151,105 @@ class GuardedApplicationFactoryTest : FunSpec({
 
                 off.builtinAuthEnabled shouldBe false
                 off.proxyAuthEnabled shouldBe false
-                captureExtraction(off, session.plaintext) shouldBe
+                captureExtraction(off, headers) shouldBe
                     PrincipalExtraction.Resolved(Principal.Anonymous)
+            }
+        }
+    }
+
+    test("workspace OFF resolves the valid bearer to an agent") {
+        withTempTree(seed = {}) { root ->
+            IndexHarness(root).use { harness ->
+                val minted = harness.apiTokens.mint("probe", AgentMode.COMMIT)
+                val tokens = spyk(harness.apiTokens)
+                val context = GuardedTestGraph(root, harness).context(AuthMode.OFF, tokens = tokens)
+
+                requireNotNull(harness.apiTokenRepository.findById(minted.id)).lastUsedAt shouldBe null
+                val extraction = captureExtraction(context, mapOf(HttpHeaders.Authorization to "Bearer ${minted.plaintext}"))
+                    .shouldBeInstanceOf<PrincipalExtraction.Resolved>()
+                extraction.principal.shouldBeInstanceOf<Principal.Agent>().tokenId shouldBe minted.id
+                extraction.source shouldBe null
+                extraction.csrfToken shouldBe null
+                verify(exactly = 1) { tokens.authenticate(minted.plaintext) }
+                requireNotNull(harness.apiTokenRepository.findById(minted.id)).lastUsedAt shouldNotBe null
+            }
+        }
+    }
+
+    test("workspace PROXY resolves the valid trusted identity") {
+        withTempTree(seed = {}) { root ->
+            IndexHarness(root).use { harness ->
+                val context = GuardedTestGraph(root, harness).context(AuthMode.PROXY, authConfig = trustedProxyAuth())
+                val resolved = captureExtraction(
+                    context,
+                    mapOf("X-Forwarded-User" to "alice", PROXY_SECRET_HEADER to "s"),
+                ) as PrincipalExtraction.Resolved
+
+                resolved.principal shouldBe Principal.Human("proxy", "alice")
+                resolved.source shouldBe Source.PROXY
+            }
+        }
+    }
+
+    listOf(
+        ReaderExtractionProbe("OFF bearer", AuthMode.OFF, setOf(HttpHeaders.Authorization)),
+        ReaderExtractionProbe(
+            "OFF combined credentials",
+            AuthMode.OFF,
+            setOf(HttpHeaders.Authorization, HttpHeaders.Cookie, "X-Forwarded-User", PROXY_SECRET_HEADER),
+        ),
+        ReaderExtractionProbe("BUILTIN cookie", AuthMode.BUILTIN, setOf(HttpHeaders.Cookie)),
+        ReaderExtractionProbe("PROXY identity", AuthMode.PROXY, setOf("X-Forwarded-User", PROXY_SECRET_HEADER)),
+    ).forEach { probe ->
+        test("reader ${probe.label} resolves anonymously without consulting credential services") {
+            withTempTree(seed = {}) { root ->
+                IndexHarness(root).use { harness ->
+                    val graph = GuardedTestGraph(root, harness)
+                    val token = harness.apiTokens.mint("probe", AgentMode.COMMIT)
+                    val session = harness.sessionService.create("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+                    val tokenSpy = spyk(harness.apiTokens)
+                    val sessionSpy = spyk(harness.sessionService)
+                    val context = graph.context(
+                        probe.mode,
+                        authConfig = if (probe.mode == AuthMode.PROXY) trustedProxyAuth() else AuthConfig(mode = probe.mode),
+                        profile = DeploymentProfile.READER,
+                        tokens = tokenSpy,
+                        auth = AuthServices(sessionSpy, graph.auth.login, graph.auth.setup, graph.auth.admin, graph.auth.rateLimiter),
+                    )
+                    val headers = mapOf(
+                        HttpHeaders.Authorization to "Bearer ${token.plaintext}",
+                        HttpHeaders.Cookie to "$SESSION_COOKIE_NAME=${session.plaintext}",
+                        "X-Forwarded-User" to "alice",
+                        PROXY_SECRET_HEADER to "s",
+                    ).filterKeys { it in probe.headers }
+
+                    val extraction = captureExtraction(context, headers)
+                    val tokenUntouched = runCatching { verify { tokenSpy wasNot Called } }.isSuccess
+                    val sessionUntouched = runCatching { verify { sessionSpy wasNot Called } }.isSuccess
+                    assertSoftly {
+                        extraction shouldBe PrincipalExtraction.Resolved(Principal.Anonymous)
+                        (extraction as PrincipalExtraction.Resolved).principal shouldBeSameInstanceAs Principal.Anonymous
+                        withClue("token spy untouched") { tokenUntouched shouldBe true }
+                        withClue("session spy untouched") { sessionUntouched shouldBe true }
+                        requireNotNull(harness.apiTokenRepository.findById(token.id)).lastUsedAt shouldBe null
+                    }
+                }
             }
         }
     }
 })
 
+private data class ReaderExtractionProbe(val label: String, val mode: AuthMode, val headers: Set<String>)
+
+private fun trustedProxyAuth(): AuthConfig = AuthConfig(
+    mode = AuthMode.PROXY,
+    trustedProxyCidrs = listOf("127.0.0.1/32"),
+    proxySecret = "s",
+)
+
 private fun captureExtraction(
     context: RouteContext,
-    cookie: String,
+    headers: Map<String, String>,
 ): PrincipalExtraction {
     var extraction: PrincipalExtraction? = null
     testApplication {
@@ -163,9 +263,10 @@ private fun captureExtraction(
             }
         }
         val response = client.get("/capture") {
-            header(HttpHeaders.Cookie, "$SESSION_COOKIE_NAME=$cookie")
+            headers.forEach { (name, value) -> header(name, value) }
         }
         response.status shouldBe HttpStatusCode.OK
+        response.headers.getAll(HttpHeaders.SetCookie) shouldBe null
         response.bodyAsText() shouldBe "ok"
     }
     return requireNotNull(extraction)
@@ -181,11 +282,11 @@ private class GuardedTestGraph(
         audit = harness.auditRepository,
         idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
         clock = kotlin.time.Clock.System,
-        enforced = false,
+        mode = PolicyMode.OPEN,
         editableOf = { harness.rootRegistry.byName(it)?.editable == true },
         discussionsEnabledOf = { harness.rootRegistry.byName(it)?.discussionsEnabled == true },
     )
-    private val auth = harness.authServices(policy)
+    val auth = harness.authServices(policy)
     val writePipeline: WritePipeline = mockk(relaxed = true)
     val proposalService: ProposalService = mockk(relaxed = true)
     private val searchProvider: SearchProvider = mockk(relaxed = true)
@@ -220,6 +321,10 @@ private class GuardedTestGraph(
     fun context(
         mode: AuthMode,
         themes: ThemeStylesheets = BundledThemeStylesheets(embeddedThemeBuiltins()),
+        authConfig: AuthConfig = AuthConfig(mode = mode),
+        profile: DeploymentProfile = DeploymentProfile.WORKSPACE,
+        tokens: ApiTokenService = harness.apiTokens,
+        auth: AuthServices = this.auth,
     ): RouteContext = buildGuardedApplication(
         serving = serving,
         security = securityAssembly(
@@ -228,10 +333,11 @@ private class GuardedTestGraph(
                 dataDir = root.resolve("guarded-test-data"),
                 host = "127.0.0.1",
                 port = 8080,
-                auth = AuthConfig(mode = mode),
+                auth = authConfig,
+                profile = profile,
             ),
             policy = policy,
-            tokens = harness.apiTokens,
+            tokens = tokens,
             auth = auth,
             proxyCsrf = ProxyCsrf(ByteArray(32) { 7 }),
         ),

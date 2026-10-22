@@ -3,8 +3,10 @@ package com.plainbase.frameworks.config
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigException
 import com.typesafe.config.ConfigFactory
+import com.typesafe.config.ConfigParseOptions
 import com.typesafe.config.ConfigResolveOptions
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 
 /** The already-resolved operator and managed inputs selected by one load observation. */
@@ -22,6 +24,9 @@ internal object ConfigLoader {
 
     fun fromEnvAndFile(env: Map<String, String> = System.getenv()): PlainbaseConfig = fromSources(env, null)
 
+    fun profileFrom(env: Map<String, String> = System.getenv()): DeploymentProfile =
+        ConfigDecoder.parseProfile(env, readOperatorFile(dataDirFrom(env).resolve("plainbase.conf")))
+
     fun fromEnvAndCandidateRoots(
         managedRootsText: String?,
         env: Map<String, String> = System.getenv(),
@@ -31,9 +36,11 @@ internal object ConfigLoader {
         command: String,
         err: (String) -> Unit,
         resolve: () -> PlainbaseConfig = { fromEnvAndFile() },
-    ): PlainbaseConfig? =
+    ): PlainbaseConfig? = catchingConfigFailure(command, err, resolve)
+
+    private fun <T> catchingConfigFailure(command: String, err: (String) -> Unit, block: () -> T): T? =
         try {
-            resolve()
+            block()
         } catch (e: IllegalArgumentException) {
             err("$command: ${e.message}")
             null
@@ -44,7 +51,7 @@ internal object ConfigLoader {
 
     private fun fromSources(env: Map<String, String>, managedOverride: Config?): PlainbaseConfig {
         val dataDir = dataDirFrom(env)
-        val operator = parseIfRegularFile(dataDir.resolve("plainbase.conf"))
+        val operator = readOperatorFile(dataDir.resolve("plainbase.conf"))
         val managed = managedOverride ?: loadManagedRoots(dataDir.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE))
         return ConfigDecoder.decode(env, ConfigSources(operator, managed))
     }
@@ -84,12 +91,18 @@ internal object ConfigLoader {
         append(if (Files.exists(path)) "$path." else "$backup.")
     }
 
-    private fun parseIfRegularFile(path: Path): Config =
-        if (Files.isRegularFile(path)) {
-            ConfigFactory.parseFile(path.toFile()).resolve(ConfigResolveOptions.defaults())
-        } else {
-            ConfigFactory.empty()
+    private fun readOperatorFile(path: Path): Config {
+        if (Files.notExists(path, LinkOption.NOFOLLOW_LINKS)) return ConfigFactory.empty()
+        require(Files.isRegularFile(path)) {
+            "$path is not a regular file or a symlink to a regular file, or its type cannot be determined (check permissions)"
         }
+        val unresolved = ConfigFactory.parseFile(path.toFile(), ConfigParseOptions.defaults().setAllowMissing(false))
+        require(!unresolved.root().containsKey("profile") || unresolved.root().withOnlyKey("profile").toConfig().isResolved) {
+            "`profile` in DATA_DIR/plainbase.conf must be a literal; a ${'$'}{...} substitution is refused " +
+                "(an unset variable would leave the key absent and select the workspace profile)"
+        }
+        return unresolved.resolve(ConfigResolveOptions.defaults())
+    }
 
     private fun parseCandidate(text: String?): Config =
         if (text == null) ConfigFactory.empty() else ConfigFactory.parseString(text).resolve(ConfigResolveOptions.defaults())

@@ -81,7 +81,10 @@ private suspend fun ApplicationCall.handlePermalinkDispatch(ctx: RouteContext, r
         val bareId = PageId.of(first)
         if (bareId != null) {
             return@guarded when (val resolution = ctx.read.permalink(principal, bareId)) {
-                is PermalinkResolution.Found -> respondRedirectPreservingQuery(resolution.url, permanent = false)
+                is PermalinkResolution.Found -> {
+                    val target = if (ctx.reader != null) ctx.readerDestination(principal, resolution.url) else resolution.url
+                    respondRedirectPreservingQuery(target, permanent = false)
+                }
                 PermalinkResolution.LoserNoUrl -> respondLoser(bareId, null, principal, ctx, representation)
                 is PermalinkResolution.Retired -> respondRetired(bareId, resolution)
                 PermalinkResolution.Unknown ->
@@ -100,7 +103,10 @@ private suspend fun ApplicationCall.handlePermalinkDispatch(ctx: RouteContext, r
                     "Not a canonical-shape UUID: '${segments[1]}'",
                 )
             return@guarded when (val resolution = ctx.read.permalinkAt(principal, root, id)) {
-                is PermalinkResolution.Found -> respondRedirectPreservingQuery(resolution.url, permanent = false)
+                is PermalinkResolution.Found -> {
+                    val target = if (ctx.reader != null) ctx.readerDestination(principal, resolution.url) else resolution.url
+                    respondRedirectPreservingQuery(target, permanent = false)
+                }
                 PermalinkResolution.LoserNoUrl -> respondLoser(id, root, principal, ctx, representation)
                 is PermalinkResolution.Retired -> respondRetired(id, resolution)
                 PermalinkResolution.Unknown ->

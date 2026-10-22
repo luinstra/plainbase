@@ -6,7 +6,10 @@ import { ApiError } from "../api/client";
 import { useDiscussionHighlight } from "../lib/useDiscussionHighlight";
 import type { DiscussionDetail } from "../api/types";
 import { discussionDetailQuery, pageDiscussionsQuery } from "../api/discussions";
-import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlKey, pageHtmlQuery, pageKey, pageQuery, treeQuery } from "../api/queries";
+import {
+  byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlKey, pageHtmlQuery, pageKey, pageQuery, treeQuery,
+} from "../api/queries";
+import { isReader, isSessionKnown, isWorkspaceSession, useSessionMode } from "../api/sessionMode";
 import type { DiscussionQuoteRequestAnchor, PageHtmlResponse, PageResponse, TreeDiagram, TreeFolder, TreePage } from "../api/types";
 import { focusDiscussionElement } from "../lib/discussionFocus";
 import { useDiscussionSelection } from "../lib/useDiscussionSelection";
@@ -24,6 +27,10 @@ import {
   rootLabelFor,
   entryFor,
   rootEntryOfUrl,
+  isCanonicalPathname,
+  samePathname,
+  routerPathname,
+  contentPathname,
 } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { QueryErrorView, RootUnavailableView } from "./ErrorView";
@@ -36,37 +43,74 @@ import { DiscussionPanel, type PassageRequest } from "./DiscussionPanel";
 import { uniqueDiscussionItems } from "./DiscussionRead";
 
 /**
- * The `/$` canonical route body: resolve the splat through `by-path` (canonical or
- * alias), then render by id. When the response's canonical `url` differs from the address
- * bar (alias resolved mid-rebuild, page moved under us), the URL is replaceState'd to the
- * canonical — the server's `url` is the single source of URL truth (§A4).
+ * Resolve a canonical or alias splat through by-path, then render its rooted page id.
+ * Workspace navigation follows the page URL or landing folder. Reader navigation waits for
+ * session, tree and folder ownership, then uses that folder or the page URL/permalink fallback.
+ * The server remains the URL authority.
  */
 export function DocsPage({ path }: { path: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const page = useQuery(pageByPathQuery(path));
   const tree = useQuery(treeQuery);
+  const session = useSessionMode();
+  const reader = isReader(session.data);
+  const sessionKnown = isSessionKnown(session);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const contentLocation = reader ? contentPathname(pathname) : pathname;
 
   // The URL this component was resolved FOR. The replace must only fire while the address
   // bar still shows it — during a click-navigation the outgoing page briefly observes the
   // incoming pathname, and an unguarded compare would snap the URL straight back.
   const resolvedFor = `/${encodeTreePath(path)}`;
   const resolved = page.data;
-  // A folder's landing page (index/README) has ONE canonical home: the folder URL. Reaching it at
-  // its own bare-page URL redirects to the folder (the lookup needs the tree, kept warm by the
-  // Sidebar). Otherwise the canonical target is the page's own `url` (alias → canonical).
+  // Identify the landing child; another page or alias may own its folder URL.
   const landingEntry = resolved && tree.data ? folderForLanding(tree.data.roots, resolved.root, resolved.id) : null;
+  const probeKey = reader && landingEntry && landingEntry.folder.url !== null &&
+    !samePathname(routerPathname(resolvedFor), landingEntry.folder.url) && landingEntry.folder.path !== ""
+    ? byPathKeyForUrl(landingEntry.folder.url) : null;
+  const probe = useQuery({ ...pageByPathQuery(probeKey ?? ""), enabled: probeKey !== null });
   useEffect(() => {
-    if (!resolved || pathname !== resolvedFor) return;
+    if (!resolved || !samePathname(contentLocation, resolvedFor)) return;
+    if (!sessionKnown) return;
+    if (reader) {
+      // Without the tree, skip in-app alias canonicalization; the server handles initial document loads.
+      if (!tree.data) return;
+      let destination = resolved.url ?? permalinkOf(resolved.root, resolved.id);
+      if (landingEntry) {
+        const folderUrl = landingEntry.folder.url;
+        if (folderUrl !== null && samePathname(contentLocation, folderUrl)) return;
+        if (folderUrl !== null) {
+          if (landingEntry.folder.path === "") {
+            destination = folderUrl;
+          } else {
+            if (probe.isPending) return;
+            // A reader's fixed read policy makes a 404 equivalent to no other owner; policy-hidden claims could diverge elsewhere.
+            const ownsFolder = (probe.isError && probe.error instanceof ApiError && probe.error.isNotFound) ||
+              (probe.isSuccess && probe.data.root === resolved.root && probe.data.id === resolved.id);
+            if (ownsFolder) destination = folderUrl;
+          }
+        }
+      }
+      if (!isCanonicalPathname(pathname, destination)) {
+        if (destination === resolved.url) {
+          const canonicalPath = byPathKeyForUrl(destination);
+          if (canonicalPath !== null) {
+            queryClient.setQueryData(pageByPathQuery(canonicalPath).queryKey, resolved);
+          }
+        }
+        router.history.replace(destination + window.location.search + window.location.hash);
+      }
+      return;
+    }
     if (landingEntry) {
-      if (landingEntry.folder.url && landingEntry.folder.url !== resolvedFor) {
+      if (landingEntry.folder.url && !isCanonicalPathname(pathname, landingEntry.folder.url)) {
         router.history.replace(landingEntry.folder.url + window.location.search + window.location.hash);
       }
       return;
     }
     const canonicalUrl = resolved.url;
-    if (canonicalUrl && canonicalUrl !== resolvedFor) {
+    if (canonicalUrl && !isCanonicalPathname(pathname, canonicalUrl)) {
       // The alias response IS the canonical page — seed its by-path key so the
       // post-replace render hits cache instead of refetching the same page.
       const canonicalPath = byPathKeyForUrl(canonicalUrl);
@@ -75,7 +119,8 @@ export function DocsPage({ path }: { path: string }) {
       }
       router.history.replace(canonicalUrl + window.location.search + window.location.hash);
     }
-  }, [resolved, landingEntry, pathname, resolvedFor, router, queryClient]);
+  }, [resolved, landingEntry, pathname, contentLocation, resolvedFor, router, queryClient, sessionKnown, reader, tree.data,
+    probe.isPending, probe.isError, probe.error, probe.isSuccess, probe.data]);
 
   if (page.isPending) return <PagePending />;
   if (page.isError) {
@@ -92,8 +137,8 @@ export function DocsPage({ path }: { path: string }) {
 
 /**
  * The `/$` 404 fallthrough (ADR-0003) and root landing body: by-path said no page owns
- * this location, but a folder might. The location is matched VERBATIM against the tree entries'
- * folder `url`s (the server stays the single URL authority; nothing is slugified here) and
+ * this location, but a folder might. The router pathname stays untouched; tree URLs receive the
+ * router's identity-preserving decoding (the server stays the URL authority; nothing is slugified) and
  * nothing else: a location no entry owns is not-found here, the same answer the server gives
  * a tail whose first segment names no root. A README-preference child renders at the folder
  * URL; otherwise the generated listing. On the splat route by-path ran FIRST, so a page owning
@@ -104,7 +149,7 @@ export function FolderLanding({ url }: { url?: string }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const tree = useQuery(treeQuery);
 
-  const target = url ?? pathname;
+  const target = url === undefined ? pathname : routerPathname(url);
   const resolved = tree.data ? folderByUrl(tree.data.roots, target) : null;
 
   if (tree.isPending) return <PagePending />;
@@ -124,11 +169,10 @@ export function FolderLanding({ url }: { url?: string }) {
   // no request to 503, which is exactly why the flag has to be read here.
   if (!resolved.available) return <><RootUnavailableView root={resolved.root} label={rootLabel(resolved)} /><DiscussionEscape root={resolved.root} /></>;
 
-  // The landing renders AT the folder URL — its one canonical home (the index/README's own bare
-  // page URL redirects here; see DocsPage). With an index/README the authored content renders as the
-  // WHOLE landing (prose + rail), REPLACING the generated child listing — the children stay reachable
-  // through the sidebar tree. With no index, it's a purely-generated listing — no rail, but the rail
-  // column stays reserved so the content width matches a page (see FolderListing).
+  // Authored index/README content replaces the generated listing; children remain in the sidebar.
+  // Workspace navigation sends landing children here. A reader does so only when the landing owns
+  // this folder URL; shadowed or alias-owned folders leave the child URL or permalink in the address.
+  // Without a landing, FolderListing renders the generated view.
   const landing = landingPage(resolved.folder);
   return landing ? <PageContent key={JSON.stringify([resolved.root, landing.id])} id={landing.id} root={resolved.root} /> :
     <FolderListing root={resolved.root} folder={resolved.folder} />;
@@ -142,10 +186,12 @@ export function FolderLanding({ url }: { url?: string }) {
  */
 function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
   const tree = useQuery(treeQuery);
+  const session = useSessionMode();
+  const workspace = isWorkspaceSession(session);
   const entry = tree.data ? entryFor(tree.data.roots, root) : null;
   const title = folderTitle(folder) || (entry ? rootLabel(entry) : root);
   const readOnlyId = useId();
-  const canCreate = rootAcceptsWrites(tree.data?.roots, root);
+  const canCreate = workspace && rootAcceptsWrites(tree.data?.roots, root);
   const folderCount = folder.children.filter((child) => child.type === "folder").length;
   const pageCount = folder.children.filter((child) => child.type === "page").length;
   const diagramCount = folder.children.filter((child) => child.type === "diagram").length;
@@ -170,7 +216,7 @@ function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
             </div>
             {canCreate ? (
               <NewPageLink className="pb-folder-create" root={root} folder={folder.path}>New page here</NewPageLink>
-            ) : (
+            ) : !workspace ? null : (
               <>
                 <button className="pb-folder-create" disabled title="This space is read-only." aria-describedby={readOnlyId}>
                   New page here
@@ -407,6 +453,8 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   const displayedRoot = railSource?.root ?? root;
   const workspaceId = JSON.stringify([displayedRoot, id]);
   const tree = useQuery(treeQuery);
+  const session = useSessionMode();
+  const workspace = isWorkspaceSession(session);
   const discussions = useInfiniteQuery({ ...pageDiscussionsQuery(displayedRoot ?? "", id), enabled: false });
   // Retain this workspace's detail observation when its panel unmounts. A refusal must gate the entire
   // workspace, and a deliberate fresh enabled answer can restore eligibility without reopening actions.
@@ -414,7 +462,7 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   const thread = useInfiniteQuery({ ...discussionDetailQuery(displayedRoot ?? "", observedId), enabled: false });
   // Unlike an already-addressed discussion route, page activation first needs its owning tree entry.
   // A failed initial tree read cannot establish that owner capability; the rail offers an explicit retry.
-  const discussionWorkspace = rootDiscussionsEnabled(tree.data?.roots, displayedRoot) &&
+  const discussionWorkspace = workspace && rootDiscussionsEnabled(tree.data?.roots, displayedRoot) &&
     !discussions.data?.pages.some((page) => !page.discussions_available && page.reason === "disabled_by_config") &&
     !(observedId && thread.data?.pages.some((page) => !page.discussions_available && page.reason === "disabled_by_config"));
   // Cold owning metadata deliberately changes presentation once, resetting activation before the first workspace frame.
@@ -441,7 +489,7 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   // The page names its own root; the TREE is what says whether that root takes writes. Read-only, down, and
   // not-yet-known roots get no Edit affordance - the same call Shell makes for "New", and for the same
   // reason: the alternative is an editor session that can only end in a 403 (or a 503) at save.
-  const editable = rootAcceptsWrites(tree.data?.roots, html.data?.root ?? null);
+  const editable = workspace && rootAcceptsWrites(tree.data?.roots, html.data?.root ?? null);
   const rootEntry = tree.data?.roots.find((entry) => entry.root === displayedRoot);
   const knownUnsupported = !!rootEntry && (!rootEntry.available || !rootEntry.editable);
   // Observe an existing page-list answer without fetching solely to decide whether to offer creation.
@@ -518,7 +566,7 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
   const frontmatter = page?.frontmatter;
   const rail = <aside className="pb-rail pb-reading-rail" data-pb-rail>
     {railSource && <Toc headings={railSource.headings} />}
-    {railSource && !rootEntry && tree.isError && <p role="alert" className="pb-discussion-notice">
+    {workspace && railSource && !rootEntry && tree.isError && <p role="alert" className="pb-discussion-notice">
       Could not check discussion availability for this page.
       <button type="button" className="pb-discussion-action" disabled={tree.isFetching}
         onClick={() => void tree.refetch()}>Retry discussion availability</button>
@@ -571,13 +619,13 @@ function PageContent({ id, root, page: seeded }: { id: string; root: string | nu
           </> : <>
             <PageEditAction url={page?.url ?? null} editable={editable} />
             <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
-            <div ref={articleWrapper} data-pb-page-article><Prose html={html.data.html} title={html.data.title}
+            <div ref={articleWrapper} data-pb-page-article data-pb-page-id={id}><Prose html={html.data.html} title={html.data.title}
               reading={{ root: html.data.root, path: html.data.path, url: page?.url ?? null, editable }}
               metadata={<DocRail frontmatter={frontmatter} path={html.data.path} editUrl={editable ? page?.url : null} />} /></div>
             <DocFooter
               frontmatter={frontmatter}
               url={page?.url ?? null}
-              hasHistory={(page?.commit ?? null) !== null}
+              hasHistory={workspace && (page?.commit ?? null) !== null}
             />
           </>}
         </div>
@@ -740,7 +788,7 @@ function DocFooter({
   );
 }
 
-function PagePending() {
+export function PagePending() {
   return (
     <p className="py-16 text-center text-faint" data-pb-loading>
       Loading…
@@ -758,7 +806,8 @@ function PageError({ error, root, discussionWorkspace = true }: { error: Error; 
 
 function DiscussionEscape({ root }: { root?: string | null }) {
   const tree = useQuery(treeQuery);
-  if (rootDiscussionsDisabled(tree.data?.roots, root ?? null)) return null;
+  const session = useSessionMode();
+  if (!isWorkspaceSession(session) || rootDiscussionsDisabled(tree.data?.roots, root ?? null)) return null;
   return <p className="mt-4 text-center text-sm">{root ?
     <Link to="/discussions/$root" params={{ root }} className="text-link hover:underline">Discussions in {root}</Link> :
     <Link to="/discussions" className="text-link hover:underline">Browse discussions</Link>}</p>;

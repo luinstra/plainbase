@@ -1405,7 +1405,7 @@ internal fun objectConfigForOwnership(
     ),
 )
 
-private fun seedCompleteMirror(data: Path, restorePending: Boolean = false) {
+internal fun seedCompleteMirror(data: Path, restorePending: Boolean = false) {
     val mirror = data.resolve("mirror")
     val home = data.resolve("git-home")
     Files.createDirectories(mirror)
@@ -1720,7 +1720,7 @@ private fun joinBoundedUntil(thread: Thread, deadlineNanos: Long): Boolean {
     return true
 }
 
-private fun dataDirLockHeldForOwnership(data: Path): Boolean {
+internal fun dataDirLockHeldForOwnership(data: Path): Boolean {
     val attempt = DataDirLock.tryAcquire(data)
     if (attempt == null) return true
     attempt.close()

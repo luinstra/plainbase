@@ -484,7 +484,7 @@ object NativeSpike {
     /**
      * The P3 native bet: the in-binary `plainbaseMcp` mount, served over a REAL CIO server under ENFORCED auth, driven
      * by a REAL SSE MCP client. Wires the production Koin graph (config pointed at a temp tree, auth.mode=builtin so
-     * `enforced=true`, git off) so the spike exercises the SAME guarded application assembly/`plainbaseMcp` the server uses;
+     * `PolicyMode.ENFORCED`, git off) so the spike exercises the SAME guarded application assembly/`plainbaseMcp` the server uses;
      * mints a PROPOSE (-> EDITOR) agent token, opens an authed SSE stream, and asserts initialize + listTools(== the
      * eleven) + TWO callTool round-trips (list_changes + read_page) over ONE open stream — proving keep-alive / SSE
      * flush work in the native image, not just a single round-trip. The SSE/MCP-server reflection this reaches is what
@@ -499,7 +499,7 @@ object NativeSpike {
                 "CONTENT_DIR" to contentDir.toString(),
                 "DATA_DIR" to dataDir.toString(),
                 "PLAINBASE_HOST" to "127.0.0.1",
-                "PLAINBASE_AUTH_MODE" to "builtin", // -> enforced=true, so the connect gate + facade gate are REAL
+                "PLAINBASE_AUTH_MODE" to "builtin", // -> PolicyMode.ENFORCED, so the connect gate + facade gate are REAL
                 "PLAINBASE_GIT_ENABLED" to "false", // no git gate in the spike
             ),
         )
@@ -514,9 +514,9 @@ object NativeSpike {
                 module { single { config } },
                 createContentModule(config, bootInputs, openers.openObject, { it.close() }, resources),
                 createRepositoryModule(openers.openDriver, { it.close() }, resources),
-                securityModule,
-                indexModule,
-                checkpointModule,
+                securityModule(),
+                indexModule(),
+                checkpointModule(),
                 createSearchModule(openers.openSearch, { it.close() }, resources),
                 createDiscussionModule(resources),
                 createHistoryModule(config, bootInputs.history, resources),

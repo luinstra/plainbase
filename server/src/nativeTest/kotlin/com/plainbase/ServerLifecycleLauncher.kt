@@ -473,6 +473,7 @@ private fun RouteContext.withMutating(mutate: MutatingFacade): RouteContext =
         proxyIdentityHeader = proxyIdentityHeader,
         secureCookie = secureCookie,
         proxyCsrf = proxyCsrf,
+        reader = reader,
         extract = extract,
     )
 

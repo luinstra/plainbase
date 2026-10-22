@@ -93,6 +93,7 @@ internal class ObjectAbsenceWorld : AutoCloseable {
             rowsAtStart = ::rowsOfMain,
             keyPrefix = "",
             pollSeconds = 3600,
+            polling = true,
             dirtyPaths = { emptySet() },
             mirrorRoot = mirrorRoot,
             ignoreRules = ignoreRules,

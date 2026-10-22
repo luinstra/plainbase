@@ -7,6 +7,7 @@ import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.ProposalService
@@ -63,7 +64,7 @@ class AuthRouteHarness(
             audit = harness.auditRepository,
             idProvider = UuidV7IdProvider(),
             clock = Clock.System,
-            enforced = enforced,
+            mode = if (enforced) PolicyMode.ENFORCED else PolicyMode.OPEN,
             discussionsEnabledOf = { true },
         )
         val auth = harness.authServices(policy)

@@ -17,8 +17,8 @@ import io.ktor.server.routing.get
  * missing, unknown, or undecodable document paths return JSON 404. Bare root landings remain shells; `/` and `/browse`
  * are separate surfaces.
  *
- * A live canonical path shadows an alias. An insecure-transport credential is refused (421) before either
- * representation is selected.
+ * A live canonical path shadows an alias. In the workspace profile, an insecure-transport credential is refused
+ * (421) before either representation is selected.
  */
 fun Route.rootContentRoutes(ctx: RouteContext) {
     val handler: suspend RoutingContext.() -> Unit = handler@{

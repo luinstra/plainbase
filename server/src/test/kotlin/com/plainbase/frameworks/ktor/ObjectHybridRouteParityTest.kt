@@ -302,6 +302,7 @@ private fun hybridOverride(fakeSlot: Array<FakeObjectStore?>? = null): (LocalCon
         binding = com.plainbase.domain.root.RootBinding("https://fake|bucket|"),
         keyPrefix = "",
         pollSeconds = 3_600,
+        polling = true,
         dirtyPaths = { emptySet() },
         // Point mirrorRoot at the REAL mirror's root, not a throwaway temp dir: harmless today (this parity
         // harness never hydrates/polls), but a divergent mirrorRoot is a latent footgun for anything that would.

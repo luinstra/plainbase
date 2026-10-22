@@ -20,7 +20,7 @@ import kotlin.time.Instant
 
 /**
  * The P1a `checkApprove` matrix (closes hole #4 — CI/smoke run `auth.mode=off`, where `allows` short-circuits and
- * the whole matrix is INVISIBLE, so this MUST construct `PolicyService(enforced = true)`). ADMIN-only (D1 — APPROVE
+ * the whole matrix is INVISIBLE, so this MUST construct `PolicyService(mode = PolicyMode.ENFORCED)`). ADMIN-only (D1 - APPROVE
  * rides `Role.ADMIN -> true`; VIEWER/EDITOR/agents/Anonymous all denied). The denied audit row is written BEFORE the
  * throw (the `gate` ordering). Mirrors [PolicyServiceTest]'s construction. JVM floor; the §WI-11 native item adds a
  * native deny+allow assertion.
@@ -40,7 +40,7 @@ class CheckApproveMatrixTest : FunSpec({
             var n = 0
             val ids = IdProvider { PageId.of("0190aaaa-bbbb-7ccc-8ddd-%012d".format(n++))!! }
             block(
-                PolicyService(roles, tokens, audit, ids, fixedClock, enforced = true, discussionsEnabledOf = { true }),
+                PolicyService(roles, tokens, audit, ids, fixedClock, mode = PolicyMode.ENFORCED, discussionsEnabledOf = { true }),
                 roles, tokens, audit,
             )
         }
@@ -105,7 +105,7 @@ class CheckApproveMatrixTest : FunSpec({
                 SqlDelightAuditRepository(db),
                 ids,
                 fixedClock,
-                enforced = false,
+                mode = PolicyMode.OPEN,
                 discussionsEnabledOf = { true },
             )
             // No throw — off-mode opens the choke point (this is exactly why an enforced=true matrix is mandatory).

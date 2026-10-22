@@ -400,12 +400,20 @@ export interface DiffResponse {
 
 // ---- A4b: auth session + admin management wire shapes (server: AuthDtos.kt) -------------------
 
-/** `GET /api/v1/session` — the auth state + a fresh CSRF token + the auth mode (drives the UI hint). */
+/** `GET /api/v1/session` returns auth state and mode; a reader session omits username and CSRF token. */
 export interface SessionResponse {
   authenticated: boolean;
-  username: string | null;
-  csrf_token: string | null;
-  auth_mode: string; // "builtin" | "proxy" | "off"
+  username?: string | null;
+  csrf_token?: string | null;
+  auth_mode: string; // "builtin" | "proxy" | "off" | "reader"
+  release?: string; // Opaque release id.
+}
+
+/** Wire-golden twin only; application queries use SessionResponse. Reader sessions omit username and CSRF token. */
+export interface ReaderSessionResponse {
+  authenticated: boolean;
+  auth_mode: string; // Always "reader".
+  release?: string; // Opaque release id.
 }
 
 /** One API token — metadata only (never a secret/plaintext). */

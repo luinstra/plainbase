@@ -334,7 +334,7 @@ class DiscussionWriterTest : FunSpec({
                     roles.upsert("builtin", "u-1", Role.VIEWER, WRITER_NOW)
                     val policy = PolicyService(
                         roles, SqlDelightApiTokenRepository(db), SqlDelightAuditRepository(db),
-                        IdProvider { PAGE.pageId }, fixedClock, enforced = true,
+                        IdProvider { PAGE.pageId }, fixedClock, mode = PolicyMode.ENFORCED,
                         discussionsEnabledOf = { true },
                     )
                     val grant = policy.checkDiscussion(

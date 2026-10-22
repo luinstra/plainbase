@@ -73,6 +73,19 @@ sealed interface TreeNode {
  */
 object TreeBuilder {
 
+    /** Selects an authored landing from direct child paths, preferring index to the first README. */
+    fun landingPage(folder: TreeNode.Folder): TreeNode.Page? {
+        var readme: TreeNode.Page? = null
+        for (child in folder.children) {
+            if (child !is TreeNode.Page) continue
+            when (child.path.name.removeSuffix(".md").lowercase()) {
+                "index" -> return child
+                "readme" -> if (readme == null) readme = child
+            }
+        }
+        return readme
+    }
+
     fun build(index: PageIndex, root: RootName, folderLabels: Map<String, String> = emptyMap()): TreeNode.Folder {
         // One root's tree (the section accessor is total, so an unknown root yields the empty
         // tree); the per-root wire entry wrapping is TreeJsonCache's (C3).

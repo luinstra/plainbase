@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.dto
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -30,6 +31,14 @@ data class SessionResponse(
     val username: String?,
     @SerialName("csrf_token") val csrfToken: String?,
     @SerialName("auth_mode") val authMode: String,
+)
+
+/** Reader state with an optional opaque release label. */
+@Serializable
+data class ReaderSessionResponse(
+    val authenticated: Boolean,
+    @SerialName("auth_mode") val authMode: String,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val release: String? = null,
 )
 
 /** `POST /api/v1/setup/consume` request: a bootstrap token + the first admin's chosen credentials. */

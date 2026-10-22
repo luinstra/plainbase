@@ -31,6 +31,7 @@ import io.ktor.server.routing.RoutingNode
 import io.ktor.server.routing.TrailingSlashRouteSelector
 import io.ktor.server.routing.routingRoot
 import io.ktor.server.testing.testApplication
+import io.mockk.mockk
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -155,6 +156,13 @@ class FrontendBundleTest : FunSpec({
         withClue("structural CSS may declare only the active-search faint override; palette definitions belong in theme stylesheets") {
             forbidden.shouldBeEmpty()
             activeSearchOverrides shouldBe 1
+        }
+    }
+
+    test("every embedded asset has a content hash in its filename") {
+        val hashedName = Regex("-[A-Za-z0-9_-]{8}\\.[a-z0-9]+$")
+        bundleAssetsLevel().forEach { (name, _) ->
+            withClue(name) { hashedName.containsMatchIn(name) shouldBe true }
         }
     }
 
@@ -309,6 +317,7 @@ private fun mountedTopLevelSegmentsForAuthMode(
         Fixtures.demoDocs,
         authMode = authMode,
         proxySecret = if (authMode == AuthMode.PROXY) "test-secret" else null,
+        discussions = mockk(relaxed = true),
     ).use { harness ->
         testApplication {
             application { plainbaseModule(harness.services) }

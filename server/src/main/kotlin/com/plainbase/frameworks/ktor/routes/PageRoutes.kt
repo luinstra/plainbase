@@ -27,6 +27,8 @@ import io.ktor.server.routing.route
  *  - `GET /api/v1/pages/{id}/validate-links` — the page's broken links + anchors (PB-READ-2, frozen).
  *  - `GET /api/v1/pages/{id}/metadata` — the server-derived metadata projection (PB-READ-2, frozen).
  *
+ * Validate-links is registered by [pageRoutes] only; [pageReadRoutes] registers the page representations and metadata.
+ *
  * 400 vs 404 is decided by the spec regex through [PageId.of], never by `UUID.fromString` leniency:
  * shape-invalid → 400 `invalid_page_id`; shape-valid-but-unknown (ANY version — opaque identity,
  * owner ruling) → 404 `page_not_found`.
@@ -38,11 +40,18 @@ import io.ktor.server.routing.route
  * 401/403 BEFORE the page lookup (no existence leak).
  */
 fun Route.pageRoutes(ctx: RouteContext) {
+    pageReadRoutes(ctx)
+    route("/${ServerTopLevel.API}/v1/pages") {
+        validateLinksRoute(ctx)
+    }
+}
+
+/** Registers page representations and metadata without link validation. */
+fun Route.pageReadRoutes(ctx: RouteContext) {
     route("/${ServerTopLevel.API}/v1/pages") {
         byPathRoute(ctx)
         pageByIdRoute(ctx)
         pageHtmlRoute(ctx)
-        validateLinksRoute(ctx)
         pageMetadataRoute(ctx)
     }
 }

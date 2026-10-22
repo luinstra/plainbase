@@ -140,7 +140,7 @@ private fun withKoin(content: Path, dataDir: Path, history: HistoryMode, block: 
             module { single { configValue } },
             createContentModule(configValue, inputs, openers.openObject, { it.close() }, owner),
             repositoryModule(owner),
-            securityModule,
+            securityModule(),
             createHistoryModule(configValue, inputs.history, owner),
         ),
     )

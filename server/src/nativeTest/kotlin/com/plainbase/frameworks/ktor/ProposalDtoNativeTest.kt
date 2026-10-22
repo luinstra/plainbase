@@ -9,6 +9,7 @@ import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.ApplyDisposition
 import com.plainbase.domain.service.IdProvider
+import com.plainbase.domain.service.PolicyMode
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.dispositionOf
 import com.plainbase.domain.service.unifiedDiff
@@ -112,7 +113,7 @@ class ProposalDtoNativeTest {
             val ids = IdProvider { PageId.of("0190aaaa-bbbb-7ccc-8ddd-%012d".format(n++))!! }
             val policy =
                 PolicyService(
-                    roles, tokens, SqlDelightAuditRepository(db), ids, fixedClock, enforced = true,
+                    roles, tokens, SqlDelightAuditRepository(db), ids, fixedClock, mode = PolicyMode.ENFORCED,
                     discussionsEnabledOf = { true },
                 )
 

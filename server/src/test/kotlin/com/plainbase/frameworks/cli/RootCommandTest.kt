@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.cli
 
+import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.config.ConfigBootInspector
 import com.plainbase.frameworks.config.ConfigLoader
@@ -50,6 +51,37 @@ class RootCommandTest : FunSpec({
             assertSoftly {
                 val err = captureStderr { w.root("list") shouldBe 0 }
                 err.lineSequence().filter { it.startsWith("root list:") }.toList() shouldBe emptyList()
+            }
+        }
+    }
+
+    test("reader root add refuses an editable root without creating managed configuration") {
+        world(plainbaseConf = "profile = reader") { w ->
+            val extra = Files.createDirectory(w.tmp("notes"))
+            var status = -1
+            val err = captureStderr { status = w.root("add", "notes", extra.toString(), "--editable") }
+            assertSoftly {
+                status shouldBe 1
+                err shouldContain "editable"
+                Files.exists(w.rootsConf) shouldBe false
+            }
+        }
+    }
+
+    test("reader root add persists disabled capabilities when the data directory later runs as a workspace") {
+        world(plainbaseConf = "profile = reader") { w ->
+            val extra = Files.createDirectory(w.tmp("notes"))
+            captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 }
+            Files.exists(w.rootsConf) shouldBe true
+            Files.readString(w.rootsConf) shouldContain "discussionsEnabled = false"
+            w.config().roots.extras.single().discussionsEnabled shouldBe false
+
+            Files.writeString(w.data.resolve("plainbase.conf"), "profile = workspace")
+            val root = w.config().roots.extras.single()
+            assertSoftly {
+                root.editable shouldBe false
+                root.history shouldBe HistoryMode.OFF
+                root.discussionsEnabled shouldBe false
             }
         }
     }

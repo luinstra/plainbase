@@ -3,9 +3,13 @@ import { useRouter, useRouterState } from "@tanstack/react-router";
 import { createContext, useCallback, useContext, useEffect, useRef, type ComponentProps, type ReactNode } from "react";
 import { ApiError } from "../api/client";
 import { byPathKeyForUrl, pageByPathQuery, pageQuery, treeQuery } from "../api/queries";
+import { isWorkspaceSession, useSessionMode } from "../api/sessionMode";
 import { parseDiagramPath } from "../lib/diagramPath";
 import { parsePermalink, permalinkSplat } from "../lib/permalink";
-import { entryFor, folderByUrl, folderForLanding, primaryEntry, rootAcceptsWrites, rootOfLocation } from "../lib/tree";
+import {
+  contentPathname, entryFor, folderByUrl, folderForLanding, isCanonicalPathname, isRootHomePathname,
+  primaryEntry, rootAcceptsWrites, rootEntryOfUrl, rootOfLocation,
+} from "../lib/tree";
 import { NewPageDialog } from "./NewPageDialog";
 
 interface CreationEntry { sourceHref: string; root: string; folder: string; sessionKey: string }
@@ -41,24 +45,29 @@ export function NewPageProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const location = useRouterState({ select: (state) => state.location });
   const tree = useQuery(treeQuery);
+  const session = useSessionMode();
+  const workspace = isWorkspaceSession(session);
   const roots = tree.data?.roots ?? [];
+  const pathname = rootEntryOfUrl(roots, location.pathname) ? contentPathname(location.pathname) : location.pathname;
   const addressedRoot = rootOfLocation(roots, location.pathname);
-  const folderEntry = folderByUrl(roots, location.pathname);
+  const folderEntry = folderByUrl(roots, pathname);
   const diagram = parseDiagramPath(location.pathname);
   const splat = permalinkSplat(location.pathname);
   const permalink = splat === null ? null : parsePermalink(splat);
   let path = "";
-  try { path = byPathKeyForUrl(location.pathname) ?? ""; } catch { /* Rejected route segments never become a page lookup. */ }
+  try { path = byPathKeyForUrl(pathname) ?? ""; } catch { /* Rejected route segments never become a page lookup. */ }
   // Observe the active route's existing read without issuing another request. An alias must
   // finish canonicalizing before a same-location modal entry can safely be retained.
   const byId = useQuery({ ...pageQuery(permalink?.id ?? "", permalink?.root ?? null), enabled: false });
   const byPath = useQuery({ ...pageByPathQuery(path), enabled: false });
   const page = permalink ? byId : byPath;
-  const rootHome = roots.some((root) => root.tree.url === location.pathname || `${root.tree.url}/` === location.pathname);
+  const rootHome = roots.some((root) => isRootHomePathname(location.pathname, root.tree.url));
   const needsPage = !diagram && !rootHome && (splat !== null || addressedRoot !== null && location.pathname !== "/new" && !location.pathname.startsWith("/discussions"));
   const landing = page.data ? folderForLanding(roots, page.data.root, page.data.id) : null;
   const canonical = location.search.mode === "edit" ? page.data?.url : landing?.folder.url ?? page.data?.url;
-  const ready = !needsPage || (page.isSuccess && (!canonical || canonical === location.pathname))
+  // Workspace keeps accepted slashed page addresses, including aliases, without replacing them.
+  const restingWorkspacePage = workspace && pathname !== location.pathname;
+  const ready = !needsPage || (page.isSuccess && (!canonical || isCanonicalPathname(pathname, canonical) || restingWorkspacePage))
     || (page.isError && page.error instanceof ApiError && page.error.isNotFound && folderEntry !== null);
   const root = addressedRoot ?? page.data?.root ?? primaryEntry(roots)?.root;
   const folder = folderEntry?.folder.path ?? (diagram ? parentFolder(diagram.path) : page.data ? parentFolder(page.data.path) : "");
@@ -66,7 +75,7 @@ export function NewPageProvider({ children }: { children: ReactNode }) {
   const direct = location.pathname === "/new";
   const directRoot = typeof location.search.root === "string" && location.search.root ? location.search.root : primaryEntry(roots)?.root;
   const directFolder = typeof location.search.folder === "string" ? location.search.folder : "";
-  const isOpen = direct || marker !== null;
+  const isOpen = workspace && (direct || marker !== null);
   const opener = useRef<{ element: HTMLElement; href: string } | null>(null);
   const opening = useRef(false);
   const leaveGuard = useRef<(() => boolean) | null>(null);
@@ -83,7 +92,7 @@ export function NewPageProvider({ children }: { children: ReactNode }) {
     }
   }, [isOpen, location.href, location.state]);
   function open(targetRoot: string, targetFolder: string, element: HTMLElement) {
-    if (!ready || isOpen || opening.current || !rootAcceptsWrites(roots, targetRoot)) return;
+    if (!workspace || !ready || isOpen || opening.current || !rootAcceptsWrites(roots, targetRoot)) return;
     opening.current = true;
     opener.current = { element, href: location.href };
     // Commit the already-parsed location so accepted trailing slashes and query bytes

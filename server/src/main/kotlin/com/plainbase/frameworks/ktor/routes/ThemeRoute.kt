@@ -29,7 +29,7 @@ fun Route.themeRoutes(ctx: RouteContext) {
                     val bytes = withContext(Dispatchers.IO) { read() }
                     call.respondBytes(bytes, ContentType.Text.CSS.withCharset(Charsets.UTF_8))
                 } else {
-                    call.response.header(HttpHeaders.Allow, "GET")
+                    call.response.header(HttpHeaders.Allow, if (ctx.reader != null) "GET, HEAD" else "GET")
                     call.response.header(HttpHeaders.CacheControl, CACHE_CONTROL_NO_STORE)
                     call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
                     call.respond(HttpStatusCode.MethodNotAllowed)

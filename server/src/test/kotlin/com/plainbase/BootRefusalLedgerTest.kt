@@ -12,7 +12,7 @@ import kotlin.io.path.readText
  * good intention.**
  *
  * A shared function does not stop someone adding an unledgered refusal to the owned runtime next quarter and never
- * telling the CLI. So the seven owned refusal semantics and the loader's separate semantic are ledgered, one line
+ * telling the CLI. So the ten owned refusal semantics and the loader's separate semantic are ledgered, one line
  * each, with a written disposition: either the shared gate PRODUCES it (and `plainbase root` gets it for free) or
  * it is EXCLUDED for a reason the code FORCES rather than a reason somebody chose. A new site appears -> this goes
  * RED -> somebody decides. That decision is the whole point.
@@ -24,9 +24,10 @@ import kotlin.io.path.readText
  * ceiling too; C5 only bumps its counts, but the next person in that file should fix it.)
  *
  * The tightness is the subtle half, and it went wrong once already: `ledger.size` is NOT the site count, because
- * the owned helper has six textual call sites for seven semantic entries: topology and bind share `refuseFirst`,
+ * the owned helper has seven textual call sites for ten semantic entries: topology, bind, reader profile and the
+ * reader freshness check share `refuseFirst`,
  * while the wrapper has one independent `exitProcess(1)` for the loader's status. The two derived ceilings are
- * therefore owned entries minus one shared site, and wrapper exits at most one.
+ * therefore owned entries minus three shared entries, and wrapper exits at most one.
  */
 class BootRefusalLedgerTest : FunSpec({
 
@@ -36,6 +37,12 @@ class BootRefusalLedgerTest : FunSpec({
         "loadForCommand" to "COVERED: the CLI runs ConfigLoader and ConfigDecoder.decode over the candidate it is about to write",
         "gate: topology matrix" to "COVERED: ConfigBootInspector.bootRefusals, then evaluateBootGate via bootGateFor",
         "gate: bind guard" to "COVERED: ConfigBootInspector.bootRefusals, then evaluateBootGate via bootGateFor",
+        "gate: reader profile contradictions" to "COVERED: ConfigBootInspector.bootRefusals, then evaluateBootGate via bootGateFor",
+        "reader DATA_DIR freshness under the lock" to
+            "EXCLUDED: object mode only; bootGateFor admits LOCAL configs only, so no CLI candidate can reach it",
+        "reader first-index completeness" to
+            "EXCLUDED: reader object mode only; bootGateFor admits LOCAL configs only, as for the reader freshness entry, " +
+            "and the check needs a hydrated listing and a built index, which the pure gate never has",
         "gate: per-root git gate" to "COVERED: evaluateBootGate, via bootGateFor",
         "DataDirLock contention" to
             "EXCLUDED: a CONCURRENCY refusal, not a config one - no candidate roots.conf can change who ELSE holds " +
@@ -55,9 +62,9 @@ class BootRefusalLedgerTest : FunSpec({
 
     val ownedLedger = ledger - "loadForCommand"
     val loaderLedger = ledger.filterKeys { it == "loadForCommand" }
-    // `refuseFirst` is ONE textual refuseServe call, called from the topology stage AND the bind stage - so those
-    // two owned entries are backed by a single site. Nothing else in Application.kt shares one.
-    val entriesSharingASite = 1
+    // `refuseFirst` backs topology, bind, reader profile and reader freshness with one refuseServe call.
+    // Four owned entries share that site, so three are subtracted from the owned-entry ceiling.
+    val entriesSharingASite = 3
 
     test("owned refusal sites and the loader wrapper stay within their separate ledger ceilings") {
         val application = mainSourceRoot().resolve("Application.kt").readText()

@@ -3,12 +3,16 @@
 Plainbase can serve an S3-compatible **bucket** as its authoritative content store instead of a local
 directory. The bucket is the canonical tree (a plain set of objects any S3 tool can read); a local
 `DATA_DIR/mirror` is a derived, deletable cache the server hydrates from the bucket at boot and keeps
-current with a background poll. **Cloudflare R2 is the primary, first-class target**; AWS S3 (and other
+current with a background poll in the workspace profile. A [public reader](public-reader.md#select-a-release)
+hydrates once at boot and never polls or writes the bucket. **Cloudflare R2 is the primary, first-class target**; AWS S3 (and other
 S3-compatible stores) work as a compatibility variant. See also
 [ADR-0010](../decisions/0010-object-storage-backend.md) for the design record and
 [operating-plainbase.md](../operating-plainbase.md#backups) for backups and disaster-recovery drills.
 
 ## R2 walkthrough (the primary path)
+
+This walkthrough configures a writable workspace. For a read-only deployment, use the
+[public reader guide](public-reader.md#select-a-release) and an Object Read token.
 
 1. Create an R2 bucket in the Cloudflare dashboard.
 2. Mint an **R2 API token** scoped to that one bucket, with **Object Read & Write** permission (why
@@ -48,7 +52,9 @@ recorded PENDING there until a credentialed AWS run is done; R2 is fully charact
 
 ## One instance per bucket (the v1 rule)
 
-**Run exactly one Plainbase instance against a bucket.** The single-writer posture is enforced locally
+**Run exactly one writable Plainbase instance against a bucket.** Read-only readers never write and
+may share a prefix, each with its own DATA_DIR; see [several readers and health](public-reader.md#several-readers-and-health).
+The single-writer posture is enforced locally
 by the `DataDirLock` on `DATA_DIR`, and by this deployment rule at the bucket. Concretely, if a second
 instance writes to the same bucket:
 
@@ -62,24 +68,28 @@ This doc rule plus `DataDirLock` **is** the v1 exclusion posture (owner-locked).
 heartbeat that would make multi-instance safe is explicitly deferred to a future v0.x, not scoped here.
 
 **Scale-to-zero / serverless is a configuration trap.** A native binary makes it easy to fan out N
-serverless instances against one bucket; serverless concurrency greater than 1 against a single bucket
-is a **configuration error**. One-instance-per-bucket binds every deploy shape, including scale-to-zero
-and serverless-fanout.
+serverless instances against one bucket; writable-instance concurrency greater than 1 against a single
+bucket is a **configuration error**. One-writable-instance-per-bucket binds every writable deployment,
+including scale-to-zero and serverless-fanout. The read-only reader exception does not admit a second writer.
 
 ## Least-privilege IAM, stated honestly
 
 The object-mode boot's first bucket LIST doubles as a fail-closed self-check: it proves **TLS + SigV4 +
 credentials + READ**. It does **not** prove write permission. So:
 
-- **Read-only credentials pass boot**, then every save's PUT gets a 403 that maps to the frozen
+- **A public reader needs only Object Read.** It never PUTs or DELETEs bucket objects. Follow the
+  [reader boot requirements](public-reader.md#complete-or-refuse-boot).
+- **For a writable workspace, read-only credentials pass boot**, then every save's PUT gets a 403 that maps to the frozen
   retryable 503 - forever. This never fail-closes at boot; "boot succeeded" is not "writes proven."
-- Grant PUT alongside GET/LIST. This is deliberately NOT fixed by a per-boot PUT probe, which would
+- For a writable workspace, grant PUT alongside GET/LIST. This is deliberately NOT fixed by a per-boot PUT probe, which would
   write to the bucket on every boot.
 
 Concrete grants:
 
-- **R2:** an API token with **Object Read & Write**, scoped to the one bucket.
-- **AWS S3:** `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` on the bucket/prefix.
+- **R2 reader:** an API token with **Object Read**, scoped to the one bucket.
+- **R2 writable workspace:** an API token with **Object Read & Write**, scoped to the one bucket.
+- **AWS S3 reader:** `s3:GetObject` and `s3:ListBucket` on the bucket/prefix.
+- **AWS S3 writable workspace:** `s3:GetObject`, `s3:PutObject`, `s3:ListBucket` on the bucket/prefix.
 
 `s3:DeleteObject` is **not** needed on the content bucket - the server never deletes bucket objects on
 the serving path (its only delete is a local mirror file). Bucket DELETE is exercised only by
@@ -130,7 +140,7 @@ re-measure on your own hardware when sizing tightly (see the
 ## Platform support, honestly
 
 There is **no in-binary platform gate**: every native binary attempts object mode and fail-closes at
-boot on a TLS/signature rejection (the R16 guard). "Supported" here means a platform with a RECORDED
+boot on a TLS/signature rejection. "Supported" here means a platform with a RECORDED
 green credentialed `plainbase s3-smoke` from the native binary, cert validation on. Current record:
 
 | Platform | Status |

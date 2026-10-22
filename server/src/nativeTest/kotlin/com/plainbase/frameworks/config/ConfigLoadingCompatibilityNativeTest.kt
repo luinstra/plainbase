@@ -9,6 +9,7 @@ import java.nio.file.InvalidPathException
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.PosixFilePermission
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -192,41 +193,169 @@ class ConfigLoadingCompatibilityNativeTest {
     }
 
     @Test
-    fun `operator and managed entries retain regular-file follow behavior across NIO entry kinds`() {
+    fun `operator directory refuses through both configuration entry points`() {
+        val base = Files.createTempDirectory("pb-config-compat-directory")
+        try {
+            val operator = Files.createDirectory(base.resolve("plainbase.conf"))
+            val env = mapOf("DATA_DIR" to base.toString())
+            val fullFailure = assertFailsWith<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
+            assertTrue(requireNotNull(fullFailure.message).contains(operator.toString()))
+            val profileFailure = assertFailsWith<IllegalArgumentException> { ConfigLoader.profileFrom(env) }
+            assertTrue(requireNotNull(profileFailure.message).contains(operator.toString()))
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `operator regular symlink follows the host and profile outside the data directory`() {
+        val base = Files.createTempDirectory("pb-config-compat-symlink")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val target = base.resolve("operator-target.conf")
+            Files.writeString(target, "host = \"127.0.0.2\"\nprofile = reader")
+            val operator = data.resolve("plainbase.conf")
+            createSymbolicLinkOrSkip(operator, target)
+            assertTrue(Files.isRegularFile(operator))
+            assertTrue(Files.readAttributes(operator, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isSymbolicLink)
+            val env = mapOf("DATA_DIR" to data.toString())
+            assertEquals("127.0.0.2", ConfigLoader.fromEnvAndFile(env).host)
+            assertEquals(DeploymentProfile.READER, ConfigLoader.profileFrom(env))
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `operator dangling symlink refuses through both configuration entry points`() {
+        val base = Files.createTempDirectory("pb-config-compat-dangling")
+        try {
+            val operator = base.resolve("plainbase.conf")
+            createSymbolicLinkOrSkip(operator, Path.of("missing.conf"))
+            val env = mapOf("DATA_DIR" to base.toString())
+            val fullFailure = assertFailsWith<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
+            assertTrue(requireNotNull(fullFailure.message).contains(operator.toString()))
+            val profileFailure = assertFailsWith<IllegalArgumentException> { ConfigLoader.profileFrom(env) }
+            assertTrue(requireNotNull(profileFailure.message).contains(operator.toString()))
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `unreadable operator file refuses through both configuration entry points`() {
+        val base = Files.createTempDirectory("pb-config-compat-unreadable")
+        val operator = base.resolve("plainbase.conf")
+        try {
+            Files.writeString(operator, "profile = reader")
+            Files.setPosixFilePermissions(operator, emptySet())
+            assumeTrue(!Files.isReadable(operator), "mode-000 operator file must be unreadable to this process")
+            val env = mapOf("DATA_DIR" to base.toString())
+            assertFailsWith<ConfigException> { ConfigLoader.fromEnvAndFile(env) }
+            assertFailsWith<ConfigException> { ConfigLoader.profileFrom(env) }
+        } finally {
+            if (Files.exists(operator)) Files.setPosixFilePermissions(operator, setOf(PosixFilePermission.OWNER_READ))
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `inaccessible operator parent reports unknown file type and permissions through both entry points`() {
+        val base = Files.createTempDirectory("pb-config-compat-inaccessible")
+        val data = Files.createDirectory(base.resolve("data"))
+        val permissions = Files.getPosixFilePermissions(data)
+        try {
+            val operator = Files.writeString(data.resolve("plainbase.conf"), "profile = reader")
+            Files.setPosixFilePermissions(data, emptySet())
+            assumeTrue(!Files.isExecutable(data), "mode-000 data directory must deny traversal to this process")
+            assertTrue(!Files.notExists(operator, LinkOption.NOFOLLOW_LINKS))
+            val env = mapOf("DATA_DIR" to data.toString())
+            val fullFailure = assertFailsWith<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) }
+            val profileFailure = assertFailsWith<IllegalArgumentException> { ConfigLoader.profileFrom(env) }
+            listOf(fullFailure, profileFailure).forEach { failure ->
+                val message = requireNotNull(failure.message)
+                assertTrue(message.contains(operator.toString()))
+                assertTrue(message.contains("regular file"))
+                assertTrue(message.contains("cannot be determined"))
+                assertTrue(message.contains("permissions"))
+            }
+        } finally {
+            Files.setPosixFilePermissions(data, permissions)
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `absent operator file loads workspace defaults through both configuration entry points`() {
+        val base = Files.createTempDirectory("pb-config-compat-absent")
+        try {
+            val env = mapOf("DATA_DIR" to base.toString())
+            val loaded = ConfigLoader.fromEnvAndFile(env)
+            assertEquals(PlainbaseConfig.DEFAULT_HOST, loaded.host)
+            assertEquals(DeploymentProfile.WORKSPACE, loaded.profile)
+            assertEquals(DeploymentProfile.WORKSPACE, ConfigLoader.profileFrom(env))
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `environment selects reader with an absent operator file through both entry points`() {
+        withProfileInputs(null, " ReAdEr ", DeploymentProfile.READER)
+    }
+
+    @Test
+    fun `environment selects reader with an absent profile key through both entry points`() {
+        withProfileInputs("host = localhost", "reader", DeploymentProfile.READER)
+    }
+
+    @Test
+    fun `environment selects reader over a workspace file through both entry points`() {
+        withProfileInputs("profile = workspace", "reader", DeploymentProfile.READER)
+    }
+
+    @Test
+    fun `blank environment profile leaves the file in control through both entry points`() {
+        withProfileInputs(null, " \t ", DeploymentProfile.WORKSPACE)
+        withProfileInputs("profile = reader", "", DeploymentProfile.READER)
+    }
+
+    @Test
+    fun `nonblank environment profile accepts only reader through both entry points`() {
+        val base = Files.createTempDirectory("pb-config-profile-invalid")
+        try {
+            Files.writeString(base.resolve("plainbase.conf"), "profile = reader")
+            val env = mapOf("DATA_DIR" to base.toString(), "PLAINBASE_PROFILE" to "workspace")
+            val failures = listOf(
+                assertFailsWith<IllegalArgumentException> { ConfigLoader.fromEnvAndFile(env) },
+                assertFailsWith<IllegalArgumentException> { ConfigLoader.profileFrom(env) },
+            )
+            failures.forEach { failure ->
+                assertTrue(requireNotNull(failure.message).contains("PLAINBASE_PROFILE"))
+                assertTrue(requireNotNull(failure.message).contains("only accepted value is `reader`"))
+            }
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    private fun withProfileInputs(conf: String?, value: String, expected: DeploymentProfile) {
+        val base = Files.createTempDirectory("pb-config-profile")
+        try {
+            if (conf != null) Files.writeString(base.resolve("plainbase.conf"), conf)
+            val env = mapOf("DATA_DIR" to base.toString(), "PLAINBASE_PROFILE" to value)
+            assertEquals(expected, ConfigLoader.fromEnvAndFile(env).profile)
+            assertEquals(expected, ConfigLoader.profileFrom(env))
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `managed entries retain regular-file follow behavior across NIO entry kinds`() {
         val base = Files.createTempDirectory("pb-config-compat-entries")
         try {
             val content = base.resolve("content")
-            val operatorCases = listOf("directory", "regular symlink", "dangling symlink")
-            operatorCases.forEach { kind ->
-                val data = Files.createDirectory(base.resolve("operator-${kind.replace(' ', '-')}"))
-                val operator = data.resolve("plainbase.conf")
-                when (kind) {
-                    "directory" -> Files.createDirectory(operator)
-                    "regular symlink" -> {
-                        val target = data.resolve("operator-target.conf")
-                        Files.writeString(target, "host = \"127.0.0.2\"")
-                        createSymbolicLinkOrSkip(operator, target.fileName)
-                        assertTrue(Files.isRegularFile(operator))
-                        assertTrue(
-                            Files.readAttributes(operator, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isSymbolicLink,
-                        )
-                    }
-                    else -> {
-                        val target = data.resolve("operator-missing.conf")
-                        createSymbolicLinkOrSkip(operator, target.fileName)
-                        assertTrue(!Files.isRegularFile(operator))
-                    }
-                }
-                val loaded = ConfigLoader.fromEnvAndFile(
-                    mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to content.toString()),
-                )
-                if (kind == "regular symlink") {
-                    assertEquals("127.0.0.2", loaded.host)
-                } else {
-                    assertEquals(PlainbaseConfig.DEFAULT_HOST, loaded.host)
-                }
-            }
-
             val managedCases = listOf("directory", "regular symlink", "dangling symlink")
             managedCases.forEach { kind ->
                 val data = Files.createDirectory(base.resolve("managed-${kind.replace(' ', '-')}"))

@@ -3,7 +3,9 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.principal.encodeTokenSecret
 import com.plainbase.domain.root.ServerTopLevel
+import com.plainbase.frameworks.ktor.ReaderSurface
 import com.plainbase.frameworks.ktor.RouteContext
+import com.plainbase.frameworks.ktor.dto.ReaderSessionResponse
 import com.plainbase.frameworks.ktor.dto.SessionResponse
 import io.ktor.http.CookieEncoding
 import io.ktor.server.routing.Route
@@ -59,6 +61,16 @@ fun Route.sessionRoutes(ctx: RouteContext) {
                     "off"
                 },
             ),
+        )
+    }
+}
+
+/** Public reader state, independent of principal extraction and session cookies. */
+fun Route.readerSessionRoute(reader: ReaderSurface) {
+    get("/${ServerTopLevel.API}/v1/session") {
+        call.respondRest(
+            ReaderSessionResponse.serializer(),
+            ReaderSessionResponse(authenticated = false, authMode = "reader", release = reader.release),
         )
     }
 }

@@ -105,6 +105,7 @@ internal fun buildGuardedApplication(
         proxyIdentityHeader = securityInputs.proxyIdentityHeader,
         secureCookie = transportInputs.secureCookie,
         proxyCsrf = securityInputs.proxyCsrf,
+        reader = securityInputs.reader,
         extract = securityInputs.extract,
     )
 }
@@ -146,6 +147,7 @@ private class SecurityInputs(security: SecurityAssembly) {
     val proxySecret: String? = security.proxySecret
     val proxyIdentityHeader: String = security.proxyIdentityHeader
     val proxyCsrf: ProxyCsrf = security.proxyCsrf
+    val reader: ReaderSurface? = security.reader
     val extract: ApplicationCall.() -> PrincipalExtraction = security.extract
 }
 

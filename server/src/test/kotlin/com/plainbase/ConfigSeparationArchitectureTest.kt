@@ -309,7 +309,8 @@ class ConfigSeparationArchitectureTest : FunSpec({
                 mainRoot.relativize(file).toString().replace('\\', '/')
             }.toList()
         }
-        decoderCalls shouldBe listOf("frameworks/config/ConfigLoader.kt", "frameworks/config/ConfigLoader.kt")
+        // Only the loader calls the decoder: env-only, layered, and profile-only loading.
+        decoderCalls shouldBe List(3) { "frameworks/config/ConfigLoader.kt" }
         val hoconOwners = productionFiles.filter { file ->
             referencesToken(stripComments(file.readText()), "com.typesafe.config")
         }
