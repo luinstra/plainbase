@@ -20,6 +20,7 @@ import type {
   PageHtmlResponse,
   PageResponse,
   PreviewResponse,
+  ReaderSessionResponse,
   RebasedResponse,
   RejectChangeRequest,
   RoleListResponse,
@@ -299,6 +300,12 @@ const sessionResponse: SessionResponse = {
   auth_mode: "builtin",
 };
 
+const readerSessionResponse: ReaderSessionResponse = {
+  authenticated: false,
+  auth_mode: "reader",
+  release: "r1",
+};
+
 const tokenListResponse: TokenListResponse = {
   tokens: [
     {
@@ -424,6 +431,7 @@ const twins: Record<string, unknown> = {
   historyResponse,
   diffResponse,
   sessionResponse,
+  readerSessionResponse,
   tokenListResponse,
   createdTokenResponse,
   auditListResponse,
@@ -438,9 +446,9 @@ const twins: Record<string, unknown> = {
 };
 
 describe("wire golden (types.ts twins)", () => {
-  it("covers exactly the fixture's entries — 31, none silently skipped", () => {
+  it("covers exactly the fixture's entries — 32, none silently skipped", () => {
     expect(Object.keys(twins).sort()).toEqual(Object.keys(fixture).sort());
-    expect(Object.keys(twins)).toHaveLength(31);
+    expect(Object.keys(twins)).toHaveLength(32);
   });
 
   it.each(Object.keys(twins))("%s matches the shared wire golden", (key) => {

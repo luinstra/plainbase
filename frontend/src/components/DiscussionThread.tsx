@@ -5,6 +5,7 @@ import { ApiError } from "../api/client";
 import { addDiscussionComment, discussionDetailQuery, editDiscussionComment, purgeDiscussionComment, reattachDiscussion,
   refreshDiscussionViews, reopenDiscussion, resolveDiscussion, retractDiscussionComment } from "../api/discussions";
 import { sessionQuery, treeQuery } from "../api/queries";
+import { isOffSession, signInRequired, useSessionMode } from "../api/sessionMode";
 import type { DiscussionDetail, DiscussionComment, DiscussionDetailResponse, DiscussionQuoteRequestAnchor } from "../api/types";
 import { useDiscussionRefresh } from "../lib/useDiscussionRefresh";
 import { rootDiscussionsDisabled } from "../lib/tree";
@@ -67,7 +68,8 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
   const recoveryRef = useRef<HTMLButtonElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const client = useQueryClient();
-  const session = useQuery(sessionQuery);
+  const session = useQuery({ ...sessionQuery, retryOnMount: false });
+  const off = isOffSession(useSessionMode());
   useEffect(() => { if (inPanel) focusDiscussionElement(heading.current); }, [inPanel, id]);
   useEffect(() => {
     alive.current = true;
@@ -116,10 +118,10 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
   const disabled = query.isPending || query.isError || query.isRefetchError ? "Refresh this discussion before replying." :
     first?.discussions_available === false ? "Replies are unavailable here." :
     !detail || detail.status !== "open" || detail.state === "incomplete" || detail.state === "unreadable" ? "This discussion cannot accept replies." :
-    session.data?.auth_mode !== "off" && session.data?.authenticated === false ? "Sign in before replying. Your draft will stay here." : null;
+    signInRequired(session.data) ? "Sign in before replying. Your draft will stay here." : null;
   const accessDisabled = query.isPending || query.isError || query.isRefetchError ? "Refresh this discussion before taking an action." :
     !first?.discussions_available ? "Actions are unavailable here. Your action is still here." :
-    session.data?.auth_mode !== "off" && session.data?.authenticated === false ? "Sign in before taking an action. Your text and selection will stay here." : null;
+    signInRequired(session.data) ? "Sign in before taking an action. Your text and selection will stay here." : null;
   const actionDisabled = accessDisabled || (!detail?.status || !detail.starter || !detail.anchor || detail.state === "incomplete" || detail.state === "unreadable"
     ? "This discussion cannot currently accept this action. Refresh to check." : null);
   const currentComment = action && "comment" in action ? comments.find((comment) => comment.id === action.comment.id) : null;
@@ -330,7 +332,7 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
             </>}
             <button type="button" className="pb-discussion-action pb-discussion-quiet pb-discussion-danger" disabled={competing || !!accessDisabled || !!localDisabled}
               onClick={(event) => begin({ kind: "purge", comment }, event.currentTarget)}>
-              {session.data?.auth_mode === "off" ? "Purge comment" : "Purge comment (admin)"}</button>
+              {off ? "Purge comment" : "Purge comment (admin)"}</button>
           </DiscussionActions>}
           </div>
           {suppressed[comment.id] ?
@@ -402,7 +404,7 @@ export function DiscussionThread({ root, id, inPanel = false, source, creationPe
           <p className="pb-discussion-hint">Reattached by {detail.reattachment.by.label} at <time dateTime={detail.reattachment.at} title={detail.reattachment.at}>{formatTime(detail.reattachment.at)}</time></p>
           <DiscussionAnchor label="Latest reattachment" anchor={detail.reattachment.anchor} inPanel={inPanel} />
         </section>}
-        <details><summary>Who can take action?</summary><p>{session.data?.auth_mode === "off" ? "Local access allows discussion actions without signing in." :
+        <details><summary>Who can take action?</summary><p>{off ? "Local access allows discussion actions without signing in." :
           "Only the comment author can edit or retract. The starter or an editor, including an admin, can change status or reattach."}</p></details>
       </div>
     </details>}

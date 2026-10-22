@@ -72,8 +72,13 @@ subtree out of path space, per ADR-0002's folder-folder rule). The synthetic roo
 matrix already serves the shell at every `/docs/*` path. The tree golden was regenerated with
 exactly this additive diff (recorded in `ForeverApiGoldenSuite`'s policy block).
 
-**SPA:** when `by-path` 404s, the current pathname is matched VERBATIM against the loaded tree's
-folder `url`s. On a match:
+**SPA:** when `by-path` 404s, the current router pathname is matched against the loaded tree's
+folder `url`s after applying the router's decoding to those URLs only. Matching preserves path
+identity: Unicode is decoded, while encoded percent signs, backslashes and reserved separators
+retain the router's spelling. The pathname is never decoded again. Both sides are compared after
+NFC normalization per segment and with one trailing slash dropped, the same equivalence the server
+applies to a content path. Server-issued folder segments are slugs of letters, marks, digits,
+hyphens and underscores, so a reserved separator never appears in a folder URL. On a match:
 
 - **README-preference:** a direct child page whose filename stem is `index` or `readme`
   (case-insensitive, from the node's `path` — never re-slugified) renders AT the folder URL,

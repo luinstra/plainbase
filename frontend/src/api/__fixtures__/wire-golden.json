@@ -279,6 +279,11 @@
     "csrf_token": null,
     "auth_mode": "builtin"
   },
+  "readerSessionResponse": {
+    "authenticated": false,
+    "auth_mode": "reader",
+    "release": "r1"
+  },
   "tokenListResponse": {
     "tokens": [
       {

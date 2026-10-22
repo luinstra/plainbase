@@ -106,8 +106,23 @@ The initial HTML for a page includes its rendered article and a
 `/api/v1/pages/{id}/html`. The initial document title combines the page title and the site name; the site-name
 suffix defaults to `Plainbase` when `site.name` is unset. A non-blank frontmatter `description` scalar
 becomes the description meta tag. Title, description and other head values are HTML-escaped.
-After the app loads, the SPA currently sets titles with a `Plainbase` suffix. Aligning those titles
-with `site.name` remains follow-up SPA work.
+After the app loads, the tab title uses `Plainbase` as its suffix. `site.name` names the site in the
+initial document, which crawlers, link previews and agents without JavaScript read.
+
+In the reader, the browser app shows no editing, creation, review, administration or discussion
+controls. Review, administration, discussion and new-page addresses show the not-found page. A page
+address with an editing or history mode shows the page itself.
+In every authentication mode, workspace-only addresses and editing/history modes show a loading
+state, and workspace-only controls remain absent, until session data is known or the session endpoint
+returns 404. Without session data, only that 404 identifies an OFF workspace. A cold failure with any
+other status or a connection error keeps workspace UI blocked and the served page address unchanged.
+Workspace-only addresses and modes show an error with a session retry button after such a failure.
+They show a loading state while the session retry or refetch is in progress.
+A later successful response establishes the mode. A later failed refresh keeps the last established
+mode, including OFF, preserving mounted workspace state and unsaved edits both during the refresh
+and after its failure. When a discussion view mounts, stale cached session data can refresh even
+after a failed refresh. Mounting a discussion does not retry a session error with no cached data.
+Reload the page after changing the server's authentication mode.
 
 Set the optional site values in `DATA_DIR/plainbase.conf`:
 
@@ -126,6 +141,9 @@ a path. See the [configuration reference](../configuration.md#reference-table) f
 
 For HTML navigation:
 
+- An accepted spelling variant of a folder URL, such as a trailing slash or decomposed Unicode,
+  remains in the address after takeover. For a page URL, the app replaces the variant once with
+  the page's canonical URL.
 - A page or a folder with a landing page returns 200 with the initial document. Landing selection
   compares the Markdown filename stems `index` and `readme` without case, preferring `index`.
 - A landing child's URL redirects with 301 to its folder URL when that URL belongs to the landing
@@ -139,9 +157,13 @@ For HTML navigation:
 - A missing page returns the shell with 404. An unavailable root or an alias whose target cannot yet
   be verified returns the shell with 503.
 
-Internal article links to landing pages still use the page's canonical URL, such as
-`/docs/guides/index`. The reader redirects that URL to its folder with 301, so crawlers following
-these links pay one redirect. This is accepted for now.
+Internal article links to landing pages keep the page's canonical URL, such as `/docs/guides/index`.
+When the landing page owns its folder URL, the reader redirects that child URL to its folder with
+301, so crawlers following these links pay one redirect. This is accepted for now. Following such a
+link inside the browser app moves the address to the folder URL only when the server would redirect
+there. Otherwise, the app keeps the landing child URL when the page has one, including when a sibling
+page or an alias owns the folder URL. A landing without a canonical page URL uses its rooted permalink
+when no owned folder URL is available.
 
 With `Accept: text/markdown`, page, alias, landing-child and folder URLs return the page's Markdown
 source directly, without redirects. A folder without a landing page returns 404; unavailable content

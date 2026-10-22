@@ -2,6 +2,61 @@ import type { RootTree, TreeDiagram, TreeFolder, TreeNode, TreePage } from "../a
 import { parseDiagramPath } from "./diagramPath";
 import { parsePermalink, permalinkOf, permalinkSplat } from "./permalink";
 
+/** Transform a server URL like TanStack's decodePath, preserving percent and backslash escapes. */
+export function routerPathname(url: string): string {
+  // Reserved-escape hex case stays unchanged, so %3f and %3F remain distinct, exactly as in TanStack.
+  if (!/[%\\\x00-\x1f\x7f]/.test(url)) return url;
+  return url.split(/(%25|%5c)/gi).map((part) => {
+    if (/^%(25|5c)$/i.test(part)) return part;
+    let decoded: string;
+    try { decoded = decodeURI(part); } catch {
+      decoded = part.replace(/%[0-9a-f]{2}/gi, (escape) => {
+        try { return decodeURI(escape); } catch { return escape; }
+      });
+    }
+    return decoded.replace(/[\x00-\x1f\x7f"<>`{}]/g, (character) =>
+      `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
+  }).join("");
+}
+
+/**
+ * Server path identity is NFC per segment after strict decoding. Normalize the already-decoded
+ * router operand and the router-transformed server URL; never decode router escapes again.
+ * contentPathname handles the accepted final slash separately. Percent/backslash markers stay intact.
+ */
+export function samePathname(pathname: string, url: string): boolean {
+  return nfcPathname(pathname) === nfcPathname(routerPathname(url));
+}
+
+function nfcPathname(pathname: string): string {
+  return pathname.split("/").map((segment) => segment.normalize("NFC")).join("/");
+}
+
+/** Canonical addresses retain their exact router spelling, even when NFC-equivalent content matches. */
+export function isCanonicalPathname(pathname: string, url: string): boolean {
+  return pathname === routerPathname(url);
+}
+
+/**
+ * Content equivalence combines one final slash below a root with NFC per decoded segment.
+ * Remove only the slash here, in every mode as on the server; samePathname owns NFC comparison.
+ * Query keys keep the router spelling. Canonicalization of an accepted page slash is reader-only.
+ * Bare roots use their explicit home rule; callers keep non-content locations unchanged.
+ */
+export function contentPathname(pathname: string): string {
+  return /^\/[^/]+(?:\/[^/]+)+\/$/.test(pathname) ? pathname.slice(0, -1) : pathname;
+}
+
+/** A server-issued ASCII root URL or a location inside its slash boundary. */
+export function isRootContentPathname(pathname: string, rootUrl: string | null): boolean {
+  return rootUrl !== null && (pathname === rootUrl || pathname.startsWith(`${rootUrl}/`));
+}
+
+/** The explicit bare-root rule shared by routing, creation and home-row activation. */
+export function isRootHomePathname(pathname: string, rootUrl: string | null): boolean {
+  return rootUrl !== null && (pathname === rootUrl || pathname === `${rootUrl}/`);
+}
+
 /**
  * A cross-root lookup's answer: the matched folder WITH its entry's root and whether that root is
  * SERVING. The root is carried, never re-derived from a url (two roots can hold the same
@@ -33,21 +88,21 @@ export function pageHref(root: string, page: TreePage): string {
  */
 export function ancestorFolderPaths(tree: TreeFolder, root: string, pathname: string): string[] {
   const ancestors: string[] = [];
-  const normalizedPath = pathname.replace(/\/+$/, "");
+  const normalizedPath = isRootContentPathname(pathname, tree.url) ? contentPathname(pathname) : pathname;
   const parsedDiagram = parseDiagramPath(pathname);
   const activeDiagramPath = parsedDiagram?.root === root ? parsedDiagram.path : null;
 
   function containsActivePath(folder: TreeFolder): boolean {
     for (const child of folder.children) {
       if (child.type === "page") {
-        if (pageHref(root, child) === pathname) return true;
+        if (samePathname(normalizedPath, pageHref(root, child))) return true;
         continue;
       }
       if (child.type === "diagram") {
         if (child.path === activeDiagramPath) return true;
         continue;
       }
-      if (child.url?.replace(/\/+$/, "") === normalizedPath) {
+      if (child.url != null && samePathname(normalizedPath, child.url)) {
         ancestors.unshift(child.path);
         return true;
       }
@@ -195,15 +250,16 @@ export function foldersByPath(root: TreeFolder): Map<string, TreeFolder> {
 /**
  * The entry whose folder owns a root-content location, if any - the folder-landing resolution
  * (ADR-0003). Each entry's synthetic root folder is included (its `url` is the bare
- * root URL). Matched verbatim against the server-issued `url`: the server is the single URL
- * authority, so nothing is slugified or re-encoded client-side.
+ * root URL). Compare the router pathname with the router-transformed server-issued `url`: the server is the single URL
+ * authority, so nothing is slugified client-side.
  * There is no fallback that re-reads a rootless tail under the primary. An unknown first segment gets a 404 from
  * the server, so resolving it here would disagree with the address and silently move a folder URL to a new root.
  */
 export function folderByUrl(roots: RootTree[], pathname: string): FolderEntry | null {
+  const target = contentPathname(pathname);
   for (const entry of roots) {
     for (const node of walk([entry.tree])) {
-      if (node.type === "folder" && node.url !== null && node.url === pathname) {
+      if (node.type === "folder" && node.url !== null && samePathname(target, node.url)) {
         return { root: entry.root, available: entry.available, folder: node };
       }
     }
@@ -226,8 +282,7 @@ export function folderByUrl(roots: RootTree[], pathname: string): FolderEntry | 
  */
 export function rootEntryOfUrl(roots: RootTree[], pathname: string): RootTree | null {
   for (const entry of roots) {
-    const url = entry.tree.url;
-    if (url !== null && (pathname === url || pathname.startsWith(`${url}/`))) return entry;
+    if (isRootContentPathname(pathname, entry.tree.url)) return entry;
   }
   return null;
 }
@@ -301,10 +356,10 @@ export function folderTitle(folder: TreeFolder): string {
 }
 
 /**
- * A folder's children with its landing page (index/README) removed — server tree order otherwise
- * intact. A folder's landing IS the folder URL, so it's never repeated as a child row: a subfolder
- * surfaces it through its own label link, and the root through the home link rendered above the
- * tree. One path per page (the folder URL), never a second bare-page entry.
+ * A folder's children with its landing page (index/README) removed, retaining server tree order.
+ * Sidebar uses this list for folders with a URL, without adding a separate landing row.
+ * A reader's folder URL can belong to another page or alias, so the label can open that owner
+ * while the landing remains absent from these sidebar child rows.
  */
 export function nonLandingChildren(folder: TreeFolder): TreeNode[] {
   const landing = landingChild(folder.children);
@@ -313,9 +368,9 @@ export function nonLandingChildren(folder: TreeFolder): TreeNode[] {
 
 /**
  * The entry whose folder's landing page (index/README) is the page `pageId` WITHIN [root], if any. A
- * landing page has one canonical home - the folder URL - so its own bare-page URL is redirected there;
- * this is the lookup that recognizes such a URL. Each entry's root folder is included (its landing
- * answers its server-issued root URL).
+ * workspace landing normally redirects its own page URL to the folder. A reader uses the folder
+ * only when the landing owns that address, otherwise retaining its page URL or permalink.
+ * Each entry's root folder is included; its landing answers the server-issued root URL.
  *
  * [root] is REQUIRED and is the caller's ALREADY-RESOLVED root (`PageResponse.root`), not a guess: a
  * page id can be held by more than one root (per-root identity), and two roots holding

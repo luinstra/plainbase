@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useRouter } from "@tanstack/react-router";
 import { useState, type MouseEvent } from "react";
 import { sessionQuery, treeQuery } from "../api/queries";
+import { isWorkspaceSession, SessionModeProvider, useSessionMode } from "../api/sessionMode";
 import type { RootTree } from "../api/types";
 import { interceptableHref } from "../lib/links";
 import { entryFor, primaryEntry, rootAcceptsWrites, rootLabel } from "../lib/tree";
@@ -62,7 +63,8 @@ function newPageBlockedReason(target: RootTree | null): string | undefined {
  * (lib/links.ts decides).
  */
 export function Shell() {
-  return <NewPageProvider><ShellContent /></NewPageProvider>;
+  const session = useQuery(sessionQuery);
+  return <SessionModeProvider session={session}><NewPageProvider><ShellContent /></NewPageProvider></SessionModeProvider>;
 }
 
 function ShellContent() {
@@ -73,14 +75,15 @@ function ShellContent() {
   // never approve, so the "Review" nav is gated on it. The queue itself renders for any authenticated reader;
   // an approve/reject/rebase 403 becomes the no-access state in the detail (NOT a hard client capability gate —
   // that would need a server DTO change, out of scope for this frontend-only chunk).
-  const session = useQuery(sessionQuery);
+  const session = useSessionMode();
+  const workspace = isWorkspaceSession(session);
 
   // Creation context follows the resolved page identity; its host waits for alias redirects.
   // Root write flags govern the affordance, while the server still authorizes every request.
   const tree = useQuery(treeQuery);
   const roots = tree.data?.roots;
   const target = roots ? (creation.root ? entryFor(roots, creation.root) : primaryEntry(roots)) : null;
-  const canCreate = target ? rootAcceptsWrites(roots, target.root) && creation.ready : false;
+  const canCreate = workspace && target ? rootAcceptsWrites(roots, target.root) && creation.ready : false;
 
   const onClick = (event: MouseEvent) => {
     const href = interceptableHref(event.nativeEvent, roots);
@@ -123,7 +126,7 @@ function ShellContent() {
             >
               <NewPageLabel />
             </NewPageLink>
-          ) : (
+          ) : !workspace ? null : (
             <button
               type="button"
               disabled

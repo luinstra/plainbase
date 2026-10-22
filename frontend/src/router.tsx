@@ -9,20 +9,22 @@ import {
   useRouterState,
   type RouterHistory,
 } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import { Admin } from "./components/Admin";
 import { EditorPage } from "./components/EditorPage";
-import { ErrorView } from "./components/ErrorView";
+import { ErrorView, QueryErrorView } from "./components/ErrorView";
 import { History } from "./components/History";
 import { NotFoundView } from "./components/NotFound";
-import { DocsPage, FolderLanding, PermalinkPage } from "./components/PageView";
+import { DocsPage, FolderLanding, PagePending, PermalinkPage } from "./components/PageView";
 import { DiagramView } from "./components/DiagramView";
 import { ReviewDetail } from "./components/ReviewDetail";
 import { ReviewQueue } from "./components/ReviewQueue";
 import { Shell } from "./components/Shell";
 import { DiscussionsIndex } from "./components/DiscussionsIndex";
 import { DiscussionThread } from "./components/DiscussionThread";
-import { treeQuery } from "./api/queries";
-import { entryFor, primaryEntry } from "./lib/tree";
+import { sessionQuery, treeQuery } from "./api/queries";
+import { isReader, isSessionKnown, isWorkspaceSession, useSessionMode } from "./api/sessionMode";
+import { entryFor, isRootHomePathname, primaryEntry } from "./lib/tree";
 
 /**
  * Route table (chunk 7 + the chunk-6 amendment):
@@ -46,6 +48,22 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: Shell,
   notFoundComponent: NotFoundView,
 });
+
+function WorkspaceOnly({ children }: { children: ReactNode }) {
+  const session = useSessionMode();
+  if (!isSessionKnown(session)) return <SessionWait />;
+  return isReader(session.data) ? <NotFoundView /> : children;
+}
+
+function SessionWait() {
+  const session = useSessionMode();
+  const retry = useQuery({ ...sessionQuery, enabled: false });
+  if (!session.isFetched || retry.fetchStatus !== "idle") return <PagePending />;
+  return <QueryErrorView error={session.error ?? new Error("Could not determine the session.")}>
+    <button type="button" className="mt-6 text-link hover:text-link-hover"
+      onClick={() => { void retry.refetch(); }}>Retry session</button>
+  </QueryErrorView>;
+}
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -107,14 +125,15 @@ function DocsSplat() {
   const { mode, property } = splatRoute.useSearch();
   const encodedSlash = useHasEncodedSlash();
   const tree = useQuery(treeQuery);
+  const session = useSessionMode();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   if (encodedSlash) return <NotFoundView />;
   const path = _splat ?? "";
-  const normalizedPathname = pathname.endsWith("/") && pathname !== "/" ? pathname.slice(0, -1) : pathname;
-  const landing = tree.data?.roots.find((entry) => entry.tree.url === normalizedPathname);
+  const landing = tree.data?.roots.find((entry) => isRootHomePathname(pathname, entry.tree.url));
   if (landing?.tree.url) return <FolderLanding url={landing.tree.url} />;
-  if (mode === "edit" && path) return <EditorPage path={path} property={property} />;
-  if (mode === "history" && path) return <History path={path} />;
+  if (mode && !isSessionKnown(session)) return <SessionWait />;
+  if (mode === "edit" && path && isWorkspaceSession(session)) return <EditorPage path={path} property={property} />;
+  if (mode === "history" && path && isWorkspaceSession(session)) return <History path={path} />;
   return <DocsPage path={path} />;
 }
 
@@ -131,7 +150,7 @@ interface NewSearch {
 const newRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/new",
-  component: NewSplat,
+  component: () => <WorkspaceOnly><NewSplat /></WorkspaceOnly>,
   beforeLoad: ({ location }) => rejectTrailingSlash(location.pathname),
   // A non-string `root` coerces to undefined. An unknown name is not decided here: the server owns the registry
   // and answers 400 `invalid_root`, so the client never guesses.
@@ -151,35 +170,35 @@ function NewSplat() {
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
-  component: Admin,
+  component: () => <WorkspaceOnly><Admin /></WorkspaceOnly>,
   beforeLoad: ({ location }) => rejectTrailingSlash(location.pathname),
 });
 
 const reviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/review",
-  component: ReviewQueue,
+  component: () => <WorkspaceOnly><ReviewQueue /></WorkspaceOnly>,
   beforeLoad: ({ location }) => rejectTrailingSlash(location.pathname),
 });
 
 const reviewDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/review/$id",
-  component: ReviewDetailSplat,
+  component: () => <WorkspaceOnly><ReviewDetailSplat /></WorkspaceOnly>,
   beforeLoad: ({ location }) => rejectTrailingSlash(location.pathname),
 });
 
 const discussionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/discussions",
-  component: () => <DiscussionsIndex />,
+  component: () => <WorkspaceOnly><DiscussionsIndex /></WorkspaceOnly>,
   beforeLoad: ({ location }) => rejectDiscussionAddress(location.pathname),
 });
 
 const discussionsRootRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/discussions/$root",
-  component: DiscussionsRootSplat,
+  component: () => <WorkspaceOnly><DiscussionsRootSplat /></WorkspaceOnly>,
   beforeLoad: ({ location }) => rejectDiscussionAddress(location.pathname),
 });
 
@@ -191,7 +210,7 @@ function DiscussionsRootSplat() {
 const discussionDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/discussions/$root/$id",
-  component: DiscussionDetailSplat,
+  component: () => <WorkspaceOnly><DiscussionDetailSplat /></WorkspaceOnly>,
   beforeLoad: ({ location }) => rejectDiscussionAddress(location.pathname),
 });
 

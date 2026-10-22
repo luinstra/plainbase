@@ -7,14 +7,18 @@ import { readSidebarPreferences, writeSidebarPreferences } from "../lib/sidebarP
 import { parseDiagramPath } from "../lib/diagramPath";
 import {
   ancestorFolderPaths,
+  contentPathname,
   entryFor,
   folderTitle,
+  isRootContentPathname,
+  isRootHomePathname,
   landingPage,
   nonLandingChildren,
   pageHref,
   primaryEntry,
   rootLabel,
   rootOfLocation,
+  samePathname,
 } from "../lib/tree";
 import { ROOT_UNAVAILABLE } from "./ErrorView";
 import { RootSelector } from "./RootSelector";
@@ -163,7 +167,7 @@ function RootUnavailableNotice({ entry }: { entry: RootTree }) {
 export function SidebarNav({
   tree,
   root,
-  currentPathname,
+  currentPathname: rawPathname,
   initialOpenFolders = [],
   onOpenFoldersChange,
 }: {
@@ -173,10 +177,11 @@ export function SidebarNav({
   initialOpenFolders?: readonly string[];
   onOpenFoldersChange?: (paths: string[]) => void;
 }) {
+  const currentPathname = isRootContentPathname(rawPathname, tree.url) ? contentPathname(rawPathname) : rawPathname;
   const [openFolders, setOpenFolders] = useState(
     () => new Set([...initialOpenFolders, ...ancestorFolderPaths(tree, root, currentPathname)]),
   );
-  const routeIdentity = JSON.stringify([root, currentPathname.replace(/\/+$/, "")]);
+  const routeIdentity = JSON.stringify([root, currentPathname]);
   const applied = useRef({ identity: routeIdentity, paths: new Set(ancestorFolderPaths(tree, root, currentPathname)) });
   useEffect(() => {
     if (applied.current.identity !== routeIdentity) applied.current = { identity: routeIdentity, paths: new Set() };
@@ -212,7 +217,8 @@ export function SidebarNav({
   return (
     <nav aria-label="Documentation tree" className="px-4 py-5 text-sm">
       <ul className="space-y-0.5">
-        {home && tree.url && <PageRow href={tree.url} status={home.status} label={home.title} currentPathname={currentPathname} />}
+        {home && tree.url && <PageRow href={tree.url} status={home.status} label={home.title}
+          currentPathname={isRootHomePathname(rawPathname, tree.url) ? tree.url : currentPathname} />}
         <NodeRows
           nodes={nonLandingChildren(tree)}
           root={root}
@@ -344,7 +350,7 @@ function FolderItem({
   onToggleFolder: (path: string) => void;
 }) {
   const label = folderTitle(folder);
-  const active = folder.url !== null && folder.url === currentPathname;
+  const active = folder.url !== null && samePathname(currentPathname, folder.url);
   // The rows actually rendered under this folder, computed ONCE: a `url`-folder surfaces its landing
   // (index/README) THROUGH the label link above, so it's dropped from the child rows (one canonical path
   // — matches the root). A loser folder has no url and an inert label, so its landing can only be reached
@@ -423,7 +429,7 @@ function PageRow({
   label: string;
   currentPathname: string;
 }) {
-  const active = href === currentPathname;
+  const active = samePathname(currentPathname, href);
   return (
     <li data-pb-nav-item="page">
       <a

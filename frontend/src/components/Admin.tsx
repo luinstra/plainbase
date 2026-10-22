@@ -3,13 +3,14 @@ import * as admin from "../api/admin";
 import { ApiError } from "../api/client";
 import type { AuditEntry, RoleRow, SessionResponse, TokenMeta, UserMeta } from "../api/types";
 import { clearCsrfToken } from "../api/csrf";
+import { isBuiltin } from "../api/sessionMode";
 
 /**
  * A4b minimal admin UI (WI-11): API-token list/mint/revoke + audit read + role grants + (builtin-only) user list.
  * The auth mode comes from `GET /api/v1/session`, fetched once on mount. Mutations carry the `X-CSRF-Token` via the
  * SHARED csrf helper (admin.ts → csrf.ts) — the same mechanism the page editor uses; the component no longer threads
  * the token by hand. The server stays authoritative — the UI only HIDES what the API would 403/404 anyway (the user
- * panel is hidden when `auth_mode !== "builtin"`; a 403 renders the no-access state).
+ * panel is hidden when the auth mode is not builtin; a 403 renders the no-access state).
  */
 export function Admin() {
   const [session, setSession] = useState<SessionResponse | null>(null);
@@ -39,7 +40,7 @@ export function Admin() {
       <TokenPanel onForbidden={() => setForbidden(true)} />
       <RolePanel onForbidden={() => setForbidden(true)} />
       <AuditPanel onForbidden={() => setForbidden(true)} />
-      {session.auth_mode === "builtin" && <UserPanel onForbidden={() => setForbidden(true)} />}
+      {isBuiltin(session) && <UserPanel onForbidden={() => setForbidden(true)} />}
     </section>
   );
 }

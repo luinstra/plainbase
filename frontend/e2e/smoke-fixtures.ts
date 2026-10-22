@@ -50,6 +50,8 @@ function scenarioFor(projectName: string): SmokeScenario {
   switch (projectName) {
     case "open":
       return { authMode: "off", roots: "single" };
+    case "reader":
+      return { authMode: "off", roots: "single", reader: true };
     case "auth":
     case "auth-caret":
       return { authMode: "builtin", roots: "single" };
