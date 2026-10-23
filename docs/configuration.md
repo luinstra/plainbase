@@ -673,11 +673,11 @@ See the [theming guide](theming.md) for the input contract, scheme failure reaso
 ## Heap size (native binary) - not an env var
 
 The native binary ships with a compiled-in max heap of **256 MiB** (`-R:MaxHeapSize=256m`, baked at
-build time in `server/build.gradle.kts`). This bounds resident memory: GraalVM's Serial GC would
-otherwise let the heap ratchet toward a large physical-memory-derived default and squat there. 256 MiB
-boots the intended corpus range with wide margin; steady RSS lands ~90-160 MiB depending on corpus
-size (a ~50-90 MiB share is off-heap - mmap'd SQLite, JNI, resident image code - and this knob does
-not touch it).
+build time in `server/build.gradle.kts`). This is the local, low-concurrency default. It limits the
+GC-managed heap, not total process RSS: mmap'd SQLite, JNI and resident image code also consume memory.
+GraalVM's Serial GC would otherwise choose a large physical-memory-derived heap default. Size server
+deployments for their configured heap, corpus, page sizes and expected concurrency; do not assume
+server load must fit the local 256 MiB profile.
 
 Override it per process with a standard JVM flag, which always wins over the compiled-in default:
 
