@@ -1,121 +1,68 @@
-# Plainbase — Project Rules
+# Plainbase project guidance
 
-Filesystem-native, agent-native internal docs product. Master plan:
-`.crew/plans/draft-implementation-plans-to-get-plainbase-design.md` (architecture §4-5, package conventions §5.8, theming §5.9). Phase plans live alongside it.
+Plainbase is filesystem-native, agent-native documentation software. User-owned content files are
+authoritative; the application must not become a second authority for their content.
 
-## Dependency discipline (load-bearing for the native-image bet)
+This is the canonical project instruction file for every coding harness. `CLAUDE.md` only imports it.
+The linked documents are instructions, not automatically expanded imports: **open the applicable
+documents before doing the work**.
 
-- **Server dependencies default to NO.** Every addition must be justified against the
-  GraalVM native gate (reflection-free or metadata-provided), then recorded:
-  `./gradlew :server:writeDependencyAllowlist` and commit `server/dependency-allowlist.txt`
-  with the catalog change. CI fails on unrecorded runtime-classpath drift.
-- **Banned outright** (fails resolution, even transitively): Netty, Jackson, Gson, Exposed.
-- Ktor server engine is **CIO only**. Serialization is **kotlinx.serialization only**.
-  The app DB is **SQLDelight only**; `DATA_DIR/search.db` and
-  `DATA_DIR/discussions.db` are **raw JDBC over the same xerial driver** per ADR-0004 (derived state, deletable, no
-  migrations; never SQLDelight, never a second driver).
-- Compute-hungry features (search scoring, future embeddings/OCR) belong in external
-  processes (the Meilisearch pattern), never in this binary.
+| When | Read |
+| --- | --- |
+| Every task | [Workflow and evidence](docs/agents/workflow.md) |
+| Code, architecture, dependencies, storage or configuration | [Engineering rules](docs/agents/engineering.md) |
+| Code changes, tests, builds or verification claims | [Verification](docs/agents/verification.md) |
+| UI and reader navigation | [UI handoff and owner decisions](docs/design/handoff-v2/README.md), [engineering rules](docs/agents/engineering.md) |
+| Release preparation or tagging | [Release preparation](docs/DEVELOPMENT.md#release-preparation) |
+| Harness setup or missing instructions | [Harness compatibility](docs/agents/harnesses.md) |
 
-## Code conventions
+## Rules to keep in view
 
-- Hexagonal, memoria-style: `domain/` (no framework imports) + `frameworks/` (adapters),
-  ports named `XxxProvider`/natural nouns, impls `<Tech><Port>`. See master plan §5.8.
-- Formatting: Kotlinter + ktlint; author's layout wins (layout-changing rules disabled in `.editorconfig`).
-  140-col limit.
-- Logging: kotlin-logging facade, lazy lambdas. Companion-object logger for classes,
-  top-level when file composition suits. `println` only for CLI output contracts
-  (spike, dry-run output) — never diagnostics. Level knob: `PLAINBASE_LOG_LEVEL`.
-- Shell habits for agents: don't chain commands with `&&`/`;` — separate invocations.
+- Preserve unrelated changes and other sessions' work. Use the branch/worktree agreed with the owner;
+  isolate concurrent work. Do not reset, stash or clean changes you do not own.
+- Commit and push only when authorized. Every commit needs DCO sign-off (`git commit -s`), including
+  delegated commits. Use conventional messages and one logical concern per commit.
+- Server dependencies default to no. Netty, Jackson, Gson and Exposed are banned. Ktor CIO,
+  kotlinx.serialization and the SQLDelight/raw-JDBC split are deliberate native-image constraints.
+- Run frontend tests through Gradle's managed Node toolchain, never raw Vitest/Playwright/npm commands.
+- Server and offline commands default to `$HOME/.plainbase`, independently of the desktop app.
+  Use explicit disposable state/content for development launches; do not disturb a live instance.
+- Trace a test's real input and assertion, or run it, before claiming it proves a behavior. An approved
+  plan, successful compilation, skipped task or historical CI run is not execution evidence.
+- Re-pinning a deliberately flipped test is RED-first, one rule at a time, especially when it records
+  a past crash. Observe the intended failure before changing its expected result.
+- Run shell commands separately; do not chain them with `&&` or `;`. Prefer `rg` for searches.
 
-## Verification
+## Required workflow and verification
 
-- `./gradlew build` = JAR floor: compile, tests, lintKotlin, dependency allowlist.
-- `./gradlew :server:nativeCompile` then `server/build/native/nativeCompile/plainbase spike`
-  = the native gate (9/9 required). It requires GraalVM CE 25.3.4.1 / JDK 25.0.4.1 on
-  `JAVA_HOME`/`GRAALVM_HOME`; the application toolchain remains Java 25.
-- Local native verification uses the official `graal-25.3.4.1` archive; CI uses
-  `setup-graalvm` with `version: 25.3.4.1` and `java-version: 25`. The asdf 25.0.2 entry is
-  a JVM-only fallback and is unsupported for this native gate.
-- CI mirrors both; the universal JAR is the release floor — native failures block the
-  native artifact only.
-- **Native-tag by default on divergence surfaces:** tests exercising NIO edge behavior, process
-  execution (`GitExecutor`), the xerial JDBC/JNI seam, charset/Unicode decoding, or SecureRandom/
-  crypto get `@Tag("native")` (kotlin.test dialect) so they run under the native image — pure
-  domain-logic tests stay Kotest/JVM-only. Surface coverage, not line coverage; keep nativeTest lean.
-- Keep `#` out of backtick test method names: JUnit 6 native unique-ID parsing treats it as a class separator.
+This summary intentionally repeats the critical rules from the workflow and verification guides so
+they are present in automatically loaded context. Keep both copies synchronized when policy changes;
+the summary does not relax the detailed requirements.
 
-### Frontend tests — always go through Gradle, never raw `vitest`/`playwright`
+Run the default implementation chunk loop **without being asked**: Crew measure-twice (plan/advisor
+review) -> Crew build (executor/advisor verification) -> verification gates -> commit only when
+authorized. Fix validated minor build findings by default; resolve blocking findings before proceeding.
+Read [workflow details](docs/agents/workflow.md) for scope, host capabilities and review escalations.
 
-The Gradle node plugin owns the hermetic Node/npm toolchain; a raw `./node_modules/.bin/vitest`
-(or `cd frontend && …`) runs against the wrong toolchain and is an unwhitelistable, prompt-spamming
-command string. Use these stable `./gradlew :*` invocations instead:
+- The code-change floor is `./gradlew build` (JVM/JAR compilation, tests, lint and dependency allowlist).
+- Server changes also require `./gradlew :server:nativeTest`, then `./gradlew :server:nativeCompile`,
+  then `server/build/native/nativeCompile/plainbase spike` (9/9 required). Run separate shell commands.
+- Verify the **in-image** native JUnit summary: nonzero tests found and successful, zero failures.
+  A discovery/listing report, skipped task or `BUILD SUCCESSFUL` alone is not native execution evidence.
+- Native tests use kotlin.test/JUnit with `@Tag("native")`. Native-tag divergence surfaces by default:
+  NIO edge behavior, process execution, xerial JDBC/JNI, charset/Unicode decoding and SecureRandom/crypto.
+  Pure domain logic stays on the JVM; keep the native suite lean. Do not put `#` in backtick test names
+  (JUnit 6 native ID parsing). See [verification](docs/agents/verification.md) for toolchain and commands.
 
-- `./gradlew :frontend:vitestFile -PtestFile=src/__tests__/<file>` — one file, fast iteration
-  (omit `-PtestFile` to run all). No token-discipline gate.
-- `./gradlew :frontend:npmTest` — full vitest suite + the §5.9 token-discipline gate. Always runs
-  (not up-to-date-cached).
-- `./gradlew :frontend:build` — adds `tsc --noEmit` + `vite build`; run this to catch type errors
-  `npmTest` alone misses.
-- `./gradlew :frontend:smokeTest` — Playwright against the real server (downloads Chromium first run;
-  not part of `build`). The full suite includes headed caret tests; on headless Linux use
-  `xvfb-run -a ./gradlew :frontend:smokeTest`.
-- The discussion auth caret smoke runs headed in `auth-caret`. Run
-  `./gradlew :frontend:smokeTest -PsmokeArgs='discussions-auth.spec.ts --project=auth-caret' --console=plain`. It needs a display;
-  on Linux prefix the command with `xvfb-run -a`. The original review auth smoke stays headless:
-  `./gradlew :frontend:smokeTest -PsmokeArgs='review.spec.ts --project=auth' --console=plain`.
+## Project map
 
-## Build workflow (how chunks get built)
+- [Project language and glossary](CONTEXT.md)
+- [Development](docs/DEVELOPMENT.md), [contributing and DCO](CONTRIBUTING.md)
+- [Backend architecture](docs/backend-architecture.md), [architecture decisions](docs/decisions/README.md)
+- [Configuration](docs/configuration.md), [operating Plainbase](docs/operating-plainbase.md)
+- [HTTP API](docs/http-api.md), [agent workflow](docs/http-agent-workflow.md), [theming](docs/theming.md)
 
-**Default per-chunk loop — run this without being asked:**
-
-1. **Tighten the plan** — `/crew:measure-twice` on the chunk: an advisor drafts an executor-ready
-   addendum bound to the *built* reality (cite real files/lines, not the master plan's prose), a
-   second advisor reviews until APPROVED (fix BLOCKING, accept MINOR). Resolve genuine owner-forks
-   with ONE `AskUserQuestion` before drafting; never relitigate a settled decision. Phase plans get
-   measure-twice before their chunk loops begin.
-2. **Build** — `/crew:build`: an executor implements (read the addendum + cited code, match the
-   cleanest surrounding idiom). Verify via an advisor; **fix MINOR findings by default**, re-delegate
-   BLOCKING.
-3. **Verify** — always through Gradle (§Verification): JVM floor `./gradlew build`; **server changes
-   also run the native gate** (`:server:nativeTest` → `:server:nativeCompile` → `plainbase spike`,
-   9/9). Run the full floor, not just the native gate — a cross-cutting refactor can break a
-   JVM-only test the native subset never compiles.
-4. **Commit on the owner's explicit word only** — logical commits (one concern each: decision /
-   feature+its tests / tooling), conventional style, on `main`. Gitignored `.crew/` addenda stay
-   local. Push when asked.
-
-**Escalations — proactively RECOMMEND, run on the owner's go-ahead** (they're token-heavy; flag the
-moment + the reason, don't auto-run). Trigger for **frozen-contract, concurrency-heavy, or
-phase-closing** chunks:
-
-Both escalations are crew-native — **`/octo` is retired; never invoke or recommend it.**
-
-- **Before building:** a multi-model `/crew:debate` on design soundness. (S7/S8: caught a silent
-  data-correctness bug that measure-twice had approved.)
-- **After building:** **review-until-clean** via `/crew:review` (crew-native multi-model panel —
-  bundles the codex + Gemini-via-`agy` + opus + sonnet dispatch), two complementary fan-outs:
-  - **First pass — diverse fan-out, run in parallel to drain the latent-bug backlog in fewer rounds.**
-    Across *models* (cross-model diversity is the highest-yield: on W5 Codex caught a `git diff` RCE via
-    repo-local `diff.external` while Gemini caught an empty-message log-parser field-shift — neither caught
-    the other's, and the advisor verify caught neither) AND across *lenses* (≥3 reviewers with distinct
-    mandates — e.g. security/RCE · correctness+frozen-contract+concurrency · deployment/ops/scale —
-    since same-model instances share blind spots, the lens diversity buys back the correlation). When a
-    lens needs its own mandate beyond `/crew:review`'s default panel, seat custom `crew:reviewer` agents
-    (per-spawn model override) — one per lens.
-  - **Confirm rounds — fix → re-review until a round returns empty/cosmetic.** Some findings are
-    causally sequential (a fix exposes/creates the next — W5: throw-on-failure → diff-route taxonomy →
-    git-version gate), so a few rounds are inherent; parallelism can't collapse that tail. Drop a model
-    once it plateaus clean (W5: Gemini went clean by R2; Codex kept finding real items to R7). A final
-    parallel diverse-lens burst all-clean is strong evidence of earned-clean. Validate every finding
-    against real code before fixing; fix the CLASS not the instance.
-  (S8: the cross-model review caught a misleading operator doc + a CLI exit-code bug.)
-
-The owner can say "always debate"/"always review" to make either automatic. **When a debate or
-review finds a hole the spec missed, widen the spec AND its tests — not just the code.**
-
-**Never assert "test X pins / flips / stays green under change Y" from a line citation or memory — TRACE it
-(walk the real resolver + assertion) or RUN it.** In three multi-root debate rounds this exact claim-shape was
-loose four separate times, always from citing a prose model of the test file instead of reading it. A line
-number is not a trace. Re-pinning a deliberately-flipped test is RED-first, one rule at a time — doubly so around
-a test that encodes a past crash.
+Local Crew plans, when present, live under `.crew/plans/`. The original master plan is
+`.crew/plans/draft-implementation-plans-to-get-plainbase-design.md` (architecture sections 4-5,
+packages 5.8, theming 5.9). These gitignored files record rationale and task agreements; reconcile
+them with current source and committed docs. Their absence in a fresh clone is expected.

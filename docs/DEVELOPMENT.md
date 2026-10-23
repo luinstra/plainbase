@@ -120,6 +120,25 @@ Windows users should run the Linux binary under WSL2 with its content and data i
 Linux filesystem. See the
 [platform guidance](operating-plainbase.md#platform-note---the-5-second-promise-binds-linux).
 
+## Release preparation
+
+Feature and fix PRs record user-visible changes in [unreleased notes](release-notes/unreleased.md).
+For newly refused behavior or changed compatibility, explain the change and operator actions under
+**Before upgrading**, following the [0.7.0 notes](release-notes/0.7.0.md#before-upgrading). Keep these
+concrete; do not turn a historical implementation detail into a new compatibility promise.
+
+A release-preparation PR moves the relevant bullets into `docs/release-notes/<x.y.z>.md` and leaves
+`unreleased.md` for subsequent changes. When reconciling a long-lived branch after a release, retain
+only its new unreleased bullets. The [release workflow](../.github/workflows/release.yml) requires
+the versioned notes file at the tagged commit; `vX.Y.Z-rc.N` uses the same `X.Y.Z.md` as its final release.
+
+Create or push release tags only with the owner's authorization, including an existing instruction
+delegating that release to an agent. Treat `v*` tags, including release candidates, as immutable:
+do not delete, move or reuse them as a cleanup/retry technique. Inspect current repository rulesets
+when preparing delivery; a missing legacy branch-protection endpoint does not mean an unprotected
+branch. Complete the required checks and notes before tagging, and verify the release workflow and
+artifacts afterward. A published release is not evidence that separate post-merge CI passed.
+
 ## Pre-release checklist
 
 CI covers everything that runs without credentials or a real bucket. The object-storage backend adds a

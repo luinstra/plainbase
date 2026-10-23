@@ -57,9 +57,13 @@ Scope: **desktop** (1280 px and up). Mobile is explicitly out of scope for this 
 
 ## Tokens
 
-All changes stay inside `frontend/src/styles/tokens.css` so the token-discipline gate
-keeps passing (`./gradlew :frontend:npmTest`). Exact implementation (new steps vs.
-`color-mix`) is the chunk's call; the **targets** below are what must hold.
+Color literals and primitive palette tokens belong only in the bundled definitions,
+[`light.css`](../../../frontend/src/styles/themes/light.css) and
+[`dark.css`](../../../frontend/src/styles/themes/dark.css). Components and app styles consume semantic
+tokens; the generic definition also stays free of literals and primitives. The
+[token-discipline tests](../../../frontend/src/__tests__/token-discipline.test.ts) enforce these boundaries
+through `./gradlew :frontend:npmTest`. Exact implementation (new steps vs. `color-mix`) is the chunk's
+call; the **targets** below are what must hold. See [theming](../../theming.md) for the current token contract.
 
 ### Dark (`[data-theme="dark"]`)
 

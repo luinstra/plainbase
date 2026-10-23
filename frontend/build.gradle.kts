@@ -40,13 +40,14 @@ val npmTest = tasks.register<NpmTask>("npmTest") {
     outputs.upToDateWhen { false }
 }
 
-// Targeted single-file vitest run for fast iteration (NOT part of `build`, no token-discipline gate):
+// Targeted single-file vitest run for fast iteration (NOT part of `build`):
 //   ./gradlew :frontend:vitestFile -PtestFile=src/__tests__/searchPalette.test.tsx
-// Omit -PtestFile to run the whole suite. Prefer this (or :frontend:npmTest) over a raw
+// Omit -PtestFile to run the whole suite, including token discipline; a file filter runs only matching tests.
+// Prefer this (or :frontend:npmTest) over a raw
 // `./node_modules/.bin/vitest` invocation so the command stays a stable, whitelistable `./gradlew :*`.
 tasks.register<NpmTask>("vitestFile") {
     group = "verification"
-    description = "Runs vitest for a single file via -PtestFile=<path> (fast iteration)."
+    description = "Runs vitest for a single file via -PtestFile=<path>, or the full suite when omitted."
     dependsOn(tasks.npmInstall)
     val testFile = providers.gradleProperty("testFile").getOrElse("")
     args.set(listOf("run", "test", "--") + if (testFile.isBlank()) emptyList() else listOf(testFile))

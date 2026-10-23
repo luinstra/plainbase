@@ -23,6 +23,9 @@ frontend/playwright-report/
 .kotlin/
 .codex/
 
+# Local Crew plans and review artifacts
+.crew/
+
 # Local git worktrees
 .worktrees/
 

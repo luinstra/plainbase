@@ -68,4 +68,4 @@ and run the full JVM floor. Keep line-length enforcement exclusively in Kotlinte
 6. Stylistic/size review, final policy decisions, and Detekt gate activation.
 
 For every batch, run focused tests during iteration and finish with `./gradlew build`. Server behavior changes also need
-the native gate required by `AGENTS.md` before the cleanup is merged.
+the native gate required by the [verification guide](agents/verification.md) before the cleanup is merged.
