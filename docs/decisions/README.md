@@ -22,3 +22,4 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 | [0012](0012-per-root-page-identity.md) | Per-root page identity: `(RootName, PageId)`, rooted permalinks, no cross-root contest | Accepted |
 | [0013](0013-discussions-are-files-in-a-per-root-collection.md) | Discussions are Markdown files in a per-root collection, anchored by quote, never written into pages | Accepted |
 | [0014](0014-custom-themes-are-css-definitions-selected-from-data-dir.md) | Custom themes are complete CSS definitions selected from DATA_DIR, over one public input contract | Accepted |
+| [0015](0015-server-home-directory.md) | Server state defaults to HOME/.plainbase | Accepted |

@@ -123,8 +123,8 @@ class PlainbaseConfigTest : FunSpec({
 
     // A4b WI-2: the proxy secret + identity-header config (env-wins over file over the default).
     test("PLAINBASE_PROXY_SECRET reads from env; the identity header defaults to X-Forwarded-User") {
-        ConfigLoader.fromEnv(mapOf("PLAINBASE_PROXY_SECRET" to "s3cr3t")).auth.proxySecret shouldBe "s3cr3t"
-        ConfigLoader.fromEnv(emptyMap()).auth.proxyIdentityHeader shouldBe "X-Forwarded-User"
+        ConfigLoader.fromEnv(configTestEnv("PLAINBASE_PROXY_SECRET" to "s3cr3t")).auth.proxySecret shouldBe "s3cr3t"
+        ConfigLoader.fromEnv(configTestEnv()).auth.proxyIdentityHeader shouldBe "X-Forwarded-User"
     }
 
     test("PLAINBASE_PROXY_IDENTITY_HEADER env-wins over file over the default; a blank config falls back") {
@@ -245,7 +245,7 @@ class PlainbaseConfigTest : FunSpec({
     }
 
     test("auth mode precedes CIDRs, which precede main direct-commit globs") {
-        val env = emptyMap<String, String>()
+        val env = configTestEnv()
         val modeFailure = shouldThrow<IllegalArgumentException> {
             ConfigLoader.fromEnv(
                 env +
@@ -302,7 +302,7 @@ class PlainbaseConfigTest : FunSpec({
     //     never silently falls through to file/default (which is the opposite of env-always-wins) -------------
 
     test("the default bind host is loopback (out-of-the-box serve never silently exposes)") {
-        ConfigLoader.fromEnv(emptyMap()).host shouldBe PlainbaseConfig.DEFAULT_HOST
+        ConfigLoader.fromEnv(configTestEnv()).host shouldBe PlainbaseConfig.DEFAULT_HOST
         PlainbaseConfig.DEFAULT_HOST shouldBe "127.0.0.1"
     }
 
@@ -317,38 +317,38 @@ class PlainbaseConfigTest : FunSpec({
 
     test("a present-but-malformed PLAINBASE_MAX_WRITE_BODY_BYTES fails fast") {
         shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_MAX_WRITE_BODY_BYTES" to "lots"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_MAX_WRITE_BODY_BYTES" to "lots"))
         }.message shouldContain "PLAINBASE_MAX_WRITE_BODY_BYTES"
     }
 
     test("a present-but-non-positive PLAINBASE_MAX_ASSET_BYTES fails fast") {
         shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_MAX_ASSET_BYTES" to "0"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_MAX_ASSET_BYTES" to "0"))
         }.message shouldContain "PLAINBASE_MAX_ASSET_BYTES"
     }
 
     test("a present-but-malformed PLAINBASE_INSECURE_HTTP fails fast (no silent coercion to false)") {
         shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_INSECURE_HTTP" to "yes"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_INSECURE_HTTP" to "yes"))
         }.message shouldContain "PLAINBASE_INSECURE_HTTP"
     }
 
     test("PLAINBASE_INSECURE_HTTP=1 activates the override (the value the bind-guard message documents works)") {
-        ConfigLoader.fromEnv(mapOf("PLAINBASE_INSECURE_HTTP" to "1")).auth.insecureHttp shouldBe true
-        ConfigLoader.fromEnv(mapOf("PLAINBASE_INSECURE_HTTP" to "true")).auth.insecureHttp shouldBe true
-        ConfigLoader.fromEnv(mapOf("PLAINBASE_INSECURE_HTTP" to "0")).auth.insecureHttp shouldBe false
+        ConfigLoader.fromEnv(configTestEnv("PLAINBASE_INSECURE_HTTP" to "1")).auth.insecureHttp shouldBe true
+        ConfigLoader.fromEnv(configTestEnv("PLAINBASE_INSECURE_HTTP" to "true")).auth.insecureHttp shouldBe true
+        ConfigLoader.fromEnv(configTestEnv("PLAINBASE_INSECURE_HTTP" to "0")).auth.insecureHttp shouldBe false
     }
 
     // P5: agentDirectCommit.globs are validated at LOAD (the requireParseableCidrs idiom) - a malformed pattern fails
     // fast naming it, and a valid set survives unchanged + parses to a CommitGlob via the accessor.
     test("a malformed PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS entry fails fast at load naming the bad pattern") {
         shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "docs/**, secrets/../etc"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "docs/**, secrets/../etc"))
         }.message shouldContain "secrets/../etc"
     }
 
     test("valid agentDirectCommit.globs survive load and parse to CommitGlobs via the accessor") {
-        val config = ConfigLoader.fromEnv(mapOf("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "docs/**, guides/*.md"))
+        val config = ConfigLoader.fromEnv(configTestEnv("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "docs/**, guides/*.md"))
         config.auth.agentDirectCommitGlobs shouldBe listOf("docs/**", "guides/*.md")
         val globs = ConfigValuePolicy.agentDirectCommitGlobs(config)
         globs.size shouldBe 2
@@ -380,7 +380,7 @@ class PlainbaseConfigTest : FunSpec({
 
     test("a mix of valid + invalid CIDRs fails fast (not filtered), naming the offending value") {
         val failure = shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/8, not-a-cidr"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/8, not-a-cidr"))
         }
         failure.message shouldContain "PLAINBASE_TRUSTED_PROXY"
         failure.message shouldContain "not-a-cidr"
@@ -388,20 +388,20 @@ class PlainbaseConfigTest : FunSpec({
 
     test("a no-prefix address (no /n) fails fast: a bare address is not a CIDR") {
         shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_TRUSTED_PROXY" to "10.0.0.0"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_TRUSTED_PROXY" to "10.0.0.0"))
         }.message shouldContain "10.0.0.0"
     }
 
     test("an out-of-range prefix (/33) fails fast") {
         shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/33"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/33"))
         }.message shouldContain "10.0.0.0/33"
     }
 
     test("a single valid CIDR parses; an empty/absent PLAINBASE_TRUSTED_PROXY loads with emptyList") {
-        ConfigLoader.fromEnv(mapOf("PLAINBASE_TRUSTED_PROXY" to "192.168.0.0/16")).auth.trustedProxyCidrs shouldBe
+        ConfigLoader.fromEnv(configTestEnv("PLAINBASE_TRUSTED_PROXY" to "192.168.0.0/16")).auth.trustedProxyCidrs shouldBe
             listOf("192.168.0.0/16")
-        ConfigLoader.fromEnv(emptyMap()).auth.trustedProxyCidrs shouldBe emptyList()
+        ConfigLoader.fromEnv(configTestEnv()).auth.trustedProxyCidrs shouldBe emptyList()
     }
 
     test("a malformed CIDR in the FILE also fails fast at load") {
@@ -430,7 +430,7 @@ class PlainbaseConfigTest : FunSpec({
     // --- Q9 storage matrix: strict backend parse, object-mode required keys (tabled messages verbatim),
     //     local-mode ignored+warn tracking (never fatal), Q10 CONTENT_DIR source tracking --------------------
 
-    fun objectEnv(vararg overrides: Pair<String, String>): Map<String, String> = mapOf(
+    fun objectEnv(vararg overrides: Pair<String, String>): Map<String, String> = configTestEnv(
         "PLAINBASE_STORAGE_BACKEND" to "object",
         "PLAINBASE_S3_ENDPOINT" to "https://acct.r2.cloudflarestorage.com",
         "PLAINBASE_S3_BUCKET" to "docs",
@@ -439,7 +439,7 @@ class PlainbaseConfigTest : FunSpec({
     ) + overrides
 
     test("storage.backend defaults to local with the Q9 defaults (region auto, no prefix, path-style, 60s poll)") {
-        val storage = ConfigLoader.fromEnv(emptyMap()).storage
+        val storage = ConfigLoader.fromEnv(configTestEnv()).storage
         storage.backend shouldBe StorageBackend.LOCAL
         storage.region shouldBe "auto"
         storage.prefix shouldBe ""
@@ -449,7 +449,7 @@ class PlainbaseConfigTest : FunSpec({
 
     test("an unknown storage.backend fails fast naming the legal values (verbatim)") {
         shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_STORAGE_BACKEND" to "nfs"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_STORAGE_BACKEND" to "nfs"))
         }.message shouldBe "Unknown storage.backend 'nfs' - legal values: local, object"
     }
 
@@ -546,7 +546,7 @@ class PlainbaseConfigTest : FunSpec({
         val expected = "storage.object.endpoint is required when storage.backend=object (the R2/S3 endpoint URL)"
         val result = ConfigLoader.loadForCommand("serve", err = errors::add) {
             // backend=object with no endpoint -> IllegalArgumentException out of build(); the funnel must catch it.
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_STORAGE_BACKEND" to "object"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_STORAGE_BACKEND" to "object"))
         }
         result shouldBe null
         errors.single() shouldBe "serve: $expected"
@@ -572,7 +572,7 @@ class PlainbaseConfigTest : FunSpec({
         (escaped === ioFailure) shouldBe true
         errors shouldBe emptyList()
 
-        val expected = ConfigLoader.fromEnv(emptyMap())
+        val expected = ConfigLoader.fromEnv(configTestEnv())
         var calls = 0
         val resolved = ConfigLoader.loadForCommand("serve", err = errors::add) {
             calls += 1
@@ -606,7 +606,7 @@ class PlainbaseConfigTest : FunSpec({
     test("local mode ignores storage.object.* keys, naming them in the one startup warning (never fatal)") {
         // Note the MALFORMED pathStyle: in local mode nothing object-side is parsed, so it cannot throw.
         val config = ConfigLoader.fromEnv(
-            mapOf("PLAINBASE_S3_ENDPOINT" to "https://x.example.com", "PLAINBASE_S3_PATH_STYLE" to "definitely-not-a-bool"),
+            configTestEnv("PLAINBASE_S3_ENDPOINT" to "https://x.example.com", "PLAINBASE_S3_PATH_STYLE" to "definitely-not-a-bool"),
         )
         config.storage.backend shouldBe StorageBackend.LOCAL
         config.storage.ignoredObjectKeys shouldBe listOf("PLAINBASE_S3_ENDPOINT", "PLAINBASE_S3_PATH_STYLE")
@@ -650,7 +650,7 @@ class PlainbaseConfigTest : FunSpec({
     }
 
     test("credentials present in local mode are ignored SILENTLY (never named, no warning)") {
-        val config = ConfigLoader.fromEnv(mapOf("PLAINBASE_S3_ACCESS_KEY_ID" to "k", "PLAINBASE_S3_SECRET_ACCESS_KEY" to "s"))
+        val config = ConfigLoader.fromEnv(configTestEnv("PLAINBASE_S3_ACCESS_KEY_ID" to "k", "PLAINBASE_S3_SECRET_ACCESS_KEY" to "s"))
         config.storage.ignoredObjectKeys shouldBe emptyList<String>()
         ConfigValuePolicy.storageWarnings(config) shouldBe emptyList<String>()
     }
@@ -662,12 +662,12 @@ class PlainbaseConfigTest : FunSpec({
     }
 
     test("contentDirSource tracks env over file over default (Q10)") {
-        ConfigLoader.fromEnv(mapOf("CONTENT_DIR" to "/tmp/pb-env-tree")).contentDirSource shouldBe ConfigSource.ENV
+        ConfigLoader.fromEnv(configTestEnv("CONTENT_DIR" to "/tmp/pb-env-tree")).contentDirSource shouldBe ConfigSource.ENV
         withDataDir("""contentDir = "/tmp/pb-file-tree"""") { env ->
             ConfigLoader.fromEnvAndFile(env).contentDirSource shouldBe ConfigSource.FILE
             ConfigLoader.fromEnvAndFile(env + ("CONTENT_DIR" to "/tmp/pb-env-tree")).contentDirSource shouldBe ConfigSource.ENV
         }
-        ConfigLoader.fromEnv(emptyMap()).contentDirSource shouldBe ConfigSource.DEFAULT
+        ConfigLoader.fromEnv(configTestEnv()).contentDirSource shouldBe ConfigSource.DEFAULT
     }
 
     test("object mode warns when CONTENT_DIR was explicitly set; stays silent on the default") {
@@ -730,7 +730,7 @@ class PlainbaseConfigTest : FunSpec({
 
     test("no MCP keys → mcpHostAllowlist defaults to the bind host (not empty, not a wildcard)") {
         val allowlist = TransportSecurityPolicy.derive(
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "127.0.0.1")),
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_HOST" to "127.0.0.1")),
         ).effectiveMcpHosts
         allowlist.shouldNotBeEmpty()
         allowlist shouldContain "127.0.0.1"
@@ -739,21 +739,21 @@ class PlainbaseConfigTest : FunSpec({
 
     test("a non-loopback bind defaults the MCP host allowlist to that bind host (+ loopback), still no wildcard") {
         val allowlist = TransportSecurityPolicy.derive(
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "docs.example.com")),
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_HOST" to "docs.example.com")),
         ).effectiveMcpHosts
         allowlist shouldContain "docs.example.com"
         allowlist.none { it == "*" || it == "0.0.0.0" } shouldBe true
     }
 
     test("an explicit PLAINBASE_MCP_ALLOWED_HOSTS overrides the default") {
-        val config = ConfigLoader.fromEnv(mapOf("PLAINBASE_MCP_ALLOWED_HOSTS" to "docs.example.com, proxy.example.com"))
+        val config = ConfigLoader.fromEnv(configTestEnv("PLAINBASE_MCP_ALLOWED_HOSTS" to "docs.example.com, proxy.example.com"))
         config.auth.mcpAllowedHosts shouldBe listOf("docs.example.com", "proxy.example.com")
         TransportSecurityPolicy.derive(config).effectiveMcpHosts shouldContain "docs.example.com"
     }
 
     test("no MCP keys → mcpOriginAllowlist defaults to the bind-host origins (not empty, not a wildcard)") {
         val allowlist = TransportSecurityPolicy.derive(
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "127.0.0.1")),
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_HOST" to "127.0.0.1")),
         ).effectiveMcpOrigins
         allowlist.shouldNotBeEmpty()
         allowlist.none { it == "*" } shouldBe true // fail-closed: never a wildcard
@@ -761,7 +761,7 @@ class PlainbaseConfigTest : FunSpec({
 
     test("an explicit PLAINBASE_MCP_ALLOWED_ORIGINS overrides the default") {
         val config = ConfigLoader.fromEnv(
-            mapOf("PLAINBASE_MCP_ALLOWED_ORIGINS" to "https://docs.example.com, https://proxy.example.com"),
+            configTestEnv("PLAINBASE_MCP_ALLOWED_ORIGINS" to "https://docs.example.com, https://proxy.example.com"),
         )
         config.auth.mcpAllowedOrigins shouldBe listOf("https://docs.example.com", "https://proxy.example.com")
         TransportSecurityPolicy.derive(config).effectiveMcpOrigins shouldContain "https://docs.example.com"

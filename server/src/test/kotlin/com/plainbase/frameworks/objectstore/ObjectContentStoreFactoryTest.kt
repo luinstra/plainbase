@@ -90,7 +90,7 @@ class ObjectContentStoreFactoryTest : FunSpec({
     }
 })
 
-private fun objectConfig(dataDir: java.nio.file.Path): PlainbaseConfig = ConfigLoader.fromEnv(emptyMap()).copy(
+private fun objectConfig(dataDir: java.nio.file.Path): PlainbaseConfig = ConfigLoader.fromEnv(mapOf("DATA_DIR" to dataDir.toString())).copy(
     dataDir = dataDir,
     storage = StorageConfig(
         backend = StorageBackend.OBJECT,

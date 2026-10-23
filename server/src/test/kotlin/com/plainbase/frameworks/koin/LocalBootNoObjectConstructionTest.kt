@@ -32,39 +32,44 @@ import java.nio.file.Files
 class LocalBootNoObjectConstructionTest : FunSpec({
 
     test("LOCAL boot resolves ContentStore + HistoryProvider without constructing ObjectContentStore or S3ObjectClient") {
-        val objectBefore = ObjectContentStore.constructions.get()
-        val s3Before = S3ObjectClient.constructions.get()
+        withTempDataDir { base ->
+            val objectBefore = ObjectContentStore.constructions.get()
+            val s3Before = S3ObjectClient.constructions.get()
 
-        val config = ConfigLoader.fromEnv(emptyMap())
-        val openers = ServerOpeners()
-        val inputs = prepareRootBootInputs(config, openers.openLocal)
-        val owner = ServerResourceOwner()
-        val app = createOwnedTestKoinApplication(
-            owner,
-            listOf(
-                module { single { config } },
-                createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
-                repositoryModule(owner),
-                securityModule,
-                createHistoryModule(config, inputs.history, owner),
-            ),
-        )
-        try {
-            app.koin.get<ContentStore>().shouldBeInstanceOf<LocalContentStore>()
-            app.koin.get<HistoryProvider>() // the graph-resolution site the R9 boot trap threatened
-        } finally {
-            owner.close()
+            val content = Files.createDirectory(base.resolve("content"))
+            val config = ConfigLoader.fromEnv(
+                mapOf("DATA_DIR" to base.resolve("state").toString(), "CONTENT_DIR" to content.toString()),
+            )
+            val openers = ServerOpeners()
+            val inputs = prepareRootBootInputs(config, openers.openLocal)
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(
+                owner,
+                listOf(
+                    module { single { config } },
+                    createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                    repositoryModule(owner),
+                    securityModule,
+                    createHistoryModule(config, inputs.history, owner),
+                ),
+            )
+            try {
+                app.koin.get<ContentStore>().shouldBeInstanceOf<LocalContentStore>()
+                app.koin.get<HistoryProvider>() // the graph-resolution site the R9 boot trap threatened
+            } finally {
+                owner.close()
+            }
+
+            ObjectContentStore.constructions.get() shouldBe objectBefore
+            S3ObjectClient.constructions.get() shouldBe s3Before
         }
-
-        ObjectContentStore.constructions.get() shouldBe objectBefore
-        S3ObjectClient.constructions.get() shouldBe s3Before
     }
 
     test("OBJECT boot resolves ContentStore + HistoryProvider without constructing the contentDir LocalContentStore") {
         val before = contentDirStoreConstructions.get()
 
         withTempDataDir { dataDir ->
-            val objectConfig = ConfigLoader.fromEnv(emptyMap()).copy(
+            val objectConfig = ConfigLoader.fromEnv(mapOf("DATA_DIR" to dataDir.toString())).copy(
                 dataDir = dataDir,
                 storage = StorageConfig(
                     backend = StorageBackend.OBJECT,

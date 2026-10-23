@@ -229,7 +229,7 @@ object NativeSpike {
         val app = koinApplication {
             modules(
                 module {
-                    single { ConfigLoader.fromEnv(emptyMap()) }
+                    single { ConfigLoader.fromEnv(mapOf("DATA_DIR" to "/plainbase-spike-unused")) }
                     single { SpikeGreeter(get()) }
                 },
             )

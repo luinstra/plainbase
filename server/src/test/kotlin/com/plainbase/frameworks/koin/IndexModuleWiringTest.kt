@@ -56,6 +56,7 @@ import io.kotest.matchers.types.shouldBeSameInstanceAs
 import io.mockk.spyk
 import io.mockk.verify
 import org.koin.dsl.module
+import java.nio.file.Files
 import kotlin.time.Instant
 
 /** Verifies index-only resolution and the serving projection's shared runtime provenance. */
@@ -104,26 +105,31 @@ class IndexModuleWiringTest : FunSpec({
     }
 
     test("the production module set resolves IndexBuilder (indexModule is installed)") {
-        val config = ConfigLoader.fromEnv(emptyMap())
-        val openers = ServerOpeners()
-        val inputs = prepareRootBootInputs(config, openers.openLocal)
-        val owner = ServerResourceOwner()
-        val app = createOwnedTestKoinApplication(
-            owner,
-            listOf(
-                module { single { config } },
-                createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
-                repositoryModule(owner),
-                securityModule,
-                createHistoryModule(config, inputs.history, owner),
-                indexModule,
-                module { single<SqlDriver> { DatabaseFactory.createInMemoryDriver() } },
-            ),
-        )
-        try {
-            app.koin.get<IndexBuilder>().shouldBeInstanceOf<IndexBuilder>()
-        } finally {
-            owner.close()
+        withTempTree(seed = {}) { base ->
+            val content = Files.createDirectory(base.resolve("content"))
+            val config = ConfigLoader.fromEnv(
+                mapOf("DATA_DIR" to base.resolve("state").toString(), "CONTENT_DIR" to content.toString()),
+            )
+            val openers = ServerOpeners()
+            val inputs = prepareRootBootInputs(config, openers.openLocal)
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(
+                owner,
+                listOf(
+                    module { single { config } },
+                    createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                    repositoryModule(owner),
+                    securityModule,
+                    createHistoryModule(config, inputs.history, owner),
+                    indexModule,
+                    module { single<SqlDriver> { DatabaseFactory.createInMemoryDriver() } },
+                ),
+            )
+            try {
+                app.koin.get<IndexBuilder>().shouldBeInstanceOf<IndexBuilder>()
+            } finally {
+                owner.close()
+            }
         }
     }
 

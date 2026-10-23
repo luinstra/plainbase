@@ -4,8 +4,12 @@ import com.typesafe.config.Config
 import com.typesafe.config.ConfigException
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigResolveOptions
+import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
 
 /** The already-resolved operator and managed inputs selected by one load observation. */
 internal class ConfigSources(
@@ -18,14 +22,25 @@ internal object ConfigLoader {
     fun fromEnv(env: Map<String, String> = System.getenv()): PlainbaseConfig =
         ConfigDecoder.decode(env, ConfigSources(ConfigFactory.empty(), ConfigFactory.empty()))
 
-    internal fun dataDirFrom(env: Map<String, String> = System.getenv()): Path = ConfigValuePolicy.dataDirFrom(env)
+    internal fun dataDirFrom(
+        env: Map<String, String> = System.getenv(),
+        legacyProbeDir: Path = Path.of("").toAbsolutePath(),
+    ): Path {
+        val selected = ConfigValuePolicy.dataDirFrom(env)
+        if ("DATA_DIR" !in env) inspectLegacy(legacyProbeDir.resolve("data"), selected)
+        return selected
+    }
 
-    fun fromEnvAndFile(env: Map<String, String> = System.getenv()): PlainbaseConfig = fromSources(env, null)
+    fun fromEnvAndFile(
+        env: Map<String, String> = System.getenv(),
+        legacyProbeDir: Path = Path.of("").toAbsolutePath(),
+    ): PlainbaseConfig = fromSources(env, null, legacyProbeDir)
 
     fun fromEnvAndCandidateRoots(
         managedRootsText: String?,
         env: Map<String, String> = System.getenv(),
-    ): PlainbaseConfig = fromSources(env, parseCandidate(managedRootsText))
+        legacyProbeDir: Path = Path.of("").toAbsolutePath(),
+    ): PlainbaseConfig = fromSources(env, parseCandidate(managedRootsText), legacyProbeDir)
 
     fun loadForCommand(
         command: String,
@@ -42,12 +57,53 @@ internal object ConfigLoader {
             null
         }
 
-    private fun fromSources(env: Map<String, String>, managedOverride: Config?): PlainbaseConfig {
-        val dataDir = dataDirFrom(env)
+    private fun fromSources(env: Map<String, String>, managedOverride: Config?, legacyProbeDir: Path): PlainbaseConfig {
+        val dataDir = dataDirFrom(env, legacyProbeDir)
         val operator = parseIfRegularFile(dataDir.resolve("plainbase.conf"))
         val managed = managedOverride ?: loadManagedRoots(dataDir.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE))
         return ConfigDecoder.decode(env, ConfigSources(operator, managed))
     }
+
+    private val legacyMarkers = listOf(
+        "plainbase.db", "plainbase.db-wal", "plainbase.db-shm", "plainbase.conf",
+        "roots.conf", "roots.conf.bak", "custom.css", "themes",
+    )
+
+    /** Only definite absence is safe to ignore. Marker entries count without opening their contents. */
+    private fun inspectLegacy(old: Path, selected: Path) {
+        val remedy = "Legacy state at $old cannot be implicitly switched to $selected. " +
+            "Set an explicit absolute DATA_DIR to continue the old instance, or follow the offline migration guide " +
+            "at https://github.com/luinstra/plainbase/blob/main/docs/operating-plainbase.md#offline-migration-to-the-home-directory."
+        try {
+            val entry = attributesOrAbsent(old, LinkOption.NOFOLLOW_LINKS) ?: return
+            val directory = if (entry.isSymbolicLink) {
+                attributesOrAbsent(old) ?: throw IllegalArgumentException(remedy)
+            } else {
+                entry
+            }
+            if (!directory.isDirectory) return
+            if (legacyMarkers.none { attributesOrAbsent(old.resolve(it), LinkOption.NOFOLLOW_LINKS) != null }) return
+            // Never call isSameFile on a missing target: some providers can return true for identical spellings.
+            val same = try {
+                attributesOrAbsent(selected) != null && Files.isSameFile(old, selected)
+            } catch (_: IOException) {
+                false
+            }
+            require(same) { remedy }
+        } catch (_: IOException) {
+            throw IllegalArgumentException("Cannot inspect legacy directory/markers. $remedy")
+        } catch (_: SecurityException) {
+            // A filesystem provider may reject attribute/identity access independently of a SecurityManager.
+            throw IllegalArgumentException("Cannot inspect legacy directory/markers. $remedy")
+        }
+    }
+
+    private fun attributesOrAbsent(path: Path, vararg options: LinkOption): BasicFileAttributes? =
+        try {
+            Files.readAttributes(path, BasicFileAttributes::class.java, *options)
+        } catch (_: NoSuchFileException) {
+            null
+        }
 
     private fun loadManagedRoots(path: Path): Config {
         val backup = ManagedRootsFile.backupPath(path)

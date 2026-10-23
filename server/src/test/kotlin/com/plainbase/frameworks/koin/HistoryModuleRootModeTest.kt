@@ -123,7 +123,7 @@ private fun commitCount(content: Path, dataDir: Path): Int {
  * whole point being that the selection under test is the WIRING's, not a hand-built provider's.
  */
 private fun withKoin(content: Path, dataDir: Path, history: HistoryMode, block: (Koin) -> Unit) {
-    val configValue = ConfigLoader.fromEnv(emptyMap()).copy(
+    val configValue = ConfigLoader.fromEnv(mapOf("DATA_DIR" to dataDir.toString())).copy(
         contentDir = content,
         dataDir = dataDir,
         roots = RootsConfig.of(

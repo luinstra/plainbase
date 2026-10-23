@@ -107,20 +107,25 @@ class ContentModuleWiringTest : FunSpec({
     }
 
     test("the production module set resolves ContentStore to LocalContentStore in LOCAL mode") {
-        val config = ConfigLoader.fromEnv(emptyMap())
-        val owner = ServerResourceOwner()
-        val app = createOwnedTestKoinApplication(owner, preparedModules(config, owner).toList())
-        try {
-            app.koin.get<ContentStore>().shouldBeInstanceOf<LocalContentStore>()
-            app.koin.get<HistoryProvider>() // resolves cleanly - the pre-C4 baseline this guard protects
-        } finally {
-            owner.close()
+        withTempDataDir { base ->
+            val content = Files.createDirectory(base.resolve("content"))
+            val config = ConfigLoader.fromEnv(
+                mapOf("DATA_DIR" to base.resolve("state").toString(), "CONTENT_DIR" to content.toString()),
+            )
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(owner, preparedModules(config, owner).toList())
+            try {
+                app.koin.get<ContentStore>().shouldBeInstanceOf<LocalContentStore>()
+                app.koin.get<HistoryProvider>() // resolves cleanly - the pre-C4 baseline this guard protects
+            } finally {
+                owner.close()
+            }
         }
     }
 
     test("prepared LOCAL store, history, and availability retain identity after Koin registration") {
         withTempDataDir { dataDir ->
-            val config = ConfigLoader.fromEnv(emptyMap()).copy(dataDir = dataDir)
+            val config = ConfigLoader.fromEnv(mapOf("DATA_DIR" to dataDir.toString()))
             val openers = ServerOpeners()
             val inputs = prepareRootBootInputs(config, openers.openLocal)
             val owner = ServerResourceOwner()
@@ -218,7 +223,7 @@ class ContentModuleWiringTest : FunSpec({
             val primaryDir = Files.createDirectory(dataDir.resolve("primary"))
             val extraDir = Files.createDirectory(dataDir.resolve("extra"))
             val extra = RootName.require("extra")
-            val config = ConfigLoader.fromEnv(emptyMap()).copy(
+            val config = ConfigLoader.fromEnv(mapOf("DATA_DIR" to dataDir.toString())).copy(
                 contentDir = primaryDir,
                 dataDir = dataDir,
                 roots = RootsConfig.of(
@@ -250,7 +255,7 @@ class ContentModuleWiringTest : FunSpec({
 
     test("an omitted required LOCAL primary fails with the named missing input") {
         withTempDataDir { dataDir ->
-            val config = ConfigLoader.fromEnv(emptyMap()).copy(dataDir = dataDir)
+            val config = ConfigLoader.fromEnv(mapOf("DATA_DIR" to dataDir.toString()))
             val fullInputs = prepareRootBootInputs(config, ServerOpeners().openLocal)
             val omittedInputs = fullInputs.copy(localStores = fullInputs.localStores - RootName.PRIMARY)
             val owner = ServerResourceOwner()
@@ -406,7 +411,7 @@ private fun objectConfig(
     gitEnabled: Boolean? = null,
     endpoint: String = "https://acct.example.com",
 ): PlainbaseConfig =
-    ConfigLoader.fromEnv(emptyMap()).copy(
+    ConfigLoader.fromEnv(mapOf("DATA_DIR" to dataDir.toString())).copy(
         dataDir = dataDir,
         storage = StorageConfig(
             backend = StorageBackend.OBJECT,
