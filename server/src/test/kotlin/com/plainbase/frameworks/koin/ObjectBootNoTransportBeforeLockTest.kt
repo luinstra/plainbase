@@ -97,7 +97,7 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
 })
 
 private fun objectGitEnabledConfig(dataDir: java.nio.file.Path): PlainbaseConfig =
-    ConfigLoader.fromEnv(emptyMap()).copy(
+    ConfigLoader.fromEnv(mapOf("DATA_DIR" to dataDir.toString())).copy(
         dataDir = dataDir,
         storage = StorageConfig(
             backend = StorageBackend.OBJECT,

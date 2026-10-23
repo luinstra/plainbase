@@ -54,7 +54,20 @@ The universal JAR requires a Java 25+ runtime; users on Java 21–24 must upgrad
 ```sh
 curl -L -o plainbase https://github.com/luinstra/plainbase/releases/latest/download/plainbase-macos-arm64
 chmod +x plainbase
-./plainbase serve   # CONTENT_DIR=./content DATA_DIR=./data by default
+./plainbase serve   # CONTENT_DIR=./content DATA_DIR=$HOME/.plainbase by default
+```
+
+The server and offline CLIs share `$HOME/.plainbase` for state/config. Existing implicit `./data`
+installations refuse to switch silently; set an absolute `DATA_DIR` to keep using yours, or follow
+the [offline migration guide](docs/operating-plainbase.md#offline-migration-to-the-home-directory).
+Content still defaults to launch-CWD `./content`. Use absolute content/root paths before launching
+from multiple directories. `./gradlew :server:run` uses these same defaults and may touch your real
+home state; for development, first create disposable directories and use explicit paths:
+
+```sh
+dev_dir=$(mktemp -d)
+mkdir "$dev_dir/content" "$dev_dir/state"
+DATA_DIR="$dev_dir/state" CONTENT_DIR="$dev_dir/content" ./gradlew :server:run
 ```
 
 Open http://localhost:8080. Point `CONTENT_DIR` at an existing Markdown tree
@@ -107,7 +120,7 @@ Plainbase from an HTTP agent](docs/http-agent-workflow.md).
 | Env var | Default | Meaning |
 |---|---|---|
 | `CONTENT_DIR` | `./content` | Canonical, user-owned Markdown tree (local mode). Plainbase only writes here on explicit save/approve; ignored in object mode, where the bucket is canonical. |
-| `DATA_DIR` | `./data` | App-owned state: SQLite DB, config, caches, search index. |
+| `DATA_DIR` | `$HOME/.plainbase` | App-owned state: SQLite DB, config, caches, search index. |
 | `PLAINBASE_HOST` | `127.0.0.1` | Bind address. |
 | `PLAINBASE_PORT` | `8080` | HTTP port. |
 | `PLAINBASE_LOG_LEVEL` | `INFO` | Root log level (`ERROR`/`WARN`/`INFO`/`DEBUG`). |

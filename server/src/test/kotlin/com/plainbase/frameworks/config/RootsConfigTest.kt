@@ -382,7 +382,7 @@ class RootsConfigTest : FunSpec({
 
     test("object-mode synthesis carries the bucket descriptor and falls back to contentDir for the local seams") {
         val config = ConfigLoader.fromEnv(
-            mapOf(
+            configTestEnv(
                 "CONTENT_DIR" to "/roots/ignored",
                 "PLAINBASE_STORAGE_BACKEND" to "object",
                 "PLAINBASE_S3_ENDPOINT" to "https://acct.example.com",
@@ -412,7 +412,7 @@ class RootsConfigTest : FunSpec({
     test("copy(storage = object) keeps the stale synthesized main but mainContentRoot still equals contentDir") {
         // The roots default runs at CONSTRUCTION only - this pins the equal-value invariant that keeps
         // every copy()-built test config correct (the PlainbaseConfig.roots KDoc rule).
-        val copied = ConfigLoader.fromEnv(emptyMap()).copy(
+        val copied = ConfigLoader.fromEnv(configTestEnv()).copy(
             storage = StorageConfig(
                 backend = StorageBackend.OBJECT,
                 endpoint = "https://acct.example.com",

@@ -180,12 +180,18 @@ not change the published page snapshot or its checkpoints.
 
 ### `plainbase reindex` - the OFFLINE/ops path
 
-For when the server is **down**, or for a scripted operational reindex:
+Run this only with the server **stopped**, using the same launch CWD, environment, DATA_DIR and
+content/root configuration as that server instance (including from a script or scheduler):
 
 ```
-CONTENT_DIR=./content DATA_DIR=./data plainbase reindex
+plainbase reindex
 # reindex: rebuilt the search index for 42 page(s) under /abs/path/to/content
 ```
+
+The command inherits the instance's configuration. If the server uses the home default, use the
+same HOME; if it sets DATA_DIR explicitly, supply that same value. Preserve its CONTENT_DIR or
+configured roots and launch CWD so relative paths still select the same content. Do not introduce
+a different DATA_DIR for reindexing.
 
 The CLI's fresh complete page pass binds the scanned pages before its explicit swap. On a fresh `DATA_DIR`, this
 matches the accepted input and resulting engine count. The running API rebuild instead filters the existing holder
@@ -1101,3 +1107,110 @@ Recorded cuts - conscious v0.1 trade-offs, not gaps discovered later and not TOD
   *unlisted* property - a `box-shadow`, a gradient stop - slips through undetected. Hex literals and
   color functions (`rgb()`, `hsl()`, `oklch()`, …) are caught position-independently regardless of
   property, so this gap is narrower than it sounds, but it's real.
+
+## Offline migration to the home directory
+
+Server, no-subcommand startup, `root`, `admin`, `adopt`, and `reindex` default their app-owned
+state/config to `$HOME/.plainbase`. Explicit nonblank DATA_DIR is fully supported indefinitely and
+is the lowest-risk upgrade: use the old **absolute** DATA_DIR in your service/cron environment.
+Missing/blank/relative HOME refuses when DATA_DIR is absent; blank DATA_DIR also refuses. Docker's
+explicit `/data` is unchanged. `./gradlew :server:run` follows the same default and can touch real
+home state; use disposable explicit DATA_DIR and CONTENT_DIR for development (README example).
+
+To copy an old installation offline, perform these steps in order. These are operator actions,
+not an automatic migration. Never copy an active SQLite database or merge two state directories.
+
+1. Record the old absolute DATA_DIR, original launch CWD, service/cron environment, all resolved
+   content root targets, external HOCON includes/substitutions and secret sources. Relative
+   CONTENT_DIR, `contentDir` and `roots.*.path` still use launch CWD. Resolve their actual absolute
+   targets **before** changing declarations. Keep each root pointed at its recorded original target,
+   including when substitutions name DATA_DIR. Do not move documents or roots nested in old DATA_DIR;
+   a copied nested tree does not become a new content authority.
+2. Stop the server **and every CLI writer/scheduler**. Account for both `plainbase.lock` and the
+   independent `roots.lock`. A leftover lock file proves neither a live process nor quiescence;
+   inspect the processes/service ownership. Never delete lock files to force access.
+3. Back up the complete quiescent state directory, including dotfiles, config, roots.conf and its
+   backup, SQLite sidecars, themes and other state. Independently back up every actual content
+   authority, including hidden discussion data and Git history (and the bucket in object mode).
+   Preserve permissions and secret confidentiality. Review symlink/external include targets:
+   copying a directory does not make external files self-contained. Do not log config contents.
+4. Choose a destination that does not exist. Create private staging beside it, copy and verify,
+   preserving the original for rollback. The example below requires a separate, already protected
+   backup parent and a separately backed-up content authority. Substitute reviewed absolute paths;
+   run only after confirming step 2. Keep other operators from creating the destination throughout.
+
+   ```sh
+   set -eu
+   umask 077
+   old=/absolute/original/data
+   original_cwd=/absolute/original/launch-directory
+   backup_parent=/absolute/private/backup-directory
+   destination="$HOME/.plainbase"
+   case "$old" in /*) ;; *) exit 1 ;; esac
+   case "$original_cwd" in /*) ;; *) exit 1 ;; esac
+   case "$backup_parent" in /*) ;; *) exit 1 ;; esac
+   case "$destination" in /*) ;; *) exit 1 ;; esac
+   test -d "$old"
+   test -d "$backup_parent"
+   if test -e "$destination" || test -L "$destination"; then
+     echo 'Destination exists; refuse to merge' >&2
+     exit 1
+   fi
+   backup=$(mktemp -d "$backup_parent/plainbase-backup.XXXXXX")
+   cp -pR "$old/." "$backup/"
+   diff -qr "$old" "$backup" >/dev/null
+   staging=$(mktemp -d "${destination}.staging.XXXXXX")
+   # The private wrapper stays mode 700 even if cp preserves a less private state-root mode.
+   mkdir "$staging/state"
+   cp -pR "$old/." "$staging/state/"
+   diff -qr "$old" "$staging/state" >/dev/null
+   # Review permissions, symlink targets, includes/substitutions and old DATA_DIR references.
+   # This example requires sqlite3 when the copied state contains a database.
+   if test -f "$staging/state/plainbase.db"; then
+     command -v sqlite3 >/dev/null
+     test "$(sqlite3 "$staging/state/plainbase.db" 'PRAGMA quick_check;')" = ok
+   fi
+   # Pause here if verification/review fails; retain staging for diagnosis.
+   if test -e "$destination" || test -L "$destination"; then exit 1; fi
+   (
+     cd "$staging/state"
+     mv -n "$staging/state" "$destination"
+     # The held directory inode must be the destination itself, not a child nested under it.
+     test . -ef "$destination"
+   )
+   test ! -d "$staging/state"
+   rmdir "$staging"
+   cd "$original_cwd"
+   DATA_DIR="$destination" /absolute/path/to/plainbase root list
+   # Compare inventory to the recorded old instance before starting anything.
+   # With original content/environment settings still in effect, start exactly one instance:
+   DATA_DIR="$destination" /absolute/path/to/plainbase serve
+   ```
+
+   The directory-identity postcondition detects a move nested under a destination directory that
+   appeared after the final absence check. It does not prevent every concurrent move: the precondition
+   excluding concurrent operators still applies. If the move or postcondition fails, stop before any
+   Plainbase launch and leave the original, backup and copied state (including any nested destination
+   copy) for inspection. Do not retry the move blindly or perform destructive recovery.
+
+   A byte-identical copy alone does not prove relative HOCON includes, substitutions, symlinks or
+   references into old DATA_DIR are portable. Review those before publishing; adjust only after
+   recording actual content targets, and verify the reviewed copy again. The `quick_check` output
+   must be `ok`; otherwise stop. Do not print secrets while investigating.
+5. First validate with **explicit new DATA_DIR**, original CWD and environment/content settings.
+   Check config/root inventory, document identity/permalinks, auth and ordinary operation. Never
+   run old/new copies concurrently against the same content or bucket. The old CWD's `data`
+   evidence still refuses an implicit launch even when home is populated. Keep explicit new
+   DATA_DIR, or archive/rename old state only after success, without breaking nested content or
+   external include targets. Use absolute content/root paths and review them before changing CWD.
+6. Roll back by stopping the new instance first, then restoring original DATA_DIR/CWD/environment.
+   After writes in the new instance, the untouched old copy is stale: do not discard new state by
+   reverting to it. Back up and move the **current complete state** back offline, or restore a
+   consistent matched state/content backup. No lock deletion or destructive cleanup is required.
+
+The bounded legacy guard checks only launch-CWD `data` for `plainbase.db` and its WAL/SHM sidecars,
+`plainbase.conf`, `roots.conf`/`.bak`, `custom.css`, or `themes`. Even malformed/dangling entries count;
+access failures and a dangling `data` symlink refuse. A theme-name false positive can be resolved
+with explicit absolute DATA_DIR. Empty/unrelated or cache/mirror/runtime-only directories do not
+count. Same-directory aliases are allowed only when identity can be proven. This is not protection
+against hostile concurrent filesystem replacement. See [configuration](configuration.md#data-and-content-path-selection).

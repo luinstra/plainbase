@@ -7,7 +7,17 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md). The 
 
 ## Building
 
+Ordinary `:server:run` launches with `serve` or `root ...` use real `$HOME/.plainbase` by default
+and can open or modify that instance's state. Set up disposable state and content in the same shell
+before running the launch examples below; these explicit overrides leave Gradle's defaults intact.
+
 ```sh
+umask 077
+dev_dir=$(mktemp -d)
+mkdir "$dev_dir/content" "$dev_dir/state"
+export DATA_DIR="$dev_dir/state"
+export CONTENT_DIR="$dev_dir/content"
+
 ./gradlew build                          # backend + frontend + tests (universal JAR floor)
 ./gradlew :server:run --args=serve       # run the server on the JVM
 ./gradlew :server:run --args=spike       # full-stack native dependency spike (JVM)

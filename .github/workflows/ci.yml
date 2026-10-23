@@ -241,6 +241,9 @@ jobs:
       - name: Run full-stack dependency spike against the native binary (9/9 hard gate)
         run: ./server/build/native/nativeCompile/plainbase spike
 
+      - name: Server home directory CLI smoke (native)
+        run: scripts/ci/server-home-smoke.sh "$GITHUB_WORKSPACE/server/build/native/nativeCompile/plainbase"
+
       - name: Smoke test — native binary serves health endpoint with no JRE
         run: |
           CONTENT_DIR=fixtures/demo-docs DATA_DIR=/tmp/pb-data \

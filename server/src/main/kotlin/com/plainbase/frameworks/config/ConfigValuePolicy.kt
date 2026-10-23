@@ -4,13 +4,28 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.CommitGlob
 import java.net.URI
 import java.net.URISyntaxException
+import java.nio.file.InvalidPathException
 import java.nio.file.Path
 
 /** Pure normalized-value derivations shared by config loading and runtime consumers. */
 internal object ConfigValuePolicy {
     /** Resolves the app-owned data directory; it is intentionally independent of file configuration. */
-    fun dataDirFrom(env: Map<String, String>): Path =
-        Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize()
+    fun dataDirFrom(env: Map<String, String>): Path {
+        env["DATA_DIR"]?.let { explicit ->
+            require(explicit.isNotBlank()) { "DATA_DIR must be nonblank; set an explicit absolute DATA_DIR" }
+            return Path.of(explicit).toAbsolutePath().normalize()
+        }
+        val message = "HOME must be a nonblank valid absolute path when DATA_DIR is absent; set an explicit absolute DATA_DIR"
+        val home = env["HOME"]
+        require(!home.isNullOrBlank()) { message }
+        val path = try {
+            Path.of(home)
+        } catch (_: InvalidPathException) {
+            throw IllegalArgumentException(message)
+        }
+        require(path.isAbsolute) { message }
+        return path.resolve(".plainbase").normalize()
+    }
 
     /** Pure theme diagnostics retain the key and rejection category, never the rejected value. */
     fun themeWarnings(config: PlainbaseConfig): List<String> = config.theme.rejections.map { rejection ->

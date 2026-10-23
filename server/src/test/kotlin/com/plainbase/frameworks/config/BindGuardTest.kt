@@ -108,7 +108,7 @@ class BindGuardTest : FunSpec({
     // non-loopback PLAINBASE_HOST, which then trips the guard above (BLOCKING-1 fix).
     test("the default bind host is loopback (out-of-the-box serve never silently exposes)") {
         PlainbaseConfig.DEFAULT_HOST shouldBe "127.0.0.1"
-        ConfigLoader.fromEnv(emptyMap()).host shouldBe "127.0.0.1"
+        ConfigLoader.fromEnv(configTestEnv()).host shouldBe "127.0.0.1"
         security(config(PlainbaseConfig.DEFAULT_HOST, AuthConfig(mode = AuthMode.OFF))).bindRefusal.shouldBeNull()
         security(config(PlainbaseConfig.DEFAULT_HOST, AuthConfig(mode = AuthMode.BUILTIN))).bindRefusal.shouldBeNull()
     }
@@ -136,33 +136,33 @@ class BindGuardTest : FunSpec({
     // refusal EARLIER: config LOAD fails fast on an unparseable CIDR, so the bind guard never even runs.
     test("a garbage CIDR + a non-loopback host → config load throws (the guard can no longer be defeated)") {
         val failure = shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "not-a-cidr"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "not-a-cidr"))
         }
         failure.message shouldContain "not-a-cidr"
     }
 
     test("a no-prefix address as the only CIDR → config load throws (a bare address is not a CIDR)") {
         shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "10.0.0.0"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "10.0.0.0"))
         }.message shouldContain "10.0.0.0"
     }
 
     test("an out-of-range prefix (/33) → config load throws") {
         shouldThrow<IllegalArgumentException> {
-            ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/33"))
+            ConfigLoader.fromEnv(configTestEnv("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/33"))
         }.message shouldContain "10.0.0.0/33"
     }
 
     test("a garbage CIDR in PROXY mode also throws at load (before the bind guard runs)") {
         shouldThrow<IllegalArgumentException> {
             ConfigLoader.fromEnv(
-                mapOf("PLAINBASE_AUTH_MODE" to "proxy", "PLAINBASE_PROXY_SECRET" to "s", "PLAINBASE_TRUSTED_PROXY" to "garbage"),
+                configTestEnv("PLAINBASE_AUTH_MODE" to "proxy", "PLAINBASE_PROXY_SECRET" to "s", "PLAINBASE_TRUSTED_PROXY" to "garbage"),
             )
         }.message shouldContain "garbage"
     }
 
     test("a valid /32 loads + the guard permits a non-loopback bind") {
-        val cfg = ConfigLoader.fromEnv(mapOf("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "10.0.0.1/32"))
+        val cfg = ConfigLoader.fromEnv(configTestEnv("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "10.0.0.1/32"))
         cfg.auth.trustedProxyCidrs shouldBe listOf("10.0.0.1/32")
         security(cfg).bindRefusal.shouldBeNull()
     }

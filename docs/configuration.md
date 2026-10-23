@@ -42,12 +42,54 @@ Malformed ports, bracketed aliases, hostnames, Unicode digits and dotted-hex for
 the security predicates. `PLAINBASE_TRUSTED_PROXY` is a comma-separated list of numeric CIDRs and
 is validated at config load; a malformed entry fails fast naming `PLAINBASE_TRUSTED_PROXY`.
 
+## Data and content path selection
+
+An explicit nonblank `DATA_DIR` wins without consulting HOME. Relative values resolve against the
+launch CWD; spaces and Unicode are preserved, and a literal `~` is not expanded by Plainbase.
+Empty or whitespace-only `DATA_DIR` is rejected. When absent, HOME must
+be a nonblank, valid absolute environment path; state/config use its `.plainbase` child directly.
+There is no JVM `user.home` fallback. Service managers and cron must supply a valid HOME or an
+absolute `DATA_DIR`. Resolution creates no state and does not fall back after an open/write failure.
+File-side `dataDir` cannot redirect the directory containing that file. HOCON includes and
+substitutions retain their existing behavior.
+
+App-owned state includes sensitive authentication data: user records/password hashes, sessions,
+tokens and permissions. Access follows the existing filesystem permissions, ACLs and process umask;
+the home default adds no new permission-provisioning behavior. Require a private HOME containing the
+default state, or a private default state directory; an explicit DATA_DIR must also be appropriately
+restricted. Set `umask 077` in the creating/launching shell before creating new operator-owned state
+to mask group/other permissions on newly created files and directories, subject to filesystem/ACL
+semantics. Changing umask does **not** retroactively restrict existing files or directories; review
+their access separately.
+
+Without explicit `DATA_DIR`, any entry named `plainbase.db`, `plainbase.db-wal`, `plainbase.db-shm`,
+`plainbase.conf`, `roots.conf`, `roots.conf.bak`, `custom.css`, or `themes` in launch-CWD `data`
+causes a refusal unless that directory is proven to be the selected home directory itself.
+This read-only check includes malformed entries and dangling symlinks; inaccessible evidence and
+a dangling `data` symlink also refuse. Empty/unrelated or derived-cache-only `data` directories do
+not count. No parent/home search is performed. Theme names are deliberately conservative: even an
+unrelated `data/themes` can refuse. Set explicit absolute `DATA_DIR` to state your intent.
+This is an upgrade guard, with no guarantee against hostile concurrent filesystem replacement.
+See the [offline migration guide](operating-plainbase.md#offline-migration-to-the-home-directory).
+
+`CONTENT_DIR` still defaults to `./content`. Relative CONTENT_DIR, file `contentDir`, and
+`roots.*.path` resolve against launch CWD, never HOME or the config-file location. Sharing home
+state does not make content selection independent of CWD. Use absolute content/root paths before
+changing CWD; the existing boot checks still apply. Documents are not moved. Container overrides
+such as `DATA_DIR=/data` retain their meaning.
+
+With a local document root at HOME itself (`CONTENT_DIR=$HOME` or a configured root with that path),
+the default `$HOME/.plainbase` state occupies the root's reserved Discussions namespace. The existing
+`RESERVED_COLLECTION` rule in [ConfigBootInspector](../server/src/main/kotlin/com/plainbase/frameworks/config/ConfigBootInspector.kt)
+refuses that placement. Use a separate document root, or a reviewed explicit DATA_DIR outside the
+content root's reserved `.plainbase` namespace. All existing boot placement checks still apply.
+
 ## Reference table
 
 | Env var | Config path | Default | Source |
 |---|---|---|---|
 | `CONTENT_DIR` | `contentDir` | `./content` | ConfigDecoder.kt |
-| `DATA_DIR` | (env/default only, never file) | `./data` | ConfigValuePolicy.kt |
+| `DATA_DIR` | (env/default only, never file) | `$HOME/.plainbase` | ConfigValuePolicy.kt |
 | `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`) | ConfigDecoder.kt |
 | `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`) | ConfigDecoder.kt |
 | `PLAINBASE_LOG_LEVEL` | - | `INFO` | `logback.xml:8-9` (`${PLAINBASE_LOG_LEVEL:-INFO}`; **not** a `PlainbaseConfig` field) |

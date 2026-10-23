@@ -649,8 +649,12 @@ class RootCommandTest : FunSpec({
         world { w ->
             ConfigLoader.dataDirFrom(w.env) shouldBe ConfigLoader.fromEnvAndFile(w.env).dataDir
         }
-        withClue("unset: the ./data default, resolved identically on both sides") {
-            ConfigLoader.dataDirFrom(emptyMap()) shouldBe ConfigLoader.fromEnvAndFile(emptyMap()).dataDir
+        world { w ->
+            val home = w.tmp("home")
+            val probe = Files.createDirectory(w.tmp("probe"))
+            val env = mapOf("HOME" to home.toString())
+            ConfigLoader.dataDirFrom(env, probe) shouldBe home.resolve(".plainbase")
+            ConfigLoader.dataDirFrom(env, probe) shouldBe ConfigLoader.fromEnvAndFile(env, probe).dataDir
         }
         world { w ->
             // dataDir LOCATES the file, so it is the one field that can never come FROM it. A conf that declares

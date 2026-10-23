@@ -101,11 +101,16 @@ object RootCommand {
         val request = parse(args, output) ?: return USAGE_EXIT
         if (request is RootArgs.List) return list(env, output)
 
-        // The ONLY pre-lock state read, and it reads no config FILE: DATA_DIR LOCATES every config file and so is
-        // the one field that can never come from one - it is resolved from env/default, never file-derived. This
-        // is therefore the same value config.dataDir will hold, by construction rather than by luck. It locates
-        // the lock and is authoritative for nothing else.
-        val dataDir = ConfigLoader.dataDirFrom(env)
+        // Directory authority comes solely from env/default, never config files: DATA_DIR locates those files.
+        // The loader also makes a read-only legacy attribute probe before acquiring the lock, refusing an
+        // implicit authority switch without reading config contents. The returned path is therefore the same
+        // value config.dataDir will hold; it locates the lock and is authoritative for nothing else.
+        val dataDir = try {
+            ConfigLoader.dataDirFrom(env)
+        } catch (failure: IllegalArgumentException) {
+            output.error("root: ${failure.message}")
+            return 1
+        }
         val lock = awaitRootsLock(dataDir)
         if (lock == null) {
             output.error(
