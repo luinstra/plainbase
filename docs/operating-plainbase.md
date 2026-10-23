@@ -534,7 +534,7 @@ tier**, not a gap in the default - reach for it when you want typo tolerance, me
 relevance ranking, or CJK tokenization that FTS5 doesn't do well.
 
 Meilisearch runs **out of process**. Compute-hungry search features never live in the native
-binary - the same pattern that keeps embeddings/OCR out of it too (project `CLAUDE.md`). The
+binary - the same pattern that keeps embeddings/OCR out of it too ([engineering rules](agents/engineering.md)). The
 `docker-compose.yml` wiring for it is **reserved, not wired**: the `SEARCH_ENGINE`/`MEILI_URL`
 lines there are commented out, and no `meilisearch` service exists in the compose file today.
 Turning this tier on is future work - this section documents the intended shape, not something you

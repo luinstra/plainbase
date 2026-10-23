@@ -56,11 +56,13 @@ Never run raw `vitest`, `playwright`, npm, or `node_modules/.bin/*` for project 
 | Purpose | Command |
 | --- | --- |
 | One Vitest file | `./gradlew :frontend:vitestFile -PtestFile=src/__tests__/<file>` |
-| All Vitest files, without the token gate | `./gradlew :frontend:vitestFile` |
+| Full Vitest suite, including token discipline | `./gradlew :frontend:vitestFile` |
 | Full Vitest suite plus token discipline | `./gradlew :frontend:npmTest` |
 | Type check and production bundle | `./gradlew :frontend:build` |
 | Real-server Playwright smoke | `./gradlew :frontend:smokeTest` |
 
+Without `-PtestFile`, `vitestFile` runs the same full suite as `npmTest`, including the token-discipline
+test. With a file filter, only matching tests run. `npmTest` always runs; it is never up-to-date cached.
 `npmTest` alone does not run the type check that `:frontend:build` provides. The smoke suite is
 separate from `build`, downloads Chromium on first use and includes headed caret tests. On headless
 Linux use `xvfb-run -a ./gradlew :frontend:smokeTest`.

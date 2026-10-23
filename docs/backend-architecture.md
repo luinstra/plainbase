@@ -103,7 +103,7 @@ characterization lives in [`McpSurfaceTest`](../server/src/test/kotlin/com/plain
 
 ## Verification, artifacts and deferred policy
 
-The documented policy in [AGENTS.md](../AGENTS.md) and [CLAUDE.md](../CLAUDE.md) makes the universal JAR the release floor
+The documented policy in the [verification guide](agents/verification.md) makes the universal JAR the release floor
 and says native failures block only native artifacts. Current automation is stricter. The CI workflow has
 separate JVM/native jobs, but its always-run `ci-gate` depends on six jobs and fails when a dependency is `failure`,
 `cancelled` or `skipped`; its completeness script checks that every job is represented. Release assembly starts only

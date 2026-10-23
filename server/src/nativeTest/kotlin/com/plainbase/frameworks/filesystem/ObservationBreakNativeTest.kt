@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 
 /**
  * The C2 break machinery against the REAL `WatchService` and the REAL filesystem - the divergence surfaces
- * CLAUDE.md's native-tag policy names (NIO edge behavior, the stat/permission ladder), where the JDK's own
+ * docs/agents/verification.md's native-tag policy names (NIO edge behavior, the stat/permission ladder), where the JDK's own
  * semantics are what the epoch's safety rests on and a mock would simply agree with whatever it was told.
  *
  * An observation epoch turns "the last scan saw this page and this one does not" into a DELETE. Everything here

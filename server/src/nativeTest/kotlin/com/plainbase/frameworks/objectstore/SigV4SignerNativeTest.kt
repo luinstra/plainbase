@@ -7,8 +7,8 @@ import kotlin.test.assertEquals
 /**
  * SigV4 golden vectors + canonical-request seams. Crypto (HMAC-SHA256/SHA-256) and charset
  * (percent-encoding over UTF-8 bytes) are native divergence surfaces, so this suite is
- * `@Tag("native")` kotlin.test and runs inside the native image (test policy, CLAUDE.md
- * §Verification). The vectors are the published AWS S3 API-reference examples
+ * `@Tag("native")` kotlin.test and runs inside the native image (test policy, docs/agents/verification.md).
+ * The vectors are the published AWS S3 API-reference examples
  * (header-based-auth), independently reproduced against a reference implementation before
  * being pinned here; spike check #9 carries the same three signatures as the in-binary gate.
  */

@@ -29,10 +29,30 @@ documents before doing the work**.
   Use explicit disposable state/content for development launches; do not disturb a live instance.
 - Trace a test's real input and assertion, or run it, before claiming it proves a behavior. An approved
   plan, successful compilation, skipped task or historical CI run is not execution evidence.
+- Re-pinning a deliberately flipped test is RED-first, one rule at a time, especially when it records
+  a past crash. Observe the intended failure before changing its expected result.
 - Run shell commands separately; do not chain them with `&&` or `;`. Prefer `rg` for searches.
+
+## Required workflow and verification
+
+Run the default implementation chunk loop **without being asked**: Crew measure-twice (plan/advisor
+review) -> Crew build (executor/advisor verification) -> verification gates -> commit only when
+authorized. Fix validated minor build findings by default; resolve blocking findings before proceeding.
+Read [workflow details](docs/agents/workflow.md) for scope, host capabilities and review escalations.
+
+- The code-change floor is `./gradlew build` (JVM/JAR compilation, tests, lint and dependency allowlist).
+- Server changes also require `./gradlew :server:nativeTest`, then `./gradlew :server:nativeCompile`,
+  then `server/build/native/nativeCompile/plainbase spike` (9/9 required). Run separate shell commands.
+- Verify the **in-image** native JUnit summary: nonzero tests found and successful, zero failures.
+  A discovery/listing report, skipped task or `BUILD SUCCESSFUL` alone is not native execution evidence.
+- Native tests use kotlin.test/JUnit with `@Tag("native")`. Native-tag divergence surfaces by default:
+  NIO edge behavior, process execution, xerial JDBC/JNI, charset/Unicode decoding and SecureRandom/crypto.
+  Pure domain logic stays on the JVM; keep the native suite lean. Do not put `#` in backtick test names
+  (JUnit 6 native ID parsing). See [verification](docs/agents/verification.md) for toolchain and commands.
 
 ## Project map
 
+- [Project language and glossary](CONTEXT.md)
 - [Development](docs/DEVELOPMENT.md), [contributing and DCO](CONTRIBUTING.md)
 - [Backend architecture](docs/backend-architecture.md), [architecture decisions](docs/decisions/README.md)
 - [Configuration](docs/configuration.md), [operating Plainbase](docs/operating-plainbase.md)

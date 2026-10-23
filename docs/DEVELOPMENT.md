@@ -123,9 +123,9 @@ Linux filesystem. See the
 ## Release preparation
 
 Feature and fix PRs record user-visible changes in [unreleased notes](release-notes/unreleased.md).
-For newly refused behavior or changed compatibility, identify the rule as **Compatibility policy:**
-and the operator's recommended action as **Advice:**. Keep these concrete; do not turn a historical
-implementation detail into a new compatibility promise.
+For newly refused behavior or changed compatibility, explain the change and operator actions under
+**Before upgrading**, following the [0.7.0 notes](release-notes/0.7.0.md#before-upgrading). Keep these
+concrete; do not turn a historical implementation detail into a new compatibility promise.
 
 A release-preparation PR moves the relevant bullets into `docs/release-notes/<x.y.z>.md` and leaves
 `unreleased.md` for subsequent changes. When reconciling a long-lived branch after a release, retain

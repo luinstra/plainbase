@@ -56,8 +56,5 @@ If a harness does not discover `AGENTS.md`, explicitly provide it as project con
 read links. A Markdown link is a navigation instruction, not evidence that its target entered context.
 Verify the loaded file list using the host's diagnostics; never launch a writing task just to test discovery.
 
-The migration consolidated identical root AGENTS/CLAUDE policies and selected durable lessons from
-repo-specific memory. It excluded personal settings, credentials, host paths, old build counts,
-release/branch status and obsolete tooling workarounds. No nested instruction files existed in the
-audited source checkout outside separate worktrees. Future nested policies need explicit scope and
-loader verification; avoid introducing divergent copies for each harness.
+Future nested policies need explicit scope and loader verification; avoid introducing divergent
+copies for each harness.

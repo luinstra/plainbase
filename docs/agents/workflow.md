@@ -16,6 +16,8 @@ instructions for the current task take precedence over defaults here.
 
 ## Default implementation chunk loop
 
+Run this loop without being asked for each implementation chunk.
+
 1. **Tighten the plan** with Crew measure-twice. An advisor grounds an executor-ready addendum in
    current code; a second advisor reviews it until approved. Fix blocking findings and accept minor
    planning clarifications. Resolve a genuine owner choice with one concise question; do not reopen
@@ -62,6 +64,8 @@ updating the specification and its tests too.
 - For a regression, obtain a meaningful failing test first: the fault must change this fixture's
   input, reach the production path, and be observed by the assertion. A normal rerun passing does
   not reproduce an intermittent failure. Prefer deterministic controls and bounded observation.
+- Re-pinning a deliberately flipped test is RED-first, one rule at a time. Observe the intended failure
+  before updating the expectation, especially for a test that records a past crash.
 - Measurements need a declared workload, complete timed work, units that match the scaling variable,
   retained evidence and a control known to fail. Report uncertainty when noise exceeds the claimed
   improvement. Keep measurement plans proportionate; do not predict an exact failure set without data.
