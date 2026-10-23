@@ -6,8 +6,8 @@ documents use ordinary links and explicit read instructions, not a harness-speci
 
 ## Claude Code
 
-Direct `AGENTS.md` support began in **2.1.277**; the locally checked CLI was **2.1.308**. Default
-fallback loads ancestor/current `AGENTS.md` files only when no ancestor/current `CLAUDE.md`,
+Direct `AGENTS.md` support began in **2.1.277**. Default fallback loads ancestor/current `AGENTS.md`
+files only when no ancestor/current `CLAUDE.md`,
 `.claude/CLAUDE.md` or `CLAUDE.local.md` exists. Global `~/.claude/CLAUDE.md` does not suppress it.
 Nested `AGENTS.md` loads on Read when that directory has none of those CLAUDE variants.
 
@@ -39,8 +39,8 @@ Source: [OpenAI AGENTS.md guide](https://learn.chatgpt.com/docs/agent-configurat
 ## Pi
 
 Pi loads context from its agent directory and the current directory's ancestors. Its documented
-context filenames include `AGENTS.override.md`, `AGENTS.md` and `CLAUDE.md`. The locally checked
-**1.3.0** loader selects `AGENTS.md` before `CLAUDE.md`, with an override taking precedence within
+context filenames include `AGENTS.override.md`, `AGENTS.md` and `CLAUDE.md`. Its loader selects
+`AGENTS.md` before `CLAUDE.md`, with an override taking precedence within
 the same directory. Context discovery does not require project trust. `/reload` refreshes instructions.
 
 Keep the explicit read links in the root file; do not assume descendant guidance or Claude's `@path`

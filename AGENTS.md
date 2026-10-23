@@ -35,6 +35,10 @@ documents before doing the work**.
 
 ## Required workflow and verification
 
+This summary intentionally repeats the critical rules from the workflow and verification guides so
+they are present in automatically loaded context. Keep both copies synchronized when policy changes;
+the summary does not relax the detailed requirements.
+
 Run the default implementation chunk loop **without being asked**: Crew measure-twice (plan/advisor
 review) -> Crew build (executor/advisor verification) -> verification gates -> commit only when
 authorized. Fix validated minor build findings by default; resolve blocking findings before proceeding.

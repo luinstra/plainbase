@@ -56,8 +56,7 @@ Never run raw `vitest`, `playwright`, npm, or `node_modules/.bin/*` for project 
 | Purpose | Command |
 | --- | --- |
 | One Vitest file | `./gradlew :frontend:vitestFile -PtestFile=src/__tests__/<file>` |
-| Full Vitest suite, including token discipline | `./gradlew :frontend:vitestFile` |
-| Full Vitest suite plus token discipline | `./gradlew :frontend:npmTest` |
+| Full Vitest suite, including token discipline | `./gradlew :frontend:npmTest` or `./gradlew :frontend:vitestFile` |
 | Type check and production bundle | `./gradlew :frontend:build` |
 | Real-server Playwright smoke | `./gradlew :frontend:smokeTest` |
 

@@ -516,8 +516,8 @@ jobs:
           base="${VERSION%%-rc.*}"
           fragment="docs/release-notes/${base}.md"
           if [ ! -f "$fragment" ]; then
-            echo "::error::Missing $fragment. Prepare a new version with its matching versioned notes file," \
-                 "commit it, then create a new tag; never move or reuse this tag." \
+            echo "::error::Missing $fragment. Use a new tag (rc.N+1 for a release candidate, or the next version)," \
+                 "with its matching base-version notes committed first; never move or reuse this tag." \
                  "(Tag $VERSION resolved to base version $base.)"
             exit 1
           fi
