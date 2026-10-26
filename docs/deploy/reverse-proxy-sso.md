@@ -20,13 +20,22 @@ ONLY 2xx and copies any other status straight to the client - so if you adapt th
 value, and an unescaped `&` in the original address would hand the trailing parameters to
 `/oauth2/start`, which reads them as provider login overrides.
 
-Run it on its **own** (a single `-f`, never layered on the base - layering would inherit the dev
+Validate the configuration on its **own** (a single `-f`, never layered on the base - layering would inherit the dev
 tier's host-loopback publish), from the **repo root** (the project dir compose resolves the
 `build:`/bind-mount paths against), loading the env file beside it (`deploy/proxy/.env`, seeded from
 `deploy/proxy/.env.example`):
 
-```
+```sh
 docker compose -f deploy/proxy/docker-compose.proxy.yml --env-file deploy/proxy/.env config
+```
+
+`config` only validates configuration; it does not build or require `installDist`.
+Before building an image or starting with `up --build`, prepare the complete JVM distribution
+with Java 25 and Gradle-managed frontend tooling. The command must succeed before packaging;
+repeat it after source changes. Docker does not compile source.
+
+```sh
+./gradlew :server:installDist --console=plain
 ```
 
 ## The seven load-bearing points

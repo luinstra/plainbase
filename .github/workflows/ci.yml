@@ -142,8 +142,30 @@ jobs:
   docker-image:
     name: Docker image build
     runs-on: ubuntu-latest
+    needs: build-test
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: plainbase-jvm-dist
+          path: ${{ runner.temp }}/plainbase-image-artifact
+
+      - name: Prepare tested JVM distribution for image
+        run: |
+          shopt -s nullglob
+          artifacts="$RUNNER_TEMP/plainbase-image-artifact"
+          unpack="$RUNNER_TEMP/plainbase-image-unpacked"
+          tars=("$artifacts"/*.tar)
+          [ ${#tars[@]} -eq 1 ] || { echo "expected exactly one dist tar, got: ${tars[*]:-none}" >&2; exit 1; }
+          mkdir "$unpack"
+          tar -xf "${tars[0]}" -C "$unpack"
+          roots=("$unpack"/*)
+          [ ${#roots[@]} -eq 1 ] || { echo "expected exactly one distribution root" >&2; exit 1; }
+          test -x "${roots[0]}/bin/plainbase"
+          test -d "${roots[0]}/lib"
+          mkdir -p server/build/install/plainbase
+          cp -a "${roots[0]}/." server/build/install/plainbase/
 
       - uses: docker/setup-buildx-action@v4
 

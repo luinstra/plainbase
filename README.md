@@ -41,7 +41,7 @@ transport and release-gate behavior.
   retain database-only identity bindings, retirement history, security and proposals.
 - **One binary, no fleet.** A single native executable (no JRE, no database
   server, no Node) with embedded SQLite + FTS5 search and sub-second cold
-  start. `docker compose up` if you'd rather run a container.
+  start. For containers, build the JVM distribution first, then use the [Docker Compose quickstart](#quickstart-docker-compose).
 
 ## Quickstart (single binary)
 
@@ -89,9 +89,19 @@ for the supported layout.
 ## Quickstart (Docker Compose)
 
 ```sh
-git clone https://github.com/luinstra/plainbase && cd plainbase
+git clone https://github.com/luinstra/plainbase
+cd plainbase
+./gradlew :server:installDist --console=plain
 docker compose up --build
 ```
+
+The Gradle command requires Java 25 and builds both backend and frontend, using its managed
+Node/npm toolchain. Let it succeed before packaging; Docker copies the complete distribution
+from `server/build/install/plainbase` and does not compile source. Re-run `installDist` after
+source changes before rebuilding the image. Optional version stamping belongs on that command,
+for example `./gradlew :server:installDist -PreleaseVersion=0.1.0 --console=plain`, not on `docker build`.
+Compose v2/buildx with BuildKit is supported; legacy `DOCKER_BUILDKIT=0` is not supported by this
+minimal build-context contract.
 
 Serves the bundled demo docs (`fixtures/demo-docs`); point the bind mount in
 `docker-compose.yml` at your own tree. Search is embedded SQLite FTS5 - no

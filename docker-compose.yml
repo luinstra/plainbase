@@ -1,6 +1,8 @@
 # Plainbase — Docker Compose: the LOCAL DEV / single-user tier.
 #
-# `docker compose up --build` serves the SPA shell at http://localhost:8080 — published to the
+# First run `./gradlew :server:installDist --console=plain` successfully from the repo root
+# (Java 25; frontend tooling is Gradle-managed). Repeat after source changes; Docker only packages it.
+# Then `docker compose up --build` serves the SPA shell at http://localhost:8080 — published to the
 # HOST LOOPBACK only (127.0.0.1), so it is reachable for local dev but NOT exposed to the LAN.
 # This tier runs plaintext with auth.mode=off (no login) — a knowing dev posture, not production.
 #
