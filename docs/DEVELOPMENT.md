@@ -97,8 +97,15 @@ That source fact does not establish live branch protection:
   is the focused enforced-mode matrix; Docker, frontend and native lanes also exercise their own
   enforced/proxy paths.
 - **`multi-root-smoke`** - the JVM-distribution multi-root topology smoke, separate from the native artifact lane.
-- **`docker-image`** - the compose-tier image build plus a non-loopback proxy/transport smoke (a
-  `421` transport refusal and the full proxy CSRF path - only reachable from outside loopback).
+- **`docker-image`** - waits for `build-test`, downloads its exact `plainbase-jvm-dist` artifact,
+  and packages that tested distribution without rebuilding source. It retains the image health/SPA
+  and non-loopback proxy/transport smoke (`421` refusal and the full proxy CSRF path).
+
+  Locally, first run `./gradlew :server:installDist --console=plain` with Java 25. This single command
+  builds backend and frontend using Gradle-managed Node/npm. Require success before `docker build .`
+  or Compose, and repeat after source changes. The image consumes `server/build/install/plainbase`;
+  a missing distribution fails at COPY. For a versioned build, pass `-PreleaseVersion=...` to Gradle,
+  not Docker.
 - **`native-gate` (linux-x64)** - `nativeCompile` → `nativeTest` → the positive `gitZombieNativePid1`
   control → the spike (9/9) → the enforced-auth smoke again, against the native binary → the native-startup
   regression tripwire.

@@ -13,8 +13,14 @@
 # This is a STANDALONE stack — NOT an overlay on the base `docker-compose.yml`. Layering the
 # base here would inherit its host-loopback publish, which must NOT happen in proxy mode (Caddy
 # is the only published service). Run it on its OWN, from the REPO ROOT (the project dir compose
-# resolves the `build:`/bind-mount paths against), loading the env file beside this file:
+# resolves the `build:`/bind-mount paths against). Load the env file beside this file for
+# configuration validation:
 #   docker compose -f deploy/proxy/docker-compose.proxy.yml --env-file deploy/proxy/.env config
+#
+# `config` only validates configuration; it does not build or require `installDist`.
+# Before building an image or starting with `up --build`, successfully prepare the JVM distribution
+# with Java 25: `./gradlew :server:installDist --console=plain`; repeat after source changes.
+# Docker packages that output and does not compile source.
 #
 # THE TRUST ANCHOR IS THE SECRET, NOT THE CIDR. plainbase + the proxy share a dedicated
 # `internal` network with a pinned subnet; PLAINBASE_TRUSTED_PROXY is that subnet. Trusting

@@ -129,7 +129,9 @@ over the `/mnt/*` 9P translation layer. On the distro filesystem, `inotify` work
 5-second promise below holds.
 
 For Docker Desktop, use the same boundary: run Compose from a checkout inside the WSL distribution
-and bind-mount content from that Linux filesystem. A Docker-managed named volume is appropriate for
+and bind-mount content from that Linux filesystem. First run `./gradlew :server:installDist --console=plain`
+with Java 25 in that checkout; require success before packaging and repeat after source changes.
+Docker packages the built JVM distribution. A Docker-managed named volume is appropriate for
 `DATA_DIR`; bind-mounting `C:\...` into a Linux container does not turn the underlying filesystem into
 a native Linux filesystem.
 
